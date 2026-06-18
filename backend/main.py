@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date as date_cls, timedelta
 from pathlib import Path
@@ -19,12 +21,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Базовая настройка логирования, чтобы INFO-логи (включая сырой ответ модели
+# из ai_service) были видны в консоли uvicorn и в логах Railway.
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("main")
+
+# Режим отладки ИИ: при включении в ответ /food/analyze добавляется «сырой»
+# ответ модели (поле debug), а в тексте ошибки — её причина. По умолчанию
+# включён в dev-режиме (ALLOW_INSECURE_AUTH=1); на проде включается DEBUG_AI=1.
+DEBUG_AI = os.getenv("DEBUG_AI") == "1" or os.getenv("ALLOW_INSECURE_AUTH") == "1"
+
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from backend.ai_service import analyze_food_image
+from backend.ai_service import AIError, analyze_food_image
 from backend.auth import get_current_user
 from backend.database import get_db, init_db
 from backend.models import DiaryEntry, User
@@ -155,9 +167,24 @@ async def food_analyze(
     mime = file.content_type or "image/jpeg"
     try:
         result = analyze_food_image(image_bytes, mime=mime)
+    except AIError as exc:
+        # Сырой ответ модели всегда пишем в лог сервера (виден в логах Railway).
+        logger.warning(
+            "food/analyze: %s | finish=%s refusal=%s raw=%s",
+            exc, exc.finish_reason, exc.refusal, (exc.raw or "")[:600],
+        )
+        # Пользователю — понятный текст; при DEBUG_AI добавляем причину и сырой ответ.
+        detail = "Не удалось распознать еду на фото. Попробуйте кадр чётче и при хорошем освещении."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
     except RuntimeError as exc:
-        # Ошибка ИИ-сервиса (нет ключа, сбой сети, плохой ответ модели и т.п.).
-        raise HTTPException(status_code=502, detail=str(exc))
+        # Прочие сбои сервиса (нет ключа, недоступность OpenAI и т.п.).
+        logger.warning("food/analyze: %s", exc)
+        detail = "Сервис распознавания временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
 
     return AnalyzeOut(
         dish_name=result["dish_name"],
@@ -166,6 +193,8 @@ async def food_analyze(
         fats=result["fats"],
         carbs=result["carbs"],
         note=result["note"],
+        # debug отдаём только в режиме отладки, чтобы не светить «сырой» ответ в проде.
+        debug=result.get("_debug") if DEBUG_AI else None,
     )
 
 

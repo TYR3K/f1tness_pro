@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -55,6 +55,9 @@ class AnalyzeOut(BaseModel):
     fats: float             # жиры, г
     carbs: float            # углеводы, г
     note: str               # краткий комментарий/оценка
+    # Отладочные данные (сырой ответ модели и т.п.) — заполняются только
+    # при включённом DEBUG_AI, иначе None и не мешают в проде.
+    debug: Optional[Dict[str, Any]] = None
 
 
 # --------------------------------------------------------------------------- #

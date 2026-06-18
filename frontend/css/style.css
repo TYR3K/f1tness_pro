@@ -47,6 +47,8 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* Гасим «оттягивание»/перескролл всего документа (Telegram-вебвью). */
+  overscroll-behavior: none;
 }
 
 body {
@@ -502,11 +504,52 @@ h1, h2, h3 {
   color: var(--text);
   margin-bottom: 18px;
   line-height: 1.5;
+  /* Длинный текст (в т.ч. сырой ответ модели в режиме отладки) переносим
+     и при необходимости прокручиваем, чтобы карточка не разрасталась. */
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Кнопки внутри карточки ошибки разделяем по вертикали */
 .error-card .btn + .btn {
   margin-top: 10px;
+}
+
+/* --- Блок отладки: «сырой» ответ модели на экране результата (DEBUG_AI) --- */
+.ai-debug {
+  margin: 12px 0 4px;
+  border: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  overflow: hidden;
+}
+
+.ai-debug__sum {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  user-select: none;
+}
+
+.ai-debug__pre {
+  margin: 0;
+  padding: 12px 14px;
+  border-top: 1px solid var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ============================================================

@@ -105,6 +105,10 @@
   function render() {
     if (!viewEl) return;
 
+    // При каждой смене экрана возвращаем прокрутку наверх,
+    // чтобы короткий экран не «залип» прокрученным вниз.
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+
     if (state.result) {
       renderResult();
     } else if (state.file) {
@@ -193,6 +197,14 @@
       ? '<p class="result-note">' + esc(r.note) + "</p>"
       : "";
 
+    // Отладочный блок с «сырым» ответом модели (приходит только при DEBUG_AI).
+    var debugHtml = r.debug
+      ? '<details class="ai-debug">' +
+          '<summary class="ai-debug__sum">Ответ модели (debug)</summary>' +
+          '<pre class="ai-debug__pre">' + esc(JSON.stringify(r.debug, null, 2)) + "</pre>" +
+        "</details>"
+      : "";
+
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
@@ -217,6 +229,7 @@
           "</div>" +
           noteHtml +
         "</div>" +
+        debugHtml +
         '<div class="meal-picker">' +
           '<p class="meal-picker__label">Добавить как:</p>' +
           '<div class="meal-chips" id="scan-meals">' + chips + "</div>" +
@@ -258,6 +271,9 @@
   // --- Экран ошибки (с возможностью повтора) ---
   // mode: "analyze" — повтор анализа того же файла; "upload" — вернуться к выбору.
   function renderError(message, mode) {
+    // Сбрасываем прокрутку наверх, чтобы экран ошибки был сразу виден целиком.
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
@@ -265,7 +281,8 @@
         "</header>" +
         '<div class="card error-card">' +
           '<div class="error-card__icon" aria-hidden="true">⚠️</div>' +
-          '<p class="error-card__msg">' + esc(message) + "</p>" +
+          // Текст в прокручиваемом блоке: при DEBUG_AI сюда приходит и сырой ответ.
+          '<div class="error-card__msg">' + esc(message) + "</div>" +
           '<button type="button" class="btn btn-cta btn-block" id="scan-retry">' +
             "Повторить" +
           "</button>" +
@@ -336,6 +353,7 @@
           fats: res ? res.fats : 0,
           carbs: res ? res.carbs : 0,
           note: res && res.note ? res.note : "",
+          debug: res && res.debug ? res.debug : null,
         };
         render();
       })

@@ -246,6 +246,10 @@
     if (typeof target.onShow === "function") {
       target.onShow(viewEl);
     }
+
+    // Сбрасываем прокрутку наверх: иначе после смены экрана (или короткого
+    // экрана ошибки) можно «застрять» прокрученным вниз без возможности вернуться.
+    App.scrollTop();
   };
 
   /* =====================================================================
@@ -300,6 +304,11 @@
         }
         if (typeof App.tg.expand === "function") {
           App.tg.expand();
+        }
+        // Отключаем вертикальные свайпы Telegram (Bot API 7.7+): из-за них
+        // контент «уезжает» вверх и прокрутка залипает после смены экрана.
+        if (typeof App.tg.disableVerticalSwipes === "function") {
+          App.tg.disableVerticalSwipes();
         }
       } catch (e) {
         console.warn("Ошибка инициализации Telegram WebApp", e);
@@ -387,6 +396,18 @@
     if (el) {
       el.classList.remove("show");
     }
+  };
+
+  /** Надёжно прокручивает страницу в самый верх (для разных вебвью/Telegram). */
+  App.scrollTop = function () {
+    try {
+      window.scrollTo(0, 0);
+    } catch (e) {}
+    try {
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0;
+      if (document.documentElement) document.documentElement.scrollTop = 0;
+      if (document.body) document.body.scrollTop = 0;
+    } catch (e) {}
   };
 
   /**
