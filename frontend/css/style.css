@@ -1,0 +1,1227 @@
+/* ============================================================
+   Трекер калорий — Telegram Mini App
+   Пастельная дизайн-система.
+   Стилизует ИМЕННО те классы и id, которые реально генерирует
+   фронтенд (index.html + js/*.js). Все комментарии — на русском.
+   Mobile-first, максимальная ширина контента 480px.
+
+   ВАЖНО про модификаторы: JS-файлы непоследовательны —
+   page-scan.js использует btn-cta/btn-ghost/btn-block (один дефис),
+   а page-diary.js / page-account.js — btn--cta/btn--ghost (два дефиса).
+   Скелетон встречается как skeleton-block и как skeleton--block.
+   Поэтому ниже все варианты определены вместе как алиасы.
+   ============================================================ */
+
+/* ---------- Дизайн-токены (CSS-переменные) ---------- */
+:root {
+  /* Цветовая палитра (пастельная) */
+  --bg: #FAF7F2;          /* Фон приложения */
+  --card: #E8D5C4;        /* Фон карточек */
+  --accent: #C9B8A8;      /* Акцентный (нейтральный бежевый) */
+  --cta: #7D9B76;         /* Основная кнопка действия (зелёный) */
+  --cta-press: #6b885f;   /* Цвет CTA при нажатии */
+  --text: #3A352F;        /* Основной текст */
+  --muted: #8A8178;       /* Приглушённый текст */
+  --danger: #C2664D;      /* Опасные действия / ошибки */
+  --white: #FFFDFA;       /* Светлый «белый» */
+
+  /* Скругления и тени */
+  --radius: 16px;         /* Радиус карточек */
+  --radius-sm: 12px;      /* Малый радиус */
+  --shadow: 0 6px 20px rgba(122, 107, 90, .12);
+
+  /* Высота нижней навигации и безопасная зона устройства */
+  --tabbar-height: 64px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* ---------- Базовый сброс ---------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.45;
+  font-size: 16px;
+  /* Поддержка стабильной высоты вьюпорта Telegram */
+  min-height: 100vh;
+  min-height: var(--tg-viewport-stable-height, 100vh);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Отключаем «оттягивание» страницы */
+  overscroll-behavior-y: none;
+}
+
+/* Изображения по умолчанию адаптивны */
+img {
+  max-width: 100%;
+  display: block;
+}
+
+/* Поля ввода наследуют шрифт */
+input,
+select,
+button,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Убираем синюю подсветку тапов в мобильных браузерах */
+button,
+a,
+.tab {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ============================================================
+   ОСНОВНОЙ КОНТЕЙНЕР И КАРКАС СТРАНИЦ
+   ============================================================ */
+
+/* #view — контейнер, который App очищает и наполняет при навигации.
+   ~90px нижнего отступа, чтобы контент не прятался под tabbar. */
+#view {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 16px 16px;
+  padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 26px);
+}
+
+/* Корневая обёртка каждой страницы (page page-scan / page-diary / page-account).
+   Плавное появление при смене вкладки. */
+.page {
+  animation: fadeIn .28s ease;
+}
+
+.page-scan,
+.page-diary,
+.page-account {
+  display: block;
+}
+
+/* Анимация плавного появления */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================================
+   ТИПОГРАФИКА И ЗАГОЛОВКИ СТРАНИЦ
+   ============================================================ */
+h1, h2, h3 {
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+/* Шапка страницы (page-head) — у scan-страницы */
+.page-head {
+  margin-bottom: 18px;
+}
+
+/* Главный заголовок страницы: page-title (scan) и page__title (diary) */
+.page-title,
+.page__title {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+/* page__title в дневнике стоит над датабаром — даём чуть больше отступа */
+.page__title {
+  margin-bottom: 14px;
+}
+
+/* Подзаголовок страницы (page-subtitle) */
+.page-subtitle {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* ============================================================
+   КАРТОЧКИ (.card)
+   ============================================================ */
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  margin-bottom: 16px;
+  animation: fadeIn .28s ease;
+}
+
+/* ============================================================
+   КНОПКИ
+   .btn — базовая; модификаторы в обоих написаниях (одинарный/двойной дефис)
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 14px;
+  background: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .18s ease, transform .08s ease, opacity .18s ease,
+    box-shadow .18s ease;
+}
+
+.btn:active {
+  transform: scale(.98);
+}
+
+.btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Блочная кнопка на всю ширину с отступом сверху между кнопками */
+.btn-block {
+  width: 100%;
+  display: flex;
+}
+
+/* Когда несколько btn-block идут подряд — разделяем их вертикально */
+.btn-block + .btn-block {
+  margin-top: 10px;
+}
+
+/* Основная кнопка действия (CTA): зелёная, белый текст.
+   Алиасы btn-cta (page-scan) и btn--cta (page-diary, page-account). */
+.btn-cta,
+.btn--cta {
+  background: var(--cta);
+  color: var(--white);
+  box-shadow: 0 6px 16px rgba(125, 155, 118, .28);
+}
+
+.btn-cta:active,
+.btn--cta:active {
+  background: var(--cta-press);
+}
+
+/* Призрачная (вторичная/контурная) кнопка.
+   Алиасы btn-ghost (page-scan) и btn--ghost (page-diary, page-account). */
+.btn-ghost,
+.btn--ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1.5px solid var(--accent);
+  box-shadow: none;
+}
+
+.btn-ghost:active,
+.btn--ghost:active {
+  background: rgba(201, 184, 168, .25);
+}
+
+/* Опасная кнопка (на будущее / удаление) */
+.btn-danger {
+  background: var(--danger);
+  color: var(--white);
+}
+
+.btn-danger:active {
+  filter: brightness(.94);
+}
+
+/* ============================================================
+   НИЖНЯЯ НАВИГАЦИЯ (#tabbar)
+   ============================================================ */
+#tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 900;
+  display: flex;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--white);
+  border-top: 1px solid rgba(58, 53, 47, .08);
+  box-shadow: 0 -4px 20px rgba(122, 107, 90, .1);
+  /* Учитываем безопасную нижнюю область устройства */
+  padding-bottom: var(--safe-bottom);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: var(--tabbar-height);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .18s ease;
+}
+
+.tab-emoji {
+  font-size: 22px;
+  line-height: 1;
+  /* Неактивные иконки слегка приглушены */
+  filter: grayscale(40%);
+  opacity: .7;
+  transition: filter .18s ease, opacity .18s ease, transform .12s ease;
+}
+
+.tab-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* Активная вкладка: акцентный цвет + яркая иконка (#tabbar .tab.active) */
+.tab.active {
+  color: var(--cta);
+}
+
+.tab.active .tab-emoji {
+  filter: grayscale(0%);
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.tab:active .tab-emoji {
+  transform: scale(.9);
+}
+
+/* ============================================================
+   СТРАНИЦА «ОПРЕДЕЛЕНИЕ» (page-scan)
+   ============================================================ */
+
+/* --- Зона загрузки фото (dropzone) --- */
+.scan-dropzone {
+  text-align: center;
+  padding: 28px 18px;
+}
+
+.scan-dropzone__icon {
+  font-size: 48px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.scan-dropzone__hint {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+
+/* --- Превью выбранного фото --- */
+.scan-preview {
+  padding: 0;
+  overflow: hidden;
+  background: var(--white);
+}
+
+.scan-preview__img {
+  width: 100%;
+  max-height: 340px;
+  object-fit: cover;
+  display: block;
+}
+
+.scan-preview__status {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  padding: 14px 16px;
+}
+
+/* --- Карточка результата распознавания --- */
+.result-card {
+  background: var(--white);
+  text-align: center;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.result-card__img {
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+}
+
+.result-card__name {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+/* Крупное число калорий + единица «ккал» */
+.result-card__kcal {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.result-card__kcal-val {
+  font-size: 40px;
+  font-weight: 800;
+  color: var(--cta);
+  line-height: 1;
+}
+
+.result-card__kcal-unit {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Плитки Б/Ж/У */
+.macros {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.macro {
+  flex: 1;
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 6px;
+}
+
+.macro__val {
+  display: block;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.macro__lbl {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Комментарий от ИИ */
+.result-note {
+  font-size: 14px;
+  color: var(--muted);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-top: 12px;
+  text-align: left;
+  line-height: 1.5;
+}
+
+/* --- Выбор приёма пищи (чипы) --- */
+.meal-picker {
+  margin-bottom: 16px;
+}
+
+.meal-picker__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.meal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.meal-chip {
+  flex: 1 1 calc(50% - 4px);
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1.5px solid var(--accent);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, color .18s ease,
+    transform .08s ease;
+}
+
+.meal-chip:active {
+  transform: scale(.97);
+}
+
+/* Выбранный чип (классы is-active добавляются/снимаются в JS) */
+.meal-chip.is-active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* --- Карточка ошибки сканирования --- */
+.error-card {
+  background: var(--white);
+  text-align: center;
+  padding: 24px 18px;
+}
+
+.error-card__icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.error-card__msg {
+  font-size: 15px;
+  color: var(--text);
+  margin-bottom: 18px;
+  line-height: 1.5;
+}
+
+/* Кнопки внутри карточки ошибки разделяем по вертикали */
+.error-card .btn + .btn {
+  margin-top: 10px;
+}
+
+/* ============================================================
+   СТРАНИЦА «МОЙ РАЦИОН» (page-diary)
+   ============================================================ */
+
+/* Контейнер контента дневника (скелетон / день / ошибка) */
+.diary-content {
+  display: block;
+}
+
+/* --- Переключатель даты (◀ дата ▶) --- */
+.diary-datebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.diary-datebar__nav {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.diary-datebar__nav:active {
+  transform: scale(.94);
+  background: var(--accent);
+}
+
+.diary-datebar__label {
+  flex: 1;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.diary-datebar__date {
+  display: block;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.diary-datebar__iso {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* --- Секция приёма пищи --- */
+.diary-meal {
+  padding: 14px 16px;
+}
+
+.diary-meal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.diary-meal__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.diary-meal__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.diary-meal__kcal {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Пустое состояние конкретного приёма пищи */
+.diary-meal__empty {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  padding: 12px 8px;
+}
+
+/* Список записей внутри секции */
+.diary-meal__list {
+  list-style: none;
+}
+
+/* --- Одна запись дневника --- */
+.diary-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.diary-entry:first-child {
+  border-top: none;
+}
+
+.diary-entry__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.diary-entry__name {
+  display: block;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diary-entry__macros {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.diary-entry__kcal {
+  font-weight: 700;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+/* Кнопка удаления записи ✕ (маленькая иконочная) */
+.diary-entry__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.diary-entry__del:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+.diary-entry__del:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* --- Карточка итога за день + прогресс цели --- */
+.diary-total {
+  background: var(--white);
+  padding: 18px;
+}
+
+.diary-total__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.diary-total__caption {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.diary-total__value {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.diary-total__macros {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+/* Подсказка «цель не задана» */
+.diary-total__nogoal {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+/* Прогресс-бар цели */
+.diary-progress {
+  margin-top: 4px;
+}
+
+.diary-progress__track {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.diary-progress__fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cta);
+  width: 0%;
+  transition: width .5s ease, background .25s ease;
+}
+
+/* Превышение дневной нормы — красный */
+.diary-progress__fill.is-over {
+  background: var(--danger);
+}
+
+.diary-progress__labels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.diary-progress__hint {
+  color: var(--muted);
+}
+
+/* Подсказка о превышении — красная */
+.diary-progress__hint.is-over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* --- Пустое состояние всего дня --- */
+.diary-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 32px 16px;
+}
+
+.diary-empty__icon {
+  font-size: 44px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.diary-empty__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.diary-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* --- Карточка ошибки загрузки дневника --- */
+.diary-error {
+  background: var(--white);
+  text-align: center;
+  padding: 24px 18px;
+}
+
+.diary-error__icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.diary-error__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.diary-error__text {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Повторить» в карточке ошибки — не на всю ширину */
+.diary-error__retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   СТРАНИЦА «МОЙ АККАУНТ» (page-account)
+   ============================================================ */
+
+/* --- Шапка профиля --- */
+.acc-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Аватар (картинка или заглушка-эмодзи) */
+.acc-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--accent);
+  box-shadow: var(--shadow);
+  flex-shrink: 0;
+}
+
+/* Заглушка аватара (нет фото) — эмодзи по центру */
+.acc-avatar--empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 30px;
+  color: var(--white);
+  background: var(--cta);
+}
+
+.acc-header__info {
+  min-width: 0;
+}
+
+.acc-name {
+  font-size: 19px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.acc-username {
+  font-size: 14px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* --- Форма профиля --- */
+.acc-form {
+  display: block;
+}
+
+.acc-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+/* Сетка 2×2 для коротких полей (вес/рост/возраст/пол) */
+.acc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+/* Поле формы: label.field оборачивает подпись и input */
+.field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.field__label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* Универсальный стиль для input и select */
+.field__input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--text);
+  outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.field__input:focus {
+  border-color: var(--cta);
+  box-shadow: 0 0 0 3px rgba(125, 155, 118, .18);
+}
+
+/* Стилизованная стрелка для select-полей */
+select.field__input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%238A8178' d='M1 1l5 5 5-5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  padding-right: 38px;
+}
+
+/* Подсказка под формой */
+.acc-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+/* Внутри формы кнопки идут одна под другой с отступом */
+.acc-form .btn {
+  margin-top: 10px;
+}
+
+/* --- История за 30 дней --- */
+.acc-history {
+  display: block;
+}
+
+.acc-history__body {
+  display: block;
+}
+
+/* Подпись цели над графиком */
+.hist-goal {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cta);
+  margin-bottom: 12px;
+}
+
+.hist-goal--muted {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Список строк-баров истории */
+.hist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Одна строка истории: дата | горизонтальный бар | значение */
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hist-row__date {
+  flex: 0 0 42px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Дорожка для бара */
+.hist-row__bar-wrap {
+  flex: 1;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Сам бар (ширина задаётся inline-стилем в JS) */
+.hist-row__bar {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--cta);
+  min-width: 2px;
+  transition: width .5s ease, background .25s ease;
+}
+
+/* Бар, превышающий цель — красный */
+.hist-row__bar--over {
+  background: var(--danger);
+}
+
+.hist-row__val {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  text-align: right;
+  min-width: 64px;
+}
+
+/* Пустое состояние истории */
+.acc-empty {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px 12px;
+  line-height: 1.5;
+}
+
+/* Ошибка загрузки истории */
+.acc-error {
+  text-align: center;
+  color: var(--text);
+  padding: 16px 8px;
+}
+
+.acc-error__msg {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Повторить» в ошибке истории — компактная */
+.acc-error .btn {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   СКЕЛЕТОНЫ ЗАГРУЗКИ (shimmer)
+   ============================================================ */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 253, 250, .45),
+    transparent
+  );
+  animation: shimmer 1.3s infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+
+/* Полоса-строка скелетона */
+.skeleton-line {
+  height: 14px;
+  margin-bottom: 10px;
+}
+
+.skeleton-line:last-child {
+  margin-bottom: 0;
+}
+
+/* Узкая строка */
+.skeleton-line.short {
+  width: 50%;
+}
+
+/* Заголовочная строка (чуть выше и шире) */
+.skeleton-line.skeleton-title {
+  height: 18px;
+  width: 60%;
+}
+
+/* Строка-итог дня */
+.skeleton-line.skeleton-total {
+  height: 22px;
+  margin-bottom: 16px;
+}
+
+/* Контейнер скелетона дневника */
+.diary-skeleton {
+  display: block;
+}
+
+/* Крупный блок-скелетон. Алиасы: skeleton-block (diary) и skeleton--block (account) */
+.skeleton-block,
+.skeleton--block {
+  height: 160px;
+  margin-bottom: 16px;
+  border-radius: var(--radius);
+}
+
+/* Скелетон-блок, который одновременно является секцией приёма пищи,
+   получает мягкий внутренний вид карточки */
+.diary-meal.skeleton-block {
+  height: auto;
+  padding: 16px;
+}
+
+/* ============================================================
+   ГЛОБАЛЬНЫЙ ОВЕРЛЕЙ ЗАГРУЗКИ (#loading)
+   Управляется классом .show (add/remove в app.js), НЕ атрибутом hidden.
+   ============================================================ */
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  /* По умолчанию скрыт; перекрываем атрибут hidden из разметки */
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(58, 53, 47, .35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+/* Видимое состояние (app.js добавляет класс show) */
+#loading.show {
+  display: flex;
+  animation: fadeIn .2s ease;
+}
+
+/* Большой вращающийся спиннер */
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(255, 253, 250, .5);
+  border-top-color: var(--cta);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Маленький встроенный спиннер (например, внутри кнопки) */
+.spinner-sm {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid rgba(255, 253, 250, .5);
+  border-top-color: var(--white);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  vertical-align: middle;
+}
+
+/* ============================================================
+   ТОСТ-УВЕДОМЛЕНИЕ (#toast)
+   По умолчанию скрыт/прозрачен; видим при классе .show (app.js).
+   ============================================================ */
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 16px);
+  transform: translateX(-50%) translateY(20px);
+  z-index: 1100;
+  max-width: 90%;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: var(--text);
+  color: var(--white);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s ease, transform .25s ease;
+}
+
+/* Видимое состояние тоста (app.js добавляет класс show) */
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============================================================
+   АДАПТАЦИЯ ПОД ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 360px) {
+  body { font-size: 15px; }
+
+  .macros { gap: 6px; }
+
+  .meal-chip {
+    font-size: 13px;
+    flex-basis: calc(50% - 4px);
+  }
+
+  .result-card__kcal-val { font-size: 34px; }
+}

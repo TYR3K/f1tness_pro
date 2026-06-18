@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Write-Output \"=== Current dir contents ===\"; Get-ChildItem -Force C:\\\\Games\\\\MiniApp | Select-Object Name, Length | Format-Table -AutoSize; Write-Output \"=== Python ===\"; $py = \\(Get-Command python -ErrorAction SilentlyContinue\\); if \\($py\\) { python --version } else { Write-Output \"python not found\" }; $py3 = \\(Get-Command py -ErrorAction SilentlyContinue\\); if \\($py3\\) { Write-Output \"py launcher present\" } else { Write-Output \"py launcher not found\" }; Write-Output \"=== Git ===\"; $g = \\(Get-Command git -ErrorAction SilentlyContinue\\); if \\($g\\) { git --version } else { Write-Output \"git not found\" })",
+      "Bash(python -m py_compile backend/auth.py)",
+      "Bash(python -m py_compile backend/ai_service.py)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(python -m py_compile \"C:\\\\Games\\\\MiniApp\\\\backend\\\\ai_service.py\")",
+      "PowerShell(python -m py_compile backend\\\\auth.py)",
+      "PowerShell(if \\($?\\) { \"COMPILE_OK\" })",
+      "PowerShell(python -m py_compile \"C:\\\\Games\\\\MiniApp\\\\backend\\\\ai_service.py\")",
+      "PowerShell(if \\($?\\) { \"OK: compiled\" })",
+      "PowerShell($out = & python --version; \"exit=$LASTEXITCODE out=$out\")",
+      "PowerShell($cmd = Get-Command python -ErrorAction SilentlyContinue; if \\($cmd\\) { $cmd.Source } else { \"no python\" }; $cmd2 = Get-Command py -ErrorAction SilentlyContinue; if \\($cmd2\\) { \"PY: \" + $cmd2.Source } else { \"no py\" })",
+      "Bash(node --check \"C:\\\\Games\\\\MiniApp\\\\frontend\\\\js\\\\app.js\")",
+      "Bash(python -m py_compile backend/__init__.py backend/schemas.py backend/main.py)",
+      "Bash(node --check \"C:/Games/MiniApp/frontend/js/page-scan.js\")",
+      "Bash(py -3 --version)",
+      "Bash(py -3 -m py_compile backend/__init__.py backend/schemas.py backend/main.py)",
+      "Bash(python -c \"s=open\\(r'C:\\\\Games\\\\MiniApp\\\\frontend\\\\css\\\\style.css',encoding='utf-8'\\).read\\(\\); print\\('open',s.count\\('{'\\),'close',s.count\\('}'\\),'bytes',len\\(s\\)\\)\")",
+      "Bash(py -3 -c \"import ast,sys; [ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\),f\\) for f in ['backend/schemas.py','backend/main.py']]; print\\('AST_OK'\\)\")",
+      "Bash(node --check \"C:\\\\Games\\\\MiniApp\\\\frontend\\\\js\\\\page-diary.js\")"
+    ]
+  }
+}

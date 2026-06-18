@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <!-- Вьюпорт: мобильный, поддержка безопасных зон (вырезы/«чёлки») -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Трекер калорий</title>
+
+  <!-- Шрифт Inter из Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Основные стили приложения -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Контейнер активной страницы: App очищает и наполняет его -->
+  <main id="view"></main>
+
+  <!-- Нижняя панель навигации: три вкладки -->
+  <nav id="tabbar">
+    <button class="tab" type="button" data-page="scan">
+      <span class="tab-emoji" aria-hidden="true">📷</span>
+      <span class="tab-label">Определение</span>
+    </button>
+    <button class="tab" type="button" data-page="diary">
+      <span class="tab-emoji" aria-hidden="true">🥗</span>
+      <span class="tab-label">Мой рацион</span>
+    </button>
+    <button class="tab" type="button" data-page="account">
+      <span class="tab-emoji" aria-hidden="true">👤</span>
+      <span class="tab-label">Мой аккаунт</span>
+    </button>
+  </nav>
+
+  <!-- Оверлей загрузки со спиннером (по умолчанию скрыт) -->
+  <div id="loading" hidden>
+    <div class="spinner" aria-label="Загрузка"></div>
+  </div>
+
+  <!-- Контейнер всплывающих уведомлений -->
+  <div id="toast"></div>
+
+  <!-- Скрипты в конце body, в строгом порядке согласно контракту -->
+  <!-- 1) Telegram WebApp SDK -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- 2) Ядро приложения: window.App, хелперы, API-клиент, роутер -->
+  <script src="js/app.js"></script>
+  <!-- 3-5) Контроллеры страниц (каждый вызывает App.registerPage при загрузке) -->
+  <script src="js/page-scan.js"></script>
+  <script src="js/page-diary.js"></script>
+  <script src="js/page-account.js"></script>
+  <!-- 6) Запуск приложения после регистрации всех страниц -->
+  <script>App.init();</script>
+</body>
+</html>

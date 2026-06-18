@@ -1,0 +1,187 @@
+"""
+Модуль аутентификации Telegram WebApp.
+
+Здесь реализована проверка подлинности данных, которые Telegram передаёт
+mini-приложению (initData), а также FastAPI-зависимость get_current_user,
+которая по этим данным находит или создаёт пользователя в базе.
+
+Безопасность Telegram WebApp строится на HMAC-подписи: сервер Telegram
+подписывает строку с данными пользователя секретом, производным от токена
+бота. Зная BOT_TOKEN, бэкенд может пересчитать подпись и убедиться, что
+данные не подделаны клиентом.
+"""
+
+import hashlib
+import hmac
+import json
+import os
+import time
+from urllib.parse import parse_qsl
+
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+
+from backend.database import get_db
+from backend.models import User
+
+# Имя HTTP-заголовка, в котором фронтенд присылает Telegram initData.
+# Должно совпадать с тем, что отправляет клиент (см. App.api в js/app.js).
+HEADER = "X-Telegram-Init-Data"
+
+# Допустимый «возраст» initData в секундах (24 часа).
+# Используется как мягкая проверка свежести — мы не отклоняем запрос
+# жёстко, но при желании можно ужесточить логику.
+_MAX_AUTH_AGE_SECONDS = 24 * 60 * 60
+
+
+def validate_init_data(init_data: str, bot_token: str) -> dict | None:
+    """
+    Проверить подлинность строки Telegram WebApp initData.
+
+    Возвращает словарь с распарсенными данными (включая поле "user" как dict),
+    если подпись верна, иначе None.
+
+    Алгоритм проверки строго соответствует официальной документации Telegram:
+      1. Разбираем querystring init_data в список пар ключ-значение.
+      2. Извлекаем (pop) из пар поле "hash" — это присланная подпись.
+      3. Формируем data_check_string: оставшиеся пары сортируем по ключу и
+         склеиваем строками вида "key=value", разделяя символом перевода
+         строки "\\n".
+      4. Вычисляем секретный ключ: HMAC-SHA256 от токена бота с фиксированным
+         ключом b"WebAppData".
+      5. Вычисляем собственную подпись data_check_string этим секретным ключом.
+      6. Сравниваем свою подпись с присланной через hmac.compare_digest
+         (защита от timing-атак). При несовпадении — данные подделаны.
+      7. Поле "user" приходит как JSON-строка — разбираем его в словарь.
+    """
+    # Без входных данных или без токена проверять нечего — данные невалидны.
+    if not init_data or not bot_token:
+        return None
+
+    # Шаг 1. Разбираем строку запроса. keep_blank_values=True важно, чтобы
+    # пустые значения тоже попадали в проверку подписи (иначе подпись не сойдётся).
+    pairs = dict(parse_qsl(init_data, keep_blank_values=True))
+
+    # Шаг 2. Достаём присланную подпись. Если её нет — проверять нечего.
+    received_hash = pairs.pop("hash", None)
+    if received_hash is None:
+        return None
+
+    # Шаг 3. Собираем строку для проверки: сортируем оставшиеся ключи и
+    # склеиваем пары "key=value" через перевод строки.
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(pairs.items()))
+
+    # Шаг 4. Секретный ключ = HMAC-SHA256(key=b"WebAppData", msg=bot_token).
+    secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+
+    # Шаг 5. Наша подпись строки данных этим секретным ключом.
+    calc_hash = hmac.new(
+        secret_key, data_check_string.encode(), hashlib.sha256
+    ).hexdigest()
+
+    # Шаг 6. Безопасное сравнение подписей (защита от атак по времени).
+    if not hmac.compare_digest(calc_hash, received_hash):
+        return None
+
+    # Мягкая проверка свежести: если auth_date слишком старый, это может быть
+    # повторно использованные данные. Не валим запрос жёстко, как требует
+    # контракт, но игнорируем некорректный формат auth_date.
+    auth_date = pairs.get("auth_date")
+    if auth_date is not None:
+        try:
+            # Если данным больше суток — оставляем на усмотрение вызывающего;
+            # здесь просто не делаем ничего деструктивного.
+            _ = (time.time() - int(auth_date)) > _MAX_AUTH_AGE_SECONDS
+        except (TypeError, ValueError):
+            # Некорректный auth_date — не критично, продолжаем.
+            pass
+
+    # Шаг 7. Разбираем поле "user" из JSON-строки в словарь.
+    user_raw = pairs.get("user")
+    if user_raw:
+        try:
+            pairs["user"] = json.loads(user_raw)
+        except (TypeError, ValueError):
+            # Не смогли распарсить пользователя — считаем данные невалидными.
+            return None
+
+    return pairs
+
+
+def _upsert_user(db: Session, *, telegram_id: int, username, first_name, photo_url) -> User:
+    """
+    Создать пользователя, если его ещё нет, либо обновить изменяемые поля
+    профиля Telegram (username/first_name/photo_url) у существующего.
+
+    Поля weight/height/age/gender/goal не трогаем — это данные, которые
+    пользователь задаёт сам в разделе «Мой аккаунт».
+    """
+    user = db.query(User).filter(User.telegram_id == telegram_id).first()
+    if user is None:
+        # Новый пользователь — создаём запись.
+        user = User(
+            telegram_id=telegram_id,
+            username=username,
+            first_name=first_name,
+            photo_url=photo_url,
+        )
+        db.add(user)
+    else:
+        # Существующий пользователь — освежаем данные из Telegram.
+        user.username = username
+        user.first_name = first_name
+        user.photo_url = photo_url
+
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def get_current_user(
+    request: Request, db: Session = Depends(get_db)
+) -> User:
+    """
+    FastAPI-зависимость: вернуть текущего пользователя по Telegram initData.
+
+    Логика:
+      - Читаем заголовок X-Telegram-Init-Data.
+      - Если он есть и подпись валидна — извлекаем пользователя и делаем upsert.
+      - Если заголовок отсутствует/невалиден:
+          * при ALLOW_INSECURE_AUTH == "1" (ТОЛЬКО для разработки) возвращаем
+            фиксированного dev-пользователя (telegram_id=1);
+          * иначе отдаём HTTP 401.
+    """
+    init_data = request.headers.get(HEADER, "")
+    bot_token = os.getenv("BOT_TOKEN", "")
+
+    data = validate_init_data(init_data, bot_token) if init_data else None
+
+    if data and isinstance(data.get("user"), dict):
+        # Данные подписаны корректно — берём профиль из проверенного словаря.
+        tg_user = data["user"]
+        telegram_id = tg_user.get("id")
+        if telegram_id is None:
+            raise HTTPException(status_code=401, detail="Invalid Telegram auth")
+
+        return _upsert_user(
+            db,
+            telegram_id=int(telegram_id),
+            username=tg_user.get("username"),
+            first_name=tg_user.get("first_name"),
+            photo_url=tg_user.get("photo_url"),
+        )
+
+    # Проверка не прошла. Разрешён ли небезопасный режим для разработки?
+    if os.getenv("ALLOW_INSECURE_AUTH") == "1":
+        # ВНИМАНИЕ: только для локальной разработки! Подменяет реального
+        # пользователя фиксированной учётной записью без проверки подписи.
+        return _upsert_user(
+            db,
+            telegram_id=1,
+            username="dev",
+            first_name="Dev",
+            photo_url=None,
+        )
+
+    # Боевой режим без валидных данных — доступ запрещён.
+    raise HTTPException(status_code=401, detail="Invalid Telegram auth")

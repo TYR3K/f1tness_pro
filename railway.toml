@@ -1,0 +1,14 @@
+# Конфигурация деплоя на Railway (https://railway.app)
+# Railway автоматически читает этот файл при сборке и запуске проекта.
+
+[build]
+# Nixpacks сам определяет, что это Python-проект (по requirements.txt в корне),
+# устанавливает зависимости и готовит окружение.
+builder = "nixpacks"
+
+[deploy]
+# Команда запуска приложения. Railway подставляет порт в переменную $PORT.
+# backend.main:app — FastAPI-приложение в файле backend/main.py.
+startCommand = "uvicorn backend.main:app --host 0.0.0.0 --port $PORT"
+# Перезапускать контейнер только при сбое (а не постоянно).
+restartPolicyType = "on_failure"
