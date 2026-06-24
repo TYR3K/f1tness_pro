@@ -6,9 +6,11 @@
  *   1. Дать пользователю сфотографировать / загрузить фото блюда.
  *   2. Показать превью выбранного фото.
  *   3. Отправить фото на бэкенд (App.api.analyzeFood) с индикатором загрузки.
- *   4. Показать карточку результата: название блюда, калории, Б/Ж/У, комментарий.
+ *   4. Показать карточку результата с РЕДАКТИРУЕМЫМИ значениями: название,
+ *      вес порции (граммы), калории, Б/Ж/У, бейдж уверенности, комментарий.
+ *      При изменении веса порции калории и БЖУ пересчитываются пропорционально.
  *   5. Дать выбрать приём пищи (Завтрак/Обед/Ужин/Перекус) и добавить запись
- *      в рацион за сегодня (App.api.addDiary) с уведомлением об успехе.
+ *      в рацион за сегодня (App.api.addDiary) с отредактированными значениями.
  *   6. Корректно обрабатывать ошибки (сеть/AI/неверный файл) с кнопкой повтора.
  *
  * Весь UI-текст на русском. Идентификаторы/ключи — на английском.
@@ -18,17 +20,22 @@
 
   // ===== Внутреннее состояние контроллера =====
   // Хранит выбранный файл, результат анализа и выбранный приём пищи.
-  // Сбрасывается при reset() и при каждом новом showe страницы.
+  // Сбрасывается при reset() и при каждом новом show страницы.
   var state = {
     file: null,            // выбранный File (фото)
     previewUrl: null,      // objectURL для превью (нужно освобождать)
-    result: null,          // результат анализа { dish_name, calories, proteins, fats, carbs, note }
+    result: null,          // результат анализа { dish_name, calories, proteins, fats, carbs, note, weight_grams, confidence, debug }
+    base: null,            // исходные («сырые») значения анализа для пропорционального пересчёта
+    edited: null,          // текущие отредактированные значения формы { dish_name, weight, calories, proteins, fats, carbs }
     mealType: "breakfast", // выбранный приём пищи по умолчанию
   };
 
   // Соответствие ключей приёмов пищи и русских подписей (для кнопок-чипов).
   // Источник истины по подписям — App.mealLabel, но порядок задаём здесь.
   var MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
+
+  // Русские подписи уровней уверенности модели.
+  var CONFIDENCE_LABELS = { low: "низкая", medium: "средняя", high: "высокая" };
 
   // ===== Утилиты =====
 
@@ -49,6 +56,8 @@
     revokePreview();
     state.file = null;
     state.result = null;
+    state.base = null;
+    state.edited = null;
     state.mealType = "breakfast";
     render();
   }
@@ -72,6 +81,17 @@
     if (App && typeof App.fmt === "function") return App.fmt(n);
     var num = Number(n);
     return isFinite(num) ? String(Math.round(num)) : "0";
+  }
+
+  // Безопасное приведение к числу (для значений из input/анализа).
+  function num(v) {
+    var n = Number(v);
+    return isFinite(n) ? n : 0;
+  }
+
+  // Округление значения макроса до одного знака (для аккуратного отображения в input).
+  function round1(v) {
+    return Math.round(num(v) * 10) / 10;
   }
 
   // Русская подпись приёма пищи.
@@ -99,7 +119,7 @@
   // Страница имеет несколько состояний, переключаемых через render():
   //   - нет файла           -> экран загрузки фото
   //   - есть файл, нет result-> экран превью (анализ запускается автоматически)
-  //   - есть result         -> карточка результата + выбор приёма пищи
+  //   - есть result         -> карточка результата + редактируемые поля + выбор приёма пищи
   // Ошибки показываются поверх через renderError().
 
   function render() {
@@ -177,9 +197,10 @@
     });
   }
 
-  // --- Экран 3: карточка результата + выбор приёма пищи ---
+  // --- Экран 3: карточка результата с редактируемыми полями + выбор приёма пищи ---
   function renderResult() {
     var r = state.result || {};
+    var e = state.edited || {};
     var src = state.previewUrl || "";
 
     // Кнопки-чипы выбора приёма пищи.
@@ -191,6 +212,17 @@
         "</button>"
       );
     }).join("");
+
+    // Бейдж уверенности модели (low/medium/high -> низкая/средняя/высокая).
+    var conf = r.confidence;
+    var confHtml = "";
+    if (conf && CONFIDENCE_LABELS[conf]) {
+      confHtml =
+        '<div class="scan-edit-confidence scan-edit-confidence--' + esc(conf) + '">' +
+          '<span class="scan-edit-confidence__label">Уверенность ИИ:</span> ' +
+          '<span class="scan-edit-confidence__value">' + esc(CONFIDENCE_LABELS[conf]) + "</span>" +
+        "</div>";
+    }
 
     // Комментарий от ИИ показываем только если он есть.
     var noteHtml = r.note
@@ -205,28 +237,69 @@
         "</details>"
       : "";
 
+    // Поле веса порции показываем всегда; если исходный вес неизвестен —
+    // пропорциональный пересчёт не делаем, разрешая ручное редактирование значений.
+    var hasBaseWeight = state.base && num(state.base.weight) > 0;
+    var weightHintHtml = hasBaseWeight
+      ? '<p class="scan-edit-hint">При изменении веса калории и БЖУ пересчитываются автоматически.</p>'
+      : '<p class="scan-edit-hint">Вес порции не определён — отредактируйте значения вручную.</p>';
+
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
           '<h1 class="page-title">Результат</h1>' +
+          '<p class="page-subtitle">Проверьте и при необходимости поправьте значения перед добавлением.</p>' +
         "</header>" +
-        '<div class="card result-card">' +
+        '<div class="card result-card scan-edit-card">' +
           (src
             ? '<img class="result-card__img" src="' + esc(src) + '" alt="Фото блюда">'
             : "") +
-          '<h2 class="result-card__name">' + esc(r.dish_name || "Без названия") + "</h2>" +
-          '<div class="result-card__kcal">' +
-            '<span class="result-card__kcal-val">' + fmt(r.calories) + "</span>" +
-            '<span class="result-card__kcal-unit">ккал</span>' +
-          "</div>" +
-          '<div class="macros">' +
-            '<div class="macro"><span class="macro__val">' + fmt(r.proteins) + " г</span>" +
-              '<span class="macro__lbl">Белки</span></div>' +
-            '<div class="macro"><span class="macro__val">' + fmt(r.fats) + " г</span>" +
-              '<span class="macro__lbl">Жиры</span></div>' +
-            '<div class="macro"><span class="macro__val">' + fmt(r.carbs) + " г</span>" +
-              '<span class="macro__lbl">Углеводы</span></div>' +
-          "</div>" +
+          confHtml +
+          '<form class="scan-edit-form" id="scan-edit-form" autocomplete="off">' +
+            // Название блюда.
+            '<label class="field scan-edit-field scan-edit-field--name">' +
+              '<span class="field__label">Название</span>' +
+              '<input type="text" class="field__input scan-edit-input" id="scan-edit-name" ' +
+                'value="' + esc(e.dish_name == null ? "" : e.dish_name) + '" ' +
+                'placeholder="Название блюда" maxlength="120">' +
+            "</label>" +
+            // Вес порции (граммы).
+            '<label class="field scan-edit-field scan-edit-field--weight">' +
+              '<span class="field__label">Вес порции, г</span>' +
+              '<input type="number" inputmode="decimal" min="0" step="1" ' +
+                'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-weight" ' +
+                'value="' + esc(e.weight == null ? "" : e.weight) + '" placeholder="0">' +
+            "</label>" +
+            weightHintHtml +
+            // Калории.
+            '<label class="field scan-edit-field scan-edit-field--calories">' +
+              '<span class="field__label">Калории, ккал</span>' +
+              '<input type="number" inputmode="decimal" min="0" step="1" ' +
+                'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-calories" ' +
+                'value="' + esc(e.calories == null ? "" : e.calories) + '" placeholder="0">' +
+            "</label>" +
+            // Б/Ж/У в одну сетку.
+            '<div class="scan-edit-macros">' +
+              '<label class="field scan-edit-field scan-edit-field--macro">' +
+                '<span class="field__label">Белки, г</span>' +
+                '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
+                  'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-proteins" ' +
+                  'value="' + esc(e.proteins == null ? "" : e.proteins) + '" placeholder="0">' +
+              "</label>" +
+              '<label class="field scan-edit-field scan-edit-field--macro">' +
+                '<span class="field__label">Жиры, г</span>' +
+                '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
+                  'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-fats" ' +
+                  'value="' + esc(e.fats == null ? "" : e.fats) + '" placeholder="0">' +
+              "</label>" +
+              '<label class="field scan-edit-field scan-edit-field--macro">' +
+                '<span class="field__label">Углеводы, г</span>' +
+                '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
+                  'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-carbs" ' +
+                  'value="' + esc(e.carbs == null ? "" : e.carbs) + '" placeholder="0">' +
+              "</label>" +
+            "</div>" +
+          "</form>" +
           noteHtml +
         "</div>" +
         debugHtml +
@@ -239,6 +312,8 @@
         "</button>" +
         '<button type="button" class="btn btn-ghost btn-block" id="scan-reset">Отмена</button>' +
       "</section>";
+
+    bindResultInputs(hasBaseWeight);
 
     // Переключение выбранного приёма пищи.
     var mealsWrap = viewEl.querySelector("#scan-meals");
@@ -266,6 +341,73 @@
       haptic("light");
       reset();
     });
+  }
+
+  // Привязка обработчиков к редактируемым полям результата.
+  // hasBaseWeight: есть ли исходный (ненулевой) вес для пропорционального пересчёта.
+  function bindResultInputs(hasBaseWeight) {
+    var nameEl = viewEl.querySelector("#scan-edit-name");
+    var weightEl = viewEl.querySelector("#scan-edit-weight");
+    var calEl = viewEl.querySelector("#scan-edit-calories");
+    var protEl = viewEl.querySelector("#scan-edit-proteins");
+    var fatEl = viewEl.querySelector("#scan-edit-fats");
+    var carbEl = viewEl.querySelector("#scan-edit-carbs");
+
+    // Синхронизирует значение из input в state.edited (без перерасчёта).
+    function syncField(key, el, isInt) {
+      if (!el) return;
+      if (key === "dish_name") {
+        state.edited.dish_name = el.value;
+        return;
+      }
+      // Пустую строку оставляем как "", чтобы не подставлять 0 на лету.
+      if (el.value === "") {
+        state.edited[key] = "";
+        return;
+      }
+      var v = num(el.value);
+      state.edited[key] = isInt ? Math.round(v) : round1(v);
+    }
+
+    if (nameEl) {
+      nameEl.addEventListener("input", function () {
+        state.edited.dish_name = nameEl.value;
+      });
+    }
+
+    // Изменение веса -> пропорциональный пересчёт калорий и БЖУ от исходных значений.
+    if (weightEl) {
+      weightEl.addEventListener("input", function () {
+        state.edited.weight = weightEl.value === "" ? "" : num(weightEl.value);
+
+        if (!hasBaseWeight) {
+          // Исходный вес неизвестен — пересчёт невозможен, оставляем ручное редактирование.
+          return;
+        }
+        var baseW = num(state.base.weight);
+        var newW = num(weightEl.value);
+        // При пустом/нулевом весе пересчёт не делаем — ждём осмысленное значение.
+        if (weightEl.value === "" || newW <= 0 || baseW <= 0) return;
+
+        var k = newW / baseW;
+        state.edited.calories = Math.round(num(state.base.calories) * k);
+        state.edited.proteins = round1(num(state.base.proteins) * k);
+        state.edited.fats = round1(num(state.base.fats) * k);
+        state.edited.carbs = round1(num(state.base.carbs) * k);
+
+        // Обновляем зависимые поля без полной перерисовки (фокус остаётся на весе).
+        if (calEl) calEl.value = String(state.edited.calories);
+        if (protEl) protEl.value = String(state.edited.proteins);
+        if (fatEl) fatEl.value = String(state.edited.fats);
+        if (carbEl) carbEl.value = String(state.edited.carbs);
+      });
+    }
+
+    // Ручное редактирование калорий/БЖУ — просто синхронизируем в state.edited.
+    if (calEl) calEl.addEventListener("input", function () { syncField("calories", calEl, true); });
+    if (protEl) protEl.addEventListener("input", function () { syncField("proteins", protEl, false); });
+    if (fatEl) fatEl.addEventListener("input", function () { syncField("fats", fatEl, false); });
+    if (carbEl) carbEl.addEventListener("input", function () { syncField("carbs", carbEl, false); });
   }
 
   // --- Экран ошибки (с возможностью повтора) ---
@@ -322,6 +464,8 @@
     revokePreview();
     state.file = file;
     state.result = null;
+    state.base = null;
+    state.edited = null;
     try {
       state.previewUrl = URL.createObjectURL(file);
     } catch (e) {
@@ -346,15 +490,39 @@
       .then(function (res) {
         // Если за время запроса пользователь сбросил/сменил файл — игнорируем ответ.
         if (state.file !== fileAtStart) return;
+
+        var weight = res && res.weight_grams != null ? num(res.weight_grams) : 0;
         state.result = {
           dish_name: res && res.dish_name ? res.dish_name : "Не удалось распознать еду",
-          calories: res ? res.calories : 0,
-          proteins: res ? res.proteins : 0,
-          fats: res ? res.fats : 0,
-          carbs: res ? res.carbs : 0,
+          calories: res ? num(res.calories) : 0,
+          proteins: res ? num(res.proteins) : 0,
+          fats: res ? num(res.fats) : 0,
+          carbs: res ? num(res.carbs) : 0,
+          weight_grams: weight,
+          confidence: res && res.confidence ? res.confidence : null,
           note: res && res.note ? res.note : "",
           debug: res && res.debug ? res.debug : null,
         };
+
+        // Исходные («сырые») значения — база для пропорционального пересчёта по весу.
+        state.base = {
+          weight: weight,
+          calories: state.result.calories,
+          proteins: state.result.proteins,
+          fats: state.result.fats,
+          carbs: state.result.carbs,
+        };
+
+        // Предзаполняем редактируемую форму результатами анализа.
+        state.edited = {
+          dish_name: state.result.dish_name,
+          weight: weight > 0 ? weight : "",
+          calories: Math.round(state.result.calories),
+          proteins: round1(state.result.proteins),
+          fats: round1(state.result.fats),
+          carbs: round1(state.result.carbs),
+        };
+
         render();
       })
       .catch(function (err) {
@@ -369,20 +537,29 @@
       });
   }
 
-  // Добавление распознанного блюда в дневник за сегодня.
+  // Добавление отредактированного блюда в дневник за сегодня.
   function addToDiary() {
-    if (!state.result) return;
-    var r = state.result;
+    if (!state.edited) return;
+    var e = state.edited;
 
-    // Формируем запись строго по форме DiaryEntryIn.
+    var dishName = (e.dish_name == null ? "" : String(e.dish_name)).trim();
+    if (!dishName) {
+      haptic("warning");
+      toast("Укажите название блюда");
+      var nameEl = viewEl && viewEl.querySelector("#scan-edit-name");
+      if (nameEl) nameEl.focus();
+      return;
+    }
+
+    // Формируем запись строго по форме DiaryEntryIn — из ОТРЕДАКТИРОВАННЫХ значений.
     var entry = {
       date: App.todayStr(),
       meal_type: state.mealType,
-      dish_name: r.dish_name,
-      calories: Math.round(Number(r.calories) || 0),
-      proteins: Number(r.proteins) || 0,
-      fats: Number(r.fats) || 0,
-      carbs: Number(r.carbs) || 0,
+      dish_name: dishName,
+      calories: Math.round(num(e.calories)),
+      proteins: num(e.proteins),
+      fats: num(e.fats),
+      carbs: num(e.carbs),
     };
 
     if (App && typeof App.showLoading === "function") App.showLoading();
@@ -419,6 +596,8 @@
       revokePreview();
       state.file = null;
       state.result = null;
+      state.base = null;
+      state.edited = null;
       state.mealType = "breakfast";
       render();
     },

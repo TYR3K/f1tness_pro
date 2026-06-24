@@ -8,7 +8,12 @@
  *   - Отрисовка четырёх приёмов пищи (Завтрак/Обед/Ужин/Перекус),
  *     в каждом — список записей (название + ккал + кнопка удаления ✕).
  *   - Удаление записи через App.api.deleteEntry(id) с последующей перезагрузкой.
- *   - Итог калорий за день + прогресс-бар относительно daily_goal_kcal.
+ *   - Итог калорий за день с учётом тренировок («Съедено − Сожжено = Итого»)
+ *     + прогресс-бар относительно daily_goal_kcal по net_calories.
+ *   - Две кнопки действий: «➕ Добавить вручную» и «🤖 Что съесть?».
+ *       • Ручное добавление: форма (название, ккал, Б/Ж/У, вес — необязательно,
+ *         селектор приёма пищи) + блок «Недавние» с добавлением в один тап.
+ *       • «Что съесть?»: рекомендации блюд под оставшиеся КБЖУ.
  *   - Пустые состояния, скелетон загрузки, экран ошибки с кнопкой «Повторить».
  *
  * Весь пользовательский текст — на русском.
@@ -31,7 +36,9 @@
   var state = {
     date: null,        // текущая выбранная дата "YYYY-MM-DD"
     viewEl: null,      // корневой элемент страницы (#view)
-    loading: false     // флаг, чтобы не запускать параллельные перезагрузки
+    loading: false,    // флаг, чтобы не запускать параллельные перезагрузки
+    day: null,         // последний загруженный DiaryDayOut (для модалок)
+    panel: null        // открытая панель: "manual" | "recommend" | null
   };
 
   /**
@@ -192,19 +199,48 @@
 
   /**
    * Разметка карточки с итогом дня и прогресс-баром цели.
+   * Если за день есть сожжённые калории (total_burned > 0), показываем
+   * баланс «Съедено X − Сожжено Y = Итого Z ккал», а прогресс-бар
+   * относительно цели считаем по net_calories. Иначе — как раньше.
    * @param {Object} day DiaryDayOut
    * @returns {string}
    */
   function totalsHtml(day) {
-    var total = Number(day.total_calories) || 0;
+    var eaten = Number(day.total_calories) || 0;
+    var burned = Number(day.total_burned) || 0;
+    // net_calories с сервера; если поля нет — считаем сами.
+    var net = (day.net_calories !== undefined && day.net_calories !== null)
+      ? Number(day.net_calories)
+      : eaten - burned;
     var goal = day.daily_goal_kcal; // может быть null
+
+    // Значение, относительно которого считаем прогресс и остаток.
+    // При наличии тренировок учитываем «чистые» калории.
+    var hasBurned = burned > 0;
+    var basis = hasBurned ? net : eaten;
+
+    // Блок баланса с учётом тренировок (только если что-то сожжено).
+    var balanceBlock = "";
+    if (hasBurned) {
+      balanceBlock =
+        '<div class="diary-balance">' +
+        '<span class="diary-balance__part diary-balance__eaten">Съедено ' +
+        App.fmt(eaten) + "</span>" +
+        '<span class="diary-balance__op">−</span>' +
+        '<span class="diary-balance__part diary-balance__burned">Сожжено ' +
+        App.fmt(burned) + "</span>" +
+        '<span class="diary-balance__op">=</span>' +
+        '<span class="diary-balance__part diary-balance__net">Итого ' +
+        App.fmt(net) + " ккал</span>" +
+        "</div>";
+    }
 
     var progressBlock;
     if (goal && goal > 0) {
-      var pct = Math.round((total / goal) * 100);
+      var pct = Math.round((basis / goal) * 100);
       var width = Math.max(0, Math.min(100, pct)); // ширину ограничиваем 0..100%
-      var over = total > goal;
-      var remaining = goal - total;
+      var over = basis > goal;
+      var remaining = goal - basis;
 
       var hint;
       if (over) {
@@ -220,7 +256,8 @@
         'style="width:' + width + '%"></div>' +
         "</div>" +
         '<div class="diary-progress__labels">' +
-        '<span>' + App.fmt(total) + " / " + App.fmt(goal) + " ккал</span>" +
+        '<span>' + App.fmt(basis) + " / " + App.fmt(goal) + " ккал" +
+        (hasBurned ? " (с учётом тренировок)" : "") + "</span>" +
         '<span class="diary-progress__hint' + (over ? " is-over" : "") + '">' +
         App.escapeHtml(hint) + "</span>" +
         "</div>" +
@@ -232,12 +269,18 @@
         "Установите её в разделе «Мой аккаунт».</p>";
     }
 
+    // Главное число карточки: при наличии тренировок показываем net,
+    // иначе — съеденные калории (как и было раньше).
+    var headValue = hasBurned ? net : eaten;
+    var headCaption = hasBurned ? "Итого за день (нетто)" : "Итого за день";
+
     return (
       '<section class="card diary-total">' +
       '<div class="diary-total__row">' +
-      '<span class="diary-total__caption">Итого за день</span>' +
-      '<span class="diary-total__value">' + App.fmt(total) + " ккал</span>" +
+      '<span class="diary-total__caption">' + headCaption + "</span>" +
+      '<span class="diary-total__value">' + App.fmt(headValue) + " ккал</span>" +
       "</div>" +
+      balanceBlock +
       '<div class="diary-total__macros">' +
       "Белки " + App.fmt(day.total_proteins || 0) + " г · " +
       "Жиры " + App.fmt(day.total_fats || 0) + " г · " +
@@ -245,6 +288,23 @@
       "</div>" +
       progressBlock +
       "</section>"
+    );
+  }
+
+  /**
+   * Разметка панели действий рациона: «➕ Добавить вручную» и «🤖 Что съесть?».
+   * @returns {string}
+   */
+  function actionsHtml() {
+    return (
+      '<div class="diary-actions">' +
+      '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
+      'data-action="manual">➕ Добавить вручную</button>' +
+      '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
+      'data-action="recommend">🤖 Что съесть?</button>' +
+      "</div>" +
+      // Контейнер для разворачиваемой панели (ручной ввод / рекомендации).
+      '<div id="diary-panel" class="diary-panel"></div>'
     );
   }
 
@@ -268,12 +328,15 @@
   }
 
   /**
-   * Полная отрисовка дня (итоги + 4 секции приёмов пищи).
+   * Полная отрисовка дня (итоги + кнопки действий + 4 секции приёмов пищи).
    * @param {Object} day DiaryDayOut
    */
   function renderDay(day) {
     var content = document.getElementById("diary-content");
     if (!content) return;
+
+    // Запоминаем день для модалок «Что съесть?» (нужны остатки КБЖУ).
+    state.day = day;
 
     // Безопасные значения на случай неполного ответа сервера.
     var meals = day.meals || {};
@@ -298,16 +361,30 @@
         '<div class="diary-empty__icon">🍽️</div>' +
         '<p class="diary-empty__title">За этот день записей нет</p>' +
         '<p class="diary-empty__text">Откройте раздел «Определение», ' +
-        "чтобы распознать блюдо и добавить его в рацион.</p>" +
+        "чтобы распознать блюдо, либо добавьте запись вручную.</p>" +
         "</div>";
     }
 
-    content.innerHTML = totalsHtml(day) + emptyDayHint + sections;
+    content.innerHTML =
+      totalsHtml(day) + actionsHtml() + emptyDayHint + sections;
 
     // Навешиваем обработчики удаления на кнопки ✕.
     var delButtons = content.querySelectorAll(".diary-entry__del");
     for (var k = 0; k < delButtons.length; k++) {
       delButtons[k].addEventListener("click", onDeleteClick);
+    }
+
+    // Навешиваем обработчики на кнопки действий (ручной ввод / рекомендации).
+    var actionButtons = content.querySelectorAll(".diary-actions__btn");
+    for (var a = 0; a < actionButtons.length; a++) {
+      actionButtons[a].addEventListener("click", onActionClick);
+    }
+
+    // Если перед перезагрузкой была открыта панель — восстанавливаем её.
+    if (state.panel === "manual") {
+      openManualPanel();
+    } else if (state.panel === "recommend") {
+      openRecommendPanel();
     }
   }
 
@@ -404,6 +481,567 @@
       });
   }
 
+  // ===========================================================================
+  // ДЕЙСТВИЯ: ручное добавление и рекомендации.
+  // ===========================================================================
+
+  /**
+   * Клик по кнопке действия в панели рациона.
+   * Открывает соответствующую панель либо сворачивает её при повторном клике.
+   * @param {Event} ev
+   */
+  function onActionClick(ev) {
+    var action = ev.currentTarget.getAttribute("data-action");
+    App.haptic && App.haptic("light");
+
+    // Повторный клик по той же кнопке закрывает панель.
+    if (state.panel === action) {
+      state.panel = null;
+      var panel = document.getElementById("diary-panel");
+      if (panel) panel.innerHTML = "";
+      syncActionButtons();
+      return;
+    }
+
+    state.panel = action;
+    syncActionButtons();
+
+    if (action === "manual") {
+      openManualPanel();
+    } else if (action === "recommend") {
+      openRecommendPanel();
+    }
+  }
+
+  /**
+   * Подсвечивает активную кнопку действия в соответствии с открытой панелью.
+   */
+  function syncActionButtons() {
+    var content = document.getElementById("diary-content");
+    if (!content) return;
+    var buttons = content.querySelectorAll(".diary-actions__btn");
+    for (var i = 0; i < buttons.length; i++) {
+      var act = buttons[i].getAttribute("data-action");
+      buttons[i].classList.toggle("is-active", act === state.panel);
+    }
+  }
+
+  /**
+   * Возвращает разметку чипов выбора приёма пищи.
+   * @param {string} selected выбранный тип
+   * @param {string} attr     имя data-атрибута (например "manual-meal")
+   * @returns {string}
+   */
+  function mealChipsHtml(selected, attr) {
+    var chips = "";
+    for (var i = 0; i < MEAL_ORDER.length; i++) {
+      var t = MEAL_ORDER[i];
+      var active = t === selected ? " is-active" : "";
+      chips +=
+        '<button type="button" class="meal-chip' + active + '" ' +
+        "data-" + attr + '="' + t + '">' +
+        App.escapeHtml(App.mealLabel(t)) +
+        "</button>";
+    }
+    return '<div class="meal-chips">' + chips + "</div>";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Ручное добавление блюда.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Открывает панель ручного добавления: форма + блок «Недавние».
+   */
+  function openManualPanel() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    panel.innerHTML =
+      '<section class="card diary-manual">' +
+      '<h2 class="diary-manual__title">Добавить вручную</h2>' +
+      '<form class="diary-manual__form" id="diary-manual-form" novalidate>' +
+      // Название блюда.
+      '<label class="field">' +
+      '<span class="field__label">Название блюда</span>' +
+      '<input class="field__input" type="text" name="dish_name" ' +
+      'placeholder="Например, овсянка с бананом" maxlength="120" required>' +
+      "</label>" +
+      // Калории.
+      '<label class="field">' +
+      '<span class="field__label">Калории, ккал</span>' +
+      '<input class="field__input" type="number" name="calories" ' +
+      'inputmode="numeric" min="0" step="1" placeholder="0" required>' +
+      "</label>" +
+      // Б / Ж / У в одну строку.
+      '<div class="diary-manual__macros">' +
+      '<label class="field diary-manual__macro">' +
+      '<span class="field__label">Белки, г</span>' +
+      '<input class="field__input" type="number" name="proteins" ' +
+      'inputmode="decimal" min="0" step="0.1" placeholder="0">' +
+      "</label>" +
+      '<label class="field diary-manual__macro">' +
+      '<span class="field__label">Жиры, г</span>' +
+      '<input class="field__input" type="number" name="fats" ' +
+      'inputmode="decimal" min="0" step="0.1" placeholder="0">' +
+      "</label>" +
+      '<label class="field diary-manual__macro">' +
+      '<span class="field__label">Углеводы, г</span>' +
+      '<input class="field__input" type="number" name="carbs" ' +
+      'inputmode="decimal" min="0" step="0.1" placeholder="0">' +
+      "</label>" +
+      "</div>" +
+      // Вес порции (необязательно, для удобства — на КБЖУ не влияет).
+      '<label class="field">' +
+      '<span class="field__label">Вес порции, г <span class="field__hint">(необязательно)</span></span>' +
+      '<input class="field__input" type="number" name="portion_g" ' +
+      'inputmode="numeric" min="0" step="1" placeholder="—">' +
+      "</label>" +
+      // Селектор приёма пищи.
+      '<div class="diary-manual__meal">' +
+      '<span class="field__label">Приём пищи</span>' +
+      mealChipsHtml("breakfast", "manual-meal") +
+      "</div>" +
+      '<button class="btn btn--cta btn-block diary-manual__submit" type="submit">' +
+      "Добавить в рацион</button>" +
+      "</form>" +
+      // Контейнер блока «Недавние».
+      '<div id="diary-recent" class="recent"></div>' +
+      "</section>";
+
+    // Выбранный приём пищи для ручной формы (по умолчанию завтрак).
+    var manualMeal = "breakfast";
+
+    var mealsWrap = panel.querySelector(".diary-manual__meal .meal-chips");
+    if (mealsWrap) {
+      mealsWrap.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".meal-chip");
+        if (!btn) return;
+        var t = btn.getAttribute("data-manual-meal");
+        if (!t) return;
+        manualMeal = t;
+        App.haptic && App.haptic("light");
+        var all = mealsWrap.querySelectorAll(".meal-chip");
+        for (var i = 0; i < all.length; i++) {
+          all[i].classList.toggle(
+            "is-active",
+            all[i].getAttribute("data-manual-meal") === t
+          );
+        }
+      });
+    }
+
+    var form = panel.querySelector("#diary-manual-form");
+    if (form) {
+      form.addEventListener("submit", function (ev) {
+        ev.preventDefault();
+        submitManual(form, manualMeal);
+      });
+    }
+
+    // Подгружаем недавние блюда (асинхронно, со своим состоянием загрузки).
+    loadRecent();
+  }
+
+  /**
+   * Парсит и валидирует данные ручной формы и отправляет их на сервер.
+   * @param {HTMLFormElement} form
+   * @param {string} mealType выбранный приём пищи
+   */
+  function submitManual(form, mealType) {
+    var name = (form.dish_name.value || "").trim();
+    var calories = Number(form.calories.value);
+    var proteins = Number(form.proteins.value) || 0;
+    var fats = Number(form.fats.value) || 0;
+    var carbs = Number(form.carbs.value) || 0;
+
+    if (!name) {
+      App.toast("Укажите название блюда");
+      try { form.dish_name.focus(); } catch (e) {}
+      return;
+    }
+    if (!isFinite(calories) || calories < 0) {
+      App.toast("Укажите калорийность блюда");
+      try { form.calories.focus(); } catch (e) {}
+      return;
+    }
+
+    var entry = {
+      date: state.date,
+      meal_type: mealType,
+      dish_name: name,
+      calories: Math.round(calories),
+      proteins: proteins,
+      fats: fats,
+      carbs: carbs
+    };
+
+    var submitBtn = form.querySelector(".diary-manual__submit");
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Добавляем…";
+    }
+    App.showLoading();
+
+    App.api
+      .addManualFood(entry)
+      .then(function () {
+        App.haptic && App.haptic("success");
+        App.toast("Добавлено: " + App.mealLabel(mealType));
+        // Закрываем панель и инвалидируем кэш дня.
+        state.panel = null;
+        if (App.state && App.state.diaryByDate) {
+          delete App.state.diaryByDate[state.date];
+        }
+        loadAndRender();
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || "Не удалось добавить блюдо");
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "Добавить в рацион";
+        }
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Блок «Недавние» — добавление ранее введённых блюд в один тап.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Загружает список недавних блюд и рисует их карточками.
+   */
+  function loadRecent() {
+    var box = document.getElementById("diary-recent");
+    if (!box) return;
+
+    box.innerHTML =
+      '<h3 class="recent__title">Недавние</h3>' +
+      '<div class="recent__list">' +
+      '<div class="skeleton skeleton-block recent__skeleton"></div>' +
+      '<div class="skeleton skeleton-block recent__skeleton"></div>' +
+      "</div>";
+
+    App.api
+      .getRecentFoods()
+      .then(function (res) {
+        var items = (res && res.items) || [];
+        renderRecent(items);
+      })
+      .catch(function () {
+        // Недавние — вспомогательный блок: при ошибке просто скрываем его.
+        if (box) box.innerHTML = "";
+      });
+  }
+
+  /**
+   * Рисует карточки недавних блюд. Каждое можно добавить в один тап:
+   * выбираем приём пищи чипами вверху блока и добавляем блюдо.
+   * @param {Array} items список {dish_name, calories, proteins, fats, carbs}
+   */
+  function renderRecent(items) {
+    var box = document.getElementById("diary-recent");
+    if (!box) return;
+
+    if (!items.length) {
+      box.innerHTML =
+        '<h3 class="recent__title">Недавние</h3>' +
+        '<p class="recent__empty">Здесь появятся блюда, которые вы добавляли вручную.</p>';
+      return;
+    }
+
+    // Выбор приёма пищи для быстрого добавления из «Недавних».
+    var recentMeal = "breakfast";
+
+    var cards = "";
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i] || {};
+      cards +=
+        '<button type="button" class="recent__item" data-idx="' + i + '">' +
+        '<span class="recent__name">' +
+        App.escapeHtml(it.dish_name || "Без названия") + "</span>" +
+        '<span class="recent__macros">' +
+        App.fmt(it.calories || 0) + " ккал · Б " + App.fmt(it.proteins || 0) +
+        " · Ж " + App.fmt(it.fats || 0) + " · У " + App.fmt(it.carbs || 0) +
+        "</span>" +
+        '<span class="recent__add" aria-hidden="true">＋</span>' +
+        "</button>";
+    }
+
+    box.innerHTML =
+      '<h3 class="recent__title">Недавние</h3>' +
+      '<div class="recent__meal">' +
+      '<span class="field__label">Добавить как</span>' +
+      mealChipsHtml("breakfast", "recent-meal") +
+      "</div>" +
+      '<div class="recent__list">' + cards + "</div>";
+
+    // Переключение приёма пищи для блока «Недавние».
+    var mealsWrap = box.querySelector(".recent__meal .meal-chips");
+    if (mealsWrap) {
+      mealsWrap.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".meal-chip");
+        if (!btn) return;
+        var t = btn.getAttribute("data-recent-meal");
+        if (!t) return;
+        recentMeal = t;
+        App.haptic && App.haptic("light");
+        var all = mealsWrap.querySelectorAll(".meal-chip");
+        for (var i = 0; i < all.length; i++) {
+          all[i].classList.toggle(
+            "is-active",
+            all[i].getAttribute("data-recent-meal") === t
+          );
+        }
+      });
+    }
+
+    // Быстрое добавление по тапу на карточку блюда.
+    var list = box.querySelector(".recent__list");
+    if (list) {
+      list.addEventListener("click", function (ev) {
+        var card = ev.target.closest(".recent__item");
+        if (!card) return;
+        var idx = parseInt(card.getAttribute("data-idx"), 10);
+        if (isNaN(idx) || !items[idx]) return;
+        quickAdd(items[idx], recentMeal, card);
+      });
+    }
+  }
+
+  /**
+   * Добавляет произвольное блюдо в рацион выбранного приёма пищи.
+   * Используется и «Недавними», и рекомендациями.
+   * @param {Object} food {dish_name, calories, proteins, fats, carbs}
+   * @param {string} mealType
+   * @param {HTMLElement} [trigger] кнопка-инициатор (для блокировки)
+   */
+  function quickAdd(food, mealType, trigger) {
+    var entry = {
+      date: state.date,
+      meal_type: mealType,
+      dish_name: food.dish_name || "Без названия",
+      calories: Math.round(Number(food.calories) || 0),
+      proteins: Number(food.proteins) || 0,
+      fats: Number(food.fats) || 0,
+      carbs: Number(food.carbs) || 0
+    };
+
+    if (trigger) trigger.disabled = true;
+    App.haptic && App.haptic("light");
+    App.showLoading();
+
+    App.api
+      .addManualFood(entry)
+      .then(function () {
+        App.haptic && App.haptic("success");
+        App.toast("Добавлено: " + App.mealLabel(mealType));
+        state.panel = null;
+        if (App.state && App.state.diaryByDate) {
+          delete App.state.diaryByDate[state.date];
+        }
+        loadAndRender();
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || "Не удалось добавить блюдо");
+        if (trigger) trigger.disabled = false;
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Рекомендации «Что съесть?».
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Открывает панель рекомендаций, считает остатки КБЖУ и запрашивает варианты.
+   */
+  function openRecommendPanel() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    panel.innerHTML =
+      '<section class="card diary-recommend">' +
+      '<h2 class="diary-recommend__title">Что съесть?</h2>' +
+      '<p class="diary-recommend__sub">Подбираем блюда под остаток дневной нормы.</p>' +
+      '<div id="diary-recommend-body" class="diary-recommend__body">' +
+      // Скелетон на время запроса.
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      "</div>" +
+      "</section>";
+
+    requestRecommendations();
+  }
+
+  /**
+   * Считает остатки КБЖУ и вызывает App.api.recommendFood.
+   */
+  function requestRecommendations() {
+    var day = state.day || {};
+    var profile = (App.state && App.state.profile) || {};
+
+    var goalKcal = Number(day.daily_goal_kcal) || 0;
+    var eaten = Number(day.total_calories) || 0;
+
+    var remainingCalories = Math.max(0, goalKcal - eaten);
+    var remainingProteins = Math.max(0, (Number(profile.target_proteins) || 0) - (Number(day.total_proteins) || 0));
+    var remainingFats = Math.max(0, (Number(profile.target_fats) || 0) - (Number(day.total_fats) || 0));
+    var remainingCarbs = Math.max(0, (Number(profile.target_carbs) || 0) - (Number(day.total_carbs) || 0));
+
+    var payload = {
+      remaining_calories: Math.round(remainingCalories),
+      remaining_proteins: Math.round(remainingProteins),
+      remaining_fats: Math.round(remainingFats),
+      remaining_carbs: Math.round(remainingCarbs),
+      time_of_day: timeOfDay()
+    };
+    if (profile.diet_goal) {
+      payload.diet_goal = profile.diet_goal;
+    }
+
+    App.api
+      .recommendFood(payload)
+      .then(function (res) {
+        var suggestions = (res && res.suggestions) || [];
+        renderRecommendations(suggestions, remainingCalories);
+      })
+      .catch(function (err) {
+        renderRecommendError((err && err.message) || "Не удалось получить рекомендации.");
+      });
+  }
+
+  /**
+   * Грубая оценка времени суток для подсказки серверу.
+   * @returns {string} "morning" | "afternoon" | "evening" | "night"
+   */
+  function timeOfDay() {
+    var h = new Date().getHours();
+    if (h >= 5 && h < 11) return "morning";
+    if (h >= 11 && h < 16) return "afternoon";
+    if (h >= 16 && h < 22) return "evening";
+    return "night";
+  }
+
+  /**
+   * Рисует карточки-рекомендации. Каждую можно добавить в рацион в один тап.
+   * @param {Array} suggestions [{dish_name,calories,proteins,fats,carbs,reason}]
+   * @param {number} remainingCalories остаток калорий (для подсказки)
+   */
+  function renderRecommendations(suggestions, remainingCalories) {
+    var body = document.getElementById("diary-recommend-body");
+    if (!body) return;
+
+    if (!suggestions.length) {
+      body.innerHTML =
+        '<p class="diary-recommend__empty">' +
+        (remainingCalories <= 0
+          ? "На сегодня дневная норма уже выбрана — подсказывать нечего."
+          : "Сейчас нет подходящих вариантов. Попробуйте позже.") +
+        "</p>";
+      return;
+    }
+
+    // Селектор приёма пищи для добавления рекомендации.
+    var recMeal = "breakfast";
+
+    var cards = "";
+    for (var i = 0; i < suggestions.length; i++) {
+      var s = suggestions[i] || {};
+      var reason = s.reason
+        ? '<p class="diary-recommend-item__reason">' + App.escapeHtml(s.reason) + "</p>"
+        : "";
+      cards +=
+        '<div class="diary-recommend-item" data-idx="' + i + '">' +
+        '<div class="diary-recommend-item__head">' +
+        '<span class="diary-recommend-item__name">' +
+        App.escapeHtml(s.dish_name || "Блюдо") + "</span>" +
+        '<span class="diary-recommend-item__kcal">' +
+        App.fmt(s.calories || 0) + " ккал</span>" +
+        "</div>" +
+        '<p class="diary-recommend-item__macros">Б ' + App.fmt(s.proteins || 0) +
+        " · Ж " + App.fmt(s.fats || 0) +
+        " · У " + App.fmt(s.carbs || 0) + "</p>" +
+        reason +
+        '<button type="button" class="btn btn--cta diary-recommend-item__add" ' +
+        'data-idx="' + i + '">Добавить в рацион</button>' +
+        "</div>";
+    }
+
+    body.innerHTML =
+      '<div class="diary-recommend__meal">' +
+      '<span class="field__label">Добавить как</span>' +
+      mealChipsHtml("breakfast", "rec-meal") +
+      "</div>" +
+      '<div class="diary-recommend__list">' + cards + "</div>";
+
+    // Переключение приёма пищи для рекомендаций.
+    var mealsWrap = body.querySelector(".diary-recommend__meal .meal-chips");
+    if (mealsWrap) {
+      mealsWrap.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".meal-chip");
+        if (!btn) return;
+        var t = btn.getAttribute("data-rec-meal");
+        if (!t) return;
+        recMeal = t;
+        App.haptic && App.haptic("light");
+        var all = mealsWrap.querySelectorAll(".meal-chip");
+        for (var i = 0; i < all.length; i++) {
+          all[i].classList.toggle(
+            "is-active",
+            all[i].getAttribute("data-rec-meal") === t
+          );
+        }
+      });
+    }
+
+    // Добавление рекомендации по кнопке.
+    var list = body.querySelector(".diary-recommend__list");
+    if (list) {
+      list.addEventListener("click", function (ev) {
+        var addBtn = ev.target.closest(".diary-recommend-item__add");
+        if (!addBtn) return;
+        var idx = parseInt(addBtn.getAttribute("data-idx"), 10);
+        if (isNaN(idx) || !suggestions[idx]) return;
+        quickAdd(suggestions[idx], recMeal, addBtn);
+      });
+    }
+  }
+
+  /**
+   * Состояние ошибки внутри панели рекомендаций с кнопкой «Повторить».
+   * @param {string} message
+   */
+  function renderRecommendError(message) {
+    var body = document.getElementById("diary-recommend-body");
+    if (!body) return;
+    body.innerHTML =
+      '<div class="diary-recommend__error">' +
+      '<p class="diary-recommend__error-text">' + App.escapeHtml(message) + "</p>" +
+      '<button type="button" class="btn btn--ghost diary-recommend__retry">Повторить</button>' +
+      "</div>";
+
+    var retry = body.querySelector(".diary-recommend__retry");
+    if (retry) {
+      retry.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        body.innerHTML =
+          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>';
+        requestRecommendations();
+      });
+    }
+  }
+
   /**
    * Обновляет подпись даты в шапке без полной перерисовки страницы.
    */
@@ -420,6 +1058,8 @@
    */
   function changeDate(delta) {
     state.date = shiftDate(state.date, delta);
+    // При смене даты закрываем открытую панель действий.
+    state.panel = null;
     App.haptic && App.haptic("selection");
     updateDateLabel();
     loadAndRender();
@@ -438,6 +1078,9 @@
 
       // При каждом показе по умолчанию открываем сегодняшний день.
       state.date = App.todayStr();
+      // Панель действий при входе на страницу закрыта.
+      state.panel = null;
+      state.day = null;
 
       // Базовая разметка: переключатель даты + контейнер для контента.
       viewEl.innerHTML =
@@ -466,6 +1109,8 @@
     onHide: function () {
       state.viewEl = null;
       state.loading = false;
+      state.panel = null;
+      state.day = null;
     }
   };
 

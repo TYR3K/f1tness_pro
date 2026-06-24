@@ -1268,3 +1268,1350 @@ select.field__input {
 
   .result-card__kcal-val { font-size: 34px; }
 }
+
+/* ============================================================
+   ============================================================
+   РАСШИРЕНИЕ: НОВЫЙ ФУНКЦИОНАЛ (тренировки, спортпит, ручное
+   добавление, рекомендации, цель/БЖУ, уведомления, редактор скана).
+
+   Всё ниже — ДОПОЛНЕНИЕ к стилям выше. Существующие правила НЕ менялись.
+   Та же пастельная палитра: --bg / --card / --accent / --cta / --text /
+   --muted / --danger; радиусы --radius / --radius-sm; тень --shadow;
+   кнопки наследуют .btn (min-height 52px). Все комментарии — на русском.
+   ============================================================
+   ============================================================ */
+
+/* ============================================================
+   ОБЩЕЕ: четыре вкладки в #tabbar
+   ------------------------------------------------------------
+   Вкладок стало четыре (📷 Определение / 🥗 Рацион /
+   🏋️ Тренировки / 👤 Аккаунт). .tab уже растягивается через flex:1,
+   поэтому ширина делится поровну автоматически. Подстраховываемся,
+   чтобы подписи помещались и эмодзи стояло НАД подписью.
+   ============================================================ */
+.tab {
+  /* Равная ширина и защита от «распирания» длинными подписями. */
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 2px;
+}
+
+.tab-label {
+  /* Подпись в одну строку, аккуратно усечённую при нехватке места. */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* На совсем узких экранах слегка ужимаем подпись вкладок,
+   чтобы четыре пункта не наезжали друг на друга. */
+@media (max-width: 360px) {
+  .tab-label { font-size: 10px; }
+  .tab-emoji { font-size: 20px; }
+}
+
+/* ============================================================
+   СТРАНИЦА «ТРЕНИРОВКИ» (page-workouts)
+   ============================================================ */
+.page-workouts {
+  display: block;
+}
+
+/* --- Переключатель даты (◀ дата ▶) — как на странице рациона --- */
+.wk-datebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.wk-datebar__nav {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.wk-datebar__nav:active {
+  transform: scale(.94);
+  background: var(--accent);
+}
+
+.wk-datebar__label {
+  flex: 1;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.wk-datebar__date {
+  display: block;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.wk-datebar__iso {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* --- Итог «Сожжено за день» --- */
+.wk-summary {
+  display: block;
+}
+
+/* Карточка-итог: подпись слева, крупное число справа. */
+.wk-summary__card {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--white);
+  padding: 16px 18px;
+}
+
+.wk-summary__caption {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.wk-summary__value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--cta);
+  white-space: nowrap;
+}
+
+/* --- Форма добавления тренировки --- */
+.wk-form {
+  display: block;
+}
+
+.wk-form__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+/* Длительность и калории — в две колонки. */
+.wk-form__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Подсказка под формой тренировки. */
+.wk-form__hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Оценить калории» (вторичная) — отступ сверху. */
+.wk-estimate {
+  margin-top: 4px;
+}
+
+/* Кнопка «Добавить тренировку» (CTA) — отступ от «Оценить». */
+.wk-add {
+  margin-top: 10px;
+}
+
+/* --- Список тренировок и его скелетон --- */
+.wk-list {
+  display: block;
+}
+
+.wk-skeleton {
+  display: block;
+}
+
+/* Список строк тренировок (ul без маркеров). */
+.wk-item-list {
+  list-style: none;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px 14px;
+  margin-bottom: 16px;
+  animation: fadeIn .28s ease;
+}
+
+/* Одна строка тренировки. */
+.wk-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.wk-item:first-child {
+  border-top: none;
+}
+
+/* Скелетон-строка тренировки (отдельная плашка). */
+.wk-item.skeleton-block {
+  display: block;
+  height: auto;
+  padding: 16px;
+  border-top: none;
+}
+
+.wk-item__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.wk-item__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wk-item__icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.wk-item__meta {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Кнопка удаления тренировки ✕ (иконочная). */
+.wk-item__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.wk-item__del:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+.wk-item__del:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* Пустое состояние списка тренировок. */
+.wk-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 28px 16px;
+}
+
+.wk-empty__icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.wk-empty__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.wk-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Ошибка загрузки тренировок. */
+.wk-error {
+  background: var(--white);
+  text-align: center;
+  padding: 24px 18px;
+}
+
+.wk-error__icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.wk-error__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.wk-error__text {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Повторить» — компактная, по центру. */
+.wk-error__retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   РАЗДЕЛ «СПОРТПИТ» (sup-*) — карточкой на странице тренировок
+   ============================================================ */
+.sup-card {
+  display: block;
+}
+
+.sup-card__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.sup-card__subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* --- Список добавок и его скелетон --- */
+.sup-list {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.sup-skeleton {
+  display: block;
+}
+
+/* Список строк добавок (на фоне страницы, без своей карточки —
+   находится уже внутри карточки .sup-card). */
+.sup-item-list {
+  list-style: none;
+}
+
+/* Одна строка добавки. */
+.sup-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.sup-item:first-child {
+  border-top: none;
+}
+
+/* Скелетон-строка добавки (отдельная плашка). */
+.sup-item.skeleton-block {
+  display: block;
+  height: auto;
+  padding: 16px;
+  border-top: none;
+  background: var(--bg);
+}
+
+.sup-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.sup-item__name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.sup-item__meta {
+  font-size: 12px;
+  color: var(--muted);
+  flex-basis: 100%;
+}
+
+/* Бейдж «🔔 напоминание». */
+.sup-item__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cta);
+  background: rgba(125, 155, 118, .14);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* Кнопка удаления добавки ✕. */
+.sup-item__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.sup-item__del:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+.sup-item__del:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* Пустое состояние добавок. */
+.sup-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 22px 12px;
+}
+
+.sup-empty__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.sup-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Ошибка загрузки добавок. */
+.sup-error {
+  text-align: center;
+  color: var(--text);
+  padding: 18px 8px;
+}
+
+.sup-error__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.sup-error__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.sup-error__text {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.sup-error__retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* --- Форма добавления добавки --- */
+.sup-form {
+  display: block;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.sup-form__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+/* Тип и дозировка — в две колонки. */
+.sup-form__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Строка-чекбокс «Напоминать о приёме». */
+.sup-form__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Сам чекбокс — увеличенный, в акцентном цвете. */
+.sup-form__checkbox {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.sup-form__check-label {
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Кнопка «Добавить добавку» (CTA) — отступ сверху. */
+.sup-add {
+  margin-top: 4px;
+}
+
+/* --- ИИ-подсказка добавок --- */
+.sup-suggest {
+  margin: 6px 0 4px;
+}
+
+/* Контейнер результата подсказки (наполняется JS-ом). */
+.sup-suggest-box {
+  display: block;
+}
+
+/* Внутренняя обёртка с рекомендациями. */
+.sup-suggest-box__inner {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin-bottom: 12px;
+  animation: fadeIn .28s ease;
+}
+
+.sup-suggest-box__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+/* Состояние загрузки подсказки (скелетоны внутри). */
+.sup-suggest-box__loading {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+
+/* Пустой результат подсказки. */
+.sup-suggest-box__empty {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+/* Ошибка подсказки. */
+.sup-suggest-box__error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+  margin-bottom: 12px;
+}
+
+.sup-suggest-box__error-text {
+  font-size: 13px;
+  color: var(--danger);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.sup-suggest-box__retry {
+  width: auto;
+  min-width: 150px;
+  margin: 0 auto;
+}
+
+/* Список карточек-рекомендаций. */
+.sup-suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Одна карточка-рекомендация. */
+.sup-suggest-card {
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(122, 107, 90, .08);
+}
+
+.sup-suggest-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.sup-suggest-card__name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.sup-suggest-card__dosage {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cta);
+  white-space: nowrap;
+}
+
+.sup-suggest-card__note {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+/* Кнопка «Заполнить форму» — компактная вторичная. */
+.sup-suggest-card__use {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+/* Дисклеймер по спортпиту: заметный, но мягкий (тёплый персиковый фон). */
+.sup-disclaimer {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--danger);
+  background: rgba(194, 102, 77, .1);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   СТРАНИЦА «МОЙ РАЦИОН» — ДОПОЛНЕНИЯ
+   ============================================================ */
+
+/* --- Баланс «Съедено − Сожжено = Итого» (когда есть тренировки) --- */
+.diary-balance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+/* Общая «таблетка» для каждой части баланса. */
+.diary-balance__part {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Съедено — нейтральный текст. */
+.diary-balance__eaten {
+  color: var(--text);
+}
+
+/* Сожжено — акцент тренировок (тёплый персиковый). */
+.diary-balance__burned {
+  color: var(--danger);
+}
+
+/* Итог (нетто) — зелёный акцент. */
+.diary-balance__net {
+  color: var(--cta);
+  font-weight: 700;
+}
+
+/* Знаки операций (− и =) — приглушённые. */
+.diary-balance__op {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* --- Кнопки действий рациона: «➕ Добавить вручную» / «🤖 Что съесть?» --- */
+.diary-actions {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Каждая кнопка занимает половину ширины. */
+.diary-actions__btn {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 48px;
+  font-size: 14px;
+  padding: 0 10px;
+}
+
+/* Активная (нажатая) кнопка действия — подсвечена как выбранный режим. */
+.diary-actions__btn.is-active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* Контейнер разворачиваемой панели (ручной ввод / рекомендации). */
+.diary-panel {
+  display: block;
+}
+
+/* --- Панель ручного добавления --- */
+.diary-manual {
+  display: block;
+  background: var(--white);
+}
+
+.diary-manual__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.diary-manual__form {
+  display: block;
+}
+
+/* Б / Ж / У в одну строку (три колонки). */
+.diary-manual__macros {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+/* В компактной сетке макросов сбрасываем нижний отступ полей. */
+.diary-manual__macro {
+  margin-bottom: 14px;
+}
+
+/* Блок селектора приёма пищи в форме. */
+.diary-manual__meal {
+  margin-bottom: 16px;
+}
+
+.diary-manual__meal .field__label {
+  margin-bottom: 10px;
+}
+
+/* Кнопка «Добавить в рацион». */
+.diary-manual__submit {
+  margin-top: 4px;
+}
+
+/* Уточнение «(необязательно)» рядом с подписью поля. */
+.field__hint {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* --- Блок «Недавние» --- */
+.recent {
+  display: block;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.recent__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+/* Селектор «Добавить как» над списком недавних. */
+.recent__meal {
+  margin-bottom: 12px;
+}
+
+.recent__meal .field__label {
+  margin-bottom: 10px;
+}
+
+/* Список карточек недавних блюд. */
+.recent__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Скелетон недавних — невысокие плашки. */
+.recent__skeleton {
+  height: 56px;
+  margin-bottom: 0;
+}
+
+/* Пустое состояние недавних. */
+.recent__empty {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  padding: 4px 0;
+}
+
+/* Карточка недавнего блюда — кликабельная (добавить в один тап). */
+.recent__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .08s ease;
+}
+
+.recent__item:active {
+  transform: scale(.99);
+  background: rgba(201, 184, 168, .25);
+}
+
+.recent__item:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.recent__name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent__macros {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* Иконка «＋» — кружок-акцент справа. */
+.recent__add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--cta);
+  color: var(--white);
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* В карточке недавнего блюда название и макросы кладём в колонку,
+   а имя+макросы занимают центральную часть. */
+.recent__item .recent__name,
+.recent__item .recent__macros {
+  flex-basis: auto;
+}
+
+.recent__item {
+  flex-wrap: wrap;
+}
+
+.recent__item .recent__name {
+  flex: 1 1 calc(100% - 40px);
+}
+
+.recent__item .recent__macros {
+  flex-basis: 100%;
+  order: 3;
+}
+
+.recent__item .recent__add {
+  order: 2;
+}
+
+/* --- Панель рекомендаций «Что съесть?» --- */
+.diary-recommend {
+  display: block;
+  background: var(--white);
+}
+
+.diary-recommend__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.diary-recommend__sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.diary-recommend__body {
+  display: block;
+}
+
+/* Скелетон карточки рекомендации. */
+.diary-recommend__skeleton {
+  height: 96px;
+  margin-bottom: 10px;
+}
+
+/* Селектор «Добавить как» над рекомендациями. */
+.diary-recommend__meal {
+  margin-bottom: 12px;
+}
+
+.diary-recommend__meal .field__label {
+  margin-bottom: 10px;
+}
+
+/* Список карточек-рекомендаций. */
+.diary-recommend__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Пустое состояние рекомендаций. */
+.diary-recommend__empty {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+  line-height: 1.5;
+}
+
+/* Ошибка получения рекомендаций. */
+.diary-recommend__error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
+
+.diary-recommend__error-text {
+  font-size: 13px;
+  color: var(--danger);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.diary-recommend__retry {
+  width: auto;
+  min-width: 150px;
+  margin: 0 auto;
+}
+
+/* Одна карточка-рекомендация. */
+.diary-recommend-item {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  animation: fadeIn .28s ease;
+}
+
+.diary-recommend-item__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.diary-recommend-item__name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.diary-recommend-item__kcal {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--cta);
+  white-space: nowrap;
+}
+
+.diary-recommend-item__macros {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.diary-recommend-item__reason {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+/* Кнопка «Добавить в рацион» (CTA) в карточке рекомендации. */
+.diary-recommend-item__add {
+  min-height: 46px;
+  font-size: 15px;
+}
+
+/* ============================================================
+   СТРАНИЦА «МОЙ АККАУНТ» — ДОПОЛНЕНИЯ
+   ============================================================ */
+
+/* Поле цели питания — без особого оформления, выравниваем как обычное .field. */
+.goal-field {
+  display: block;
+}
+
+/* --- Блок целевых БЖУ --- */
+.goal-macros {
+  margin: 4px 0 14px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  animation: fadeIn .28s ease;
+}
+
+/* Скрытие через атрибут hidden (JS снимает/ставит его). */
+.goal-macros[hidden] {
+  display: none;
+}
+
+.goal-macros__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+/* Три плитки БЖУ в ряд. */
+.goal-macros__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+/* Одна плитка цели по макросу. */
+.goal-macro {
+  text-align: center;
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 12px 6px;
+  border-top: 3px solid var(--accent);
+}
+
+/* Цветовые акценты по типу макроса (мягкие пастельные оттенки). */
+.goal-macro--prot {
+  border-top-color: var(--cta);
+}
+
+.goal-macro--fat {
+  border-top-color: var(--danger);
+}
+
+.goal-macro--carb {
+  border-top-color: var(--accent);
+}
+
+.goal-macro__value {
+  display: block;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.goal-macro__label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* --- Раздел «Уведомления» --- */
+.notif-card {
+  display: block;
+}
+
+.notif-body {
+  display: block;
+}
+
+/* Список строк настроек. */
+.notif-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Одна строка: тумблер + (опционально) поля времени. */
+.notif-row {
+  padding: 12px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.notif-row:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+
+/* Строка-тумблер (чекбокс + подпись). */
+.notif-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+/* Сам чекбокс-тумблер — крупный, акцентный. */
+.notif-toggle__input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.notif-toggle__label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Группа полей времени под тумблером. */
+.notif-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+  padding-left: 34px; /* выравниваем под подпись тумблера */
+}
+
+.notif-times[hidden] {
+  display: none;
+}
+
+/* Одно поле времени (подпись + input[type=time]). */
+.notif-time {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 calc(50% - 5px);
+  min-width: 120px;
+}
+
+.notif-time__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Поле времени наследует .field__input; чуть компактнее по высоте. */
+.notif-time__input {
+  min-height: 46px;
+}
+
+/* Кнопка «Сохранить уведомления». */
+.notif-save {
+  margin-top: 16px;
+}
+
+/* Ошибка загрузки настроек уведомлений. */
+.notif-error {
+  text-align: center;
+  color: var(--text);
+  padding: 12px 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.notif-error__msg {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+.notif-error .btn {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   СТРАНИЦА «ОПРЕДЕЛЕНИЕ» — РЕДАКТИРУЕМЫЙ РЕЗУЛЬТАТ
+   ============================================================ */
+
+/* Карточка результата в режиме редактирования (расширяет .result-card).
+   Текст полей выравниваем по левому краю (форма), а не по центру. */
+.scan-edit-card {
+  text-align: left;
+}
+
+/* --- Бейдж уверенности ИИ --- */
+.scan-edit-confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  /* База — нейтральная; модификаторами задаём цвет по уровню. */
+  background: rgba(138, 129, 120, .15);
+  color: var(--muted);
+}
+
+.scan-edit-confidence__label {
+  color: inherit;
+  font-weight: 500;
+}
+
+.scan-edit-confidence__value {
+  font-weight: 700;
+}
+
+/* Низкая уверенность — тёплый персиковый (тревожный, но мягкий). */
+.scan-edit-confidence--low {
+  background: rgba(194, 102, 77, .15);
+  color: var(--danger);
+}
+
+/* Средняя уверенность — нейтральный бежевый акцент. */
+.scan-edit-confidence--medium {
+  background: rgba(201, 184, 168, .35);
+  color: var(--text);
+}
+
+/* Высокая уверенность — зелёный акцент. */
+.scan-edit-confidence--high {
+  background: rgba(125, 155, 118, .18);
+  color: var(--cta);
+}
+
+/* --- Форма редактирования результата --- */
+.scan-edit-form {
+  display: block;
+}
+
+/* Поле формы редактирования (наследует .field). */
+.scan-edit-field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+/* Семантические модификаторы полей (на будущее/для точечной правки).
+   Сейчас визуально совпадают с базовым полем — оставляем как «якоря». */
+.scan-edit-field--name,
+.scan-edit-field--weight,
+.scan-edit-field--calories {
+  display: block;
+}
+
+/* Поле макроса внутри сетки Б/Ж/У — без собственного нижнего отступа. */
+.scan-edit-field--macro {
+  margin-bottom: 0;
+}
+
+/* Поле ввода в форме редактирования (наследует .field__input). */
+.scan-edit-input {
+  width: 100%;
+}
+
+/* Числовые поля — те же стили; модификатор как «якорь» для правок. */
+.scan-edit-input--num {
+  text-align: left;
+}
+
+/* Сетка Б / Ж / У — три колонки. */
+.scan-edit-macros {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Подсказка под полем веса (о пересчёте / ручном вводе). */
+.scan-edit-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: -4px 0 14px;
+}
+
+/* ============================================================
+   АДАПТАЦИЯ НОВЫХ БЛОКОВ ПОД ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 360px) {
+  /* Кнопки действий рациона на узком экране — в столбик. */
+  .diary-actions {
+    flex-direction: column;
+  }
+
+  /* Сетка макросов ручного ввода/скана и БЖУ — ужимаем разрывы. */
+  .diary-manual__macros,
+  .scan-edit-macros,
+  .goal-macros__grid {
+    gap: 6px;
+  }
+
+  /* Поля времени уведомлений — на всю ширину строки. */
+  .notif-time {
+    flex-basis: 100%;
+  }
+}

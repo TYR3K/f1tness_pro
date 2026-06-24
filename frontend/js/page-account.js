@@ -5,10 +5,14 @@
  * Возможности:
  *   - Шапка с аватаром (App.user.photo_url) и именем пользователя.
  *   - Форма профиля: вес, рост, возраст, пол (Мужской/Женский -> male/female),
- *     уровень активности и цель по калориям (ккал/день).
- *   - Кнопка «Рассчитать автоматически» — считает норму по формуле
- *     Миффлина-Сан Жеора на клиенте и подставляет её в поле цели.
- *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile.
+ *     уровень активности, цель питания (diet_goal) и цель по калориям (ккал/день).
+ *   - Кнопка «Рассчитать автоматически» — вызывает App.api.calculateGoal на
+ *     сервере (сервер сам сохраняет результат в профиль), подставляет дневную
+ *     норму в поле цели и показывает блок целевых БЖУ.
+ *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile
+ *     (включая diet_goal).
+ *   - Раздел «Уведомления»: загрузка/сохранение настроек напоминаний
+ *     (App.api.getNotificationSettings / saveNotificationSettings).
  *   - Ниже — история за последние 30 дней (App.api.getHistory(30))
  *     в виде простого столбчатого графика (дата + ккал).
  *
@@ -26,6 +30,13 @@
     { value: 1.55, label: "Средняя (3-5 тренировок в неделю)" },
     { value: 1.725, label: "Высокая (6-7 тренировок в неделю)" },
     { value: 1.9, label: "Очень высокая (тяжёлый физический труд)" }
+  ];
+
+  // Варианты цели питания (diet_goal). value — то, что уходит на сервер.
+  var DIET_GOAL_OPTIONS = [
+    { value: "loss", label: "Похудение" },
+    { value: "maintain", label: "Поддержание" },
+    { value: "gain", label: "Набор массы" }
   ];
 
   // Ссылки на корневой элемент представления и элементы формы.
@@ -50,6 +61,17 @@
       return (
         '<option value="' +
         o.value +
+        '">' +
+        App.escapeHtml(o.label) +
+        "</option>"
+      );
+    }).join("");
+
+    // Опции цели питания.
+    var dietGoalOptionsHtml = DIET_GOAL_OPTIONS.map(function (o) {
+      return (
+        '<option value="' +
+        App.escapeHtml(o.value) +
         '">' +
         App.escapeHtml(o.label) +
         "</option>"
@@ -116,16 +138,51 @@
       "</select>" +
       "</label>" +
 
+      // ---- Цель питания (diet_goal) ----
+      '<label class="field goal-field">' +
+      '<span class="field__label">Цель питания</span>' +
+      '<select class="field__input" id="accDietGoal">' +
+      dietGoalOptionsHtml +
+      "</select>" +
+      "</label>" +
+
       '<label class="field">' +
       '<span class="field__label">Цель по калориям, ккал/день</span>' +
       '<input class="field__input" id="accGoal" type="number" inputmode="numeric" min="0" step="1" placeholder="2000">' +
       "</label>" +
 
+      // ---- Блок целевых БЖУ (скрыт, пока нет данных) ----
+      '<div class="goal-macros" id="accGoalMacros" hidden>' +
+      '<div class="goal-macros__title">Целевые БЖУ в день</div>' +
+      '<div class="goal-macros__grid">' +
+      '<div class="goal-macro goal-macro--prot">' +
+      '<span class="goal-macro__value" id="accTargetProt">—</span>' +
+      '<span class="goal-macro__label">Белки, г</span>' +
+      "</div>" +
+      '<div class="goal-macro goal-macro--fat">' +
+      '<span class="goal-macro__value" id="accTargetFat">—</span>' +
+      '<span class="goal-macro__label">Жиры, г</span>' +
+      "</div>" +
+      '<div class="goal-macro goal-macro--carb">' +
+      '<span class="goal-macro__value" id="accTargetCarb">—</span>' +
+      '<span class="goal-macro__label">Углеводы, г</span>' +
+      "</div>" +
+      "</div>" +
+      "</div>" +
+
       '<button type="button" class="btn btn--ghost" id="accCalcBtn">⚙️ Рассчитать автоматически</button>' +
       '<button type="submit" class="btn btn--cta" id="accSaveBtn">Сохранить</button>' +
 
-      '<p class="acc-hint">Расчёт выполняется по формуле Миффлина-Сан Жеора с учётом уровня активности.</p>' +
+      '<p class="acc-hint">Автоматический расчёт учитывает ваши параметры, уровень активности и цель питания.</p>' +
       "</form>" +
+
+      // ---- Раздел «Уведомления» ----
+      '<section class="notif-card card" id="accNotif">' +
+      '<h2 class="acc-title">Уведомления</h2>' +
+      '<div class="notif-body" id="accNotifBody">' +
+      '<div class="skeleton skeleton--block"></div>' +
+      "</div>" +
+      "</section>" +
 
       // ---- История за 30 дней ----
       '<section class="acc-history card">' +
@@ -164,7 +221,45 @@
       els.activity.value = String(best);
     }
 
+    // Цель питания (diet_goal). По умолчанию — «Поддержание».
+    if (p.diet_goal && isKnownDietGoal(p.diet_goal)) {
+      els.dietGoal.value = p.diet_goal;
+    }
+
     if (p.daily_goal_kcal != null) els.goal.value = p.daily_goal_kcal;
+
+    // Целевые БЖУ — показываем блок, если хотя бы одно значение задано.
+    showTargetMacros(p.target_proteins, p.target_fats, p.target_carbs);
+  }
+
+  /**
+   * Проверяет, что переданная цель питания есть в списке известных вариантов.
+   */
+  function isKnownDietGoal(v) {
+    for (var i = 0; i < DIET_GOAL_OPTIONS.length; i++) {
+      if (DIET_GOAL_OPTIONS[i].value === v) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Показывает или скрывает блок целевых БЖУ.
+   * Если все значения пусты — блок прячется.
+   */
+  function showTargetMacros(prot, fat, carb) {
+    if (!els || !els.goalMacros) return;
+    var has =
+      prot != null && prot !== "" ||
+      fat != null && fat !== "" ||
+      carb != null && carb !== "";
+    if (!has) {
+      els.goalMacros.hidden = true;
+      return;
+    }
+    els.targetProt.textContent = prot != null ? App.fmt(prot) : "—";
+    els.targetFat.textContent = fat != null ? App.fmt(fat) : "—";
+    els.targetCarb.textContent = carb != null ? App.fmt(carb) : "—";
+    els.goalMacros.hidden = false;
   }
 
   /**
@@ -179,40 +274,79 @@
   }
 
   /**
-   * Расчёт нормы калорий по формуле Миффлина-Сан Жеора на клиенте.
-   * BMR = 10*вес + 6.25*рост - 5*возраст + (5 для муж. / -161 для жен.)
-   * Цель = round(BMR * коэффициент активности).
-   * @returns {number|null} цель в ккал либо null, если данных не хватает.
+   * Обработчик кнопки «Рассчитать автоматически».
+   * Вызывает серверный расчёт App.api.calculateGoal — сервер сам сохраняет
+   * результат в профиль. В ответ приходит дневная норма и целевые БЖУ.
    */
-  function calcMifflin() {
+  function onCalc() {
     var weight = readNum(els.weight);
     var height = readNum(els.height);
     var age = readNum(els.age);
-    var gender = els.gender.value;
-    var activity = Number(els.activity.value) || 1.375;
 
     if (weight == null || height == null || age == null) {
-      return null;
-    }
-
-    var bmr =
-      10 * weight + 6.25 * height - 5 * age + (gender === "female" ? -161 : 5);
-    return Math.round(bmr * activity);
-  }
-
-  /**
-   * Обработчик кнопки «Рассчитать автоматически».
-   */
-  function onCalc() {
-    var goal = calcMifflin();
-    if (goal == null) {
       App.toast("Заполните вес, рост и возраст для расчёта");
       App.haptic("error");
       return;
     }
-    els.goal.value = goal;
-    App.haptic("success");
-    App.toast("Норма рассчитана: " + goal + " ккал");
+
+    var payload = {
+      weight: weight,
+      height: height,
+      age: Math.round(age),
+      gender: els.gender.value,
+      activity_level: Number(els.activity.value) || 1.375,
+      diet_goal: els.dietGoal.value
+    };
+
+    els.calcBtn.disabled = true;
+    App.showLoading();
+
+    App.api
+      .calculateGoal(payload)
+      .then(function (res) {
+        if (!res) {
+          throw new Error("Пустой ответ сервера");
+        }
+        // Подставляем дневную норму в поле цели.
+        if (res.daily_goal_kcal != null) {
+          els.goal.value = Math.round(res.daily_goal_kcal);
+        }
+        // Показываем целевые БЖУ.
+        showTargetMacros(
+          res.target_proteins,
+          res.target_fats,
+          res.target_carbs
+        );
+        // Если сервер вернул нормализованную цель питания — отражаем её.
+        if (res.diet_goal && isKnownDietGoal(res.diet_goal)) {
+          els.dietGoal.value = res.diet_goal;
+        }
+        // Сервер сохранил расчёт в профиль — синхронизируем кэш.
+        if (App.state.profile) {
+          App.state.profile.daily_goal_kcal = res.daily_goal_kcal;
+          App.state.profile.target_proteins = res.target_proteins;
+          App.state.profile.target_fats = res.target_fats;
+          App.state.profile.target_carbs = res.target_carbs;
+          App.state.profile.diet_goal = res.diet_goal || els.dietGoal.value;
+        }
+        App.haptic("success");
+        App.toast(
+          "Норма рассчитана: " +
+            App.fmt(res.daily_goal_kcal) +
+            " ккал"
+        );
+      })
+      .catch(function (err) {
+        App.haptic("error");
+        App.toast(
+          "Не удалось рассчитать: " +
+            (err && err.message ? err.message : "ошибка")
+        );
+      })
+      .finally(function () {
+        els.calcBtn.disabled = false;
+        App.hideLoading();
+      });
   }
 
   /**
@@ -233,6 +367,7 @@
     if (age != null) data.age = Math.round(age);
     data.gender = els.gender.value;
     data.activity_level = Number(els.activity.value) || 1.375;
+    data.diet_goal = els.dietGoal.value;
     if (goal != null) data.daily_goal_kcal = Math.round(goal);
 
     els.saveBtn.disabled = true;
@@ -256,6 +391,220 @@
         App.hideLoading();
       });
   }
+
+  /* =====================================================================
+   *  РАЗДЕЛ «УВЕДОМЛЕНИЯ»
+   * ===================================================================== */
+
+  // Описание полей-тумблеров (чекбоксов) и связанных с ними полей времени.
+  // Каждый тумблер может управлять группой полей времени (показ/скрытие).
+  var NOTIF_ROWS = [
+    {
+      key: "meal_reminder_enabled",
+      label: "Напоминания о приёмах пищи",
+      times: [
+        { key: "breakfast_time", label: "Завтрак" },
+        { key: "lunch_time", label: "Обед" },
+        { key: "dinner_time", label: "Ужин" }
+      ]
+    },
+    {
+      key: "training_reminder_enabled",
+      label: "Напоминание о тренировке",
+      times: [{ key: "training_time", label: "Время тренировки" }]
+    },
+    {
+      key: "supplement_reminder_enabled",
+      label: "Напоминание о спортпите",
+      times: []
+    },
+    {
+      key: "daily_summary_enabled",
+      label: "Ежедневная сводка",
+      times: [{ key: "summary_time", label: "Время сводки" }]
+    }
+  ];
+
+  /**
+   * Загружает настройки уведомлений и отрисовывает форму.
+   */
+  function loadNotifications() {
+    var box = els.notifBody;
+    if (!box) return;
+    box.innerHTML = '<div class="skeleton skeleton--block"></div>';
+
+    App.api
+      .getNotificationSettings()
+      .then(function (settings) {
+        renderNotifications(settings || {});
+      })
+      .catch(function (err) {
+        box.innerHTML =
+          '<div class="notif-error">' +
+          '<p>Не удалось загрузить настройки уведомлений.</p>' +
+          '<p class="notif-error__msg">' +
+          App.escapeHtml(err && err.message ? err.message : "Ошибка сети") +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accNotifRetry">Повторить</button>' +
+          "</div>";
+        var retry = box.querySelector("#accNotifRetry");
+        if (retry) retry.addEventListener("click", loadNotifications);
+      });
+  }
+
+  /**
+   * Безопасно приводит значение времени к строке "HH:MM" для поля ввода.
+   */
+  function timeValue(v) {
+    if (v == null) return "";
+    var s = String(v).trim();
+    // Сервер может вернуть "HH:MM:SS" — оставляем первые 5 символов.
+    if (s.length >= 5) return s.slice(0, 5);
+    return s;
+  }
+
+  /**
+   * Отрисовывает блок уведомлений по полученным настройкам.
+   * @param {Object} s — объект NotificationSettingsOut.
+   */
+  function renderNotifications(s) {
+    var box = els.notifBody;
+    if (!box) return;
+
+    var rowsHtml = NOTIF_ROWS.map(function (row) {
+      var checked = s[row.key] ? " checked" : "";
+      // Поля времени для этой группы.
+      var timesHtml = row.times
+        .map(function (t) {
+          return (
+            '<label class="notif-time">' +
+            '<span class="notif-time__label">' +
+            App.escapeHtml(t.label) +
+            "</span>" +
+            '<input class="field__input notif-time__input" type="time" ' +
+            'data-notif-time="' +
+            App.escapeHtml(t.key) +
+            '" value="' +
+            App.escapeHtml(timeValue(s[t.key])) +
+            '" placeholder="08:00">' +
+            "</label>"
+          );
+        })
+        .join("");
+
+      var timesBlock = row.times.length
+        ? '<div class="notif-times" data-notif-times-for="' +
+          App.escapeHtml(row.key) +
+          '"' +
+          (s[row.key] ? "" : " hidden") +
+          ">" +
+          timesHtml +
+          "</div>"
+        : "";
+
+      return (
+        '<div class="notif-row">' +
+        '<label class="notif-toggle">' +
+        '<input class="notif-toggle__input" type="checkbox" ' +
+        'data-notif-toggle="' +
+        App.escapeHtml(row.key) +
+        '"' +
+        checked +
+        ">" +
+        '<span class="notif-toggle__label">' +
+        App.escapeHtml(row.label) +
+        "</span>" +
+        "</label>" +
+        timesBlock +
+        "</div>"
+      );
+    }).join("");
+
+    box.innerHTML =
+      '<div class="notif-list">' +
+      rowsHtml +
+      "</div>" +
+      '<button type="button" class="btn btn--cta notif-save" id="accNotifSave">Сохранить уведомления</button>';
+
+    // Тумблеры показывают/скрывают связанные поля времени.
+    var toggles = box.querySelectorAll("[data-notif-toggle]");
+    for (var i = 0; i < toggles.length; i++) {
+      (function (toggle) {
+        toggle.addEventListener("change", function () {
+          var key = toggle.getAttribute("data-notif-toggle");
+          var group = box.querySelector(
+            '[data-notif-times-for="' + key + '"]'
+          );
+          if (group) {
+            group.hidden = !toggle.checked;
+          }
+          App.haptic("selection");
+        });
+      })(toggles[i]);
+    }
+
+    var saveBtn = box.querySelector("#accNotifSave");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", onSaveNotifications);
+    }
+  }
+
+  /**
+   * Собирает настройки уведомлений из формы и сохраняет на сервере.
+   */
+  function onSaveNotifications() {
+    var box = els.notifBody;
+    if (!box) return;
+
+    var payload = {};
+
+    // Тумблеры (boolean).
+    var toggles = box.querySelectorAll("[data-notif-toggle]");
+    for (var i = 0; i < toggles.length; i++) {
+      var key = toggles[i].getAttribute("data-notif-toggle");
+      if (key) {
+        payload[key] = !!toggles[i].checked;
+      }
+    }
+
+    // Поля времени (строки "HH:MM"). Пустые поля не отправляем.
+    var times = box.querySelectorAll("[data-notif-time]");
+    for (var j = 0; j < times.length; j++) {
+      var tKey = times[j].getAttribute("data-notif-time");
+      var tVal = (times[j].value || "").trim();
+      if (tKey && tVal) {
+        payload[tKey] = tVal;
+      }
+    }
+
+    var saveBtn = box.querySelector("#accNotifSave");
+    if (saveBtn) saveBtn.disabled = true;
+    App.showLoading();
+
+    App.api
+      .saveNotificationSettings(payload)
+      .then(function (settings) {
+        // Перерисовываем с актуальными данными от сервера.
+        renderNotifications(settings || payload);
+        App.haptic("success");
+        App.toast("Настройки уведомлений сохранены");
+      })
+      .catch(function (err) {
+        App.haptic("error");
+        App.toast(
+          "Не удалось сохранить: " +
+            (err && err.message ? err.message : "ошибка")
+        );
+        if (saveBtn) saveBtn.disabled = false;
+      })
+      .finally(function () {
+        App.hideLoading();
+      });
+  }
+
+  /* =====================================================================
+   *  ИСТОРИЯ ЗА 30 ДНЕЙ
+   * ===================================================================== */
 
   /**
    * Загружает и отрисовывает историю за 30 дней.
@@ -362,9 +711,15 @@
       age: viewEl.querySelector("#accAge"),
       gender: viewEl.querySelector("#accGender"),
       activity: viewEl.querySelector("#accActivity"),
+      dietGoal: viewEl.querySelector("#accDietGoal"),
       goal: viewEl.querySelector("#accGoal"),
+      goalMacros: viewEl.querySelector("#accGoalMacros"),
+      targetProt: viewEl.querySelector("#accTargetProt"),
+      targetFat: viewEl.querySelector("#accTargetFat"),
+      targetCarb: viewEl.querySelector("#accTargetCarb"),
       calcBtn: viewEl.querySelector("#accCalcBtn"),
       saveBtn: viewEl.querySelector("#accSaveBtn"),
+      notifBody: viewEl.querySelector("#accNotifBody"),
       history: viewEl.querySelector("#accHistory")
     };
   }
@@ -373,7 +728,7 @@
   var controller = {
     /**
      * Вызывается при показе страницы: строит разметку, вешает обработчики,
-     * подгружает профиль и историю.
+     * подгружает профиль, уведомления и историю.
      */
     onShow: function (viewEl) {
       viewEl.innerHTML = template();
@@ -401,6 +756,9 @@
               (err && err.message ? err.message : "ошибка")
           );
         });
+
+      // Загрузка настроек уведомлений.
+      loadNotifications();
 
       // Загрузка истории за 30 дней.
       loadHistory();

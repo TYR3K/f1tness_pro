@@ -26,11 +26,15 @@
     </button>
     <button class="tab" type="button" data-page="diary">
       <span class="tab-emoji" aria-hidden="true">🥗</span>
-      <span class="tab-label">Мой рацион</span>
+      <span class="tab-label">Рацион</span>
+    </button>
+    <button class="tab" type="button" data-page="workouts">
+      <span class="tab-emoji" aria-hidden="true">🏋️</span>
+      <span class="tab-label">Тренировки</span>
     </button>
     <button class="tab" type="button" data-page="account">
       <span class="tab-emoji" aria-hidden="true">👤</span>
-      <span class="tab-label">Мой аккаунт</span>
+      <span class="tab-label">Аккаунт</span>
     </button>
   </nav>
 
@@ -50,6 +54,7 @@
   <!-- 3-5) Контроллеры страниц (каждый вызывает App.registerPage при загрузке) -->
   <script src="js/page-scan.js"></script>
   <script src="js/page-diary.js"></script>
+  <script src="js/page-workouts.js"></script>
   <script src="js/page-account.js"></script>
   <!-- 6) Запуск приложения после регистрации всех страниц -->
   <script>App.init();</script>

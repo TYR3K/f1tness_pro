@@ -181,6 +181,120 @@
     getHistory: function (days) {
       var d = days || 30;
       return request("/history?days=" + encodeURIComponent(d));
+    },
+
+    /* -------------------------------------------------------------------
+     *  ТРЕНИРОВКИ
+     * ------------------------------------------------------------------- */
+
+    // Добавление тренировки. Тело: {date, type, duration_min, calories_burned}.
+    // Ответ: {id, date, type, duration_min, calories_burned}.
+    addWorkout: function (w) {
+      return request("/workout/add", { method: "POST", body: w });
+    },
+
+    // Тренировки за дату ("YYYY-MM-DD"). Ответ: {date, workouts:[...], total_burned}.
+    getWorkouts: function (dateStr) {
+      return request("/workout/" + encodeURIComponent(dateStr));
+    },
+
+    // Удаление тренировки по id. Ответ: {ok}.
+    deleteWorkout: function (id) {
+      return request("/workout/" + encodeURIComponent(id), { method: "DELETE" });
+    },
+
+    // Оценка сожжённых калорий. Тело: {type, duration_min}.
+    // Ответ: {calories_burned, met}.
+    estimateWorkout: function (payload) {
+      return request("/workout/estimate", { method: "POST", body: payload });
+    },
+
+    /* -------------------------------------------------------------------
+     *  ЕДА (ручной ввод, недавнее, рекомендации)
+     * ------------------------------------------------------------------- */
+
+    // Ручное добавление блюда в дневник.
+    // Тело: {date, meal_type, dish_name, calories, proteins, fats, carbs}.
+    // Ответ: DiaryEntryOut.
+    addManualFood: function (entry) {
+      return request("/food/manual", { method: "POST", body: entry });
+    },
+
+    // Недавно добавленные блюда.
+    // Ответ: {items:[{dish_name, calories, proteins, fats, carbs}]}.
+    getRecentFoods: function () {
+      return request("/food/recent");
+    },
+
+    // Рекомендации блюд по остатку нормы.
+    // Тело: {remaining_calories, remaining_proteins, remaining_fats,
+    //        remaining_carbs, diet_goal?, time_of_day?}.
+    // Ответ: {suggestions:[{dish_name, calories, proteins, fats, carbs, reason}]}.
+    recommendFood: function (payload) {
+      return request("/food/recommend", { method: "POST", body: payload });
+    },
+
+    /* -------------------------------------------------------------------
+     *  ДОБАВКИ (БАДы, витамины и т.п.)
+     * ------------------------------------------------------------------- */
+
+    // Добавление добавки.
+    // Тело: {name, type, dosage, intake_time?, reminder_enabled?}.
+    // Ответ: {id, name, type, dosage, intake_time, reminder_enabled}.
+    addSupplement: function (s) {
+      return request("/supplement/add", { method: "POST", body: s });
+    },
+
+    // Список добавок. Ответ: {items:[...]}.
+    getSupplements: function () {
+      return request("/supplement/list");
+    },
+
+    // Удаление добавки по id. Ответ: {ok}.
+    deleteSupplement: function (id) {
+      return request("/supplement/" + encodeURIComponent(id), {
+        method: "DELETE"
+      });
+    },
+
+    // Подсказки по добавкам.
+    // Ответ: {suggestions:[{name, dosage, note}], disclaimer}.
+    suggestSupplements: function () {
+      return request("/supplement/suggest");
+    },
+
+    /* -------------------------------------------------------------------
+     *  ЦЕЛЬ ПО КАЛОРИЯМ
+     * ------------------------------------------------------------------- */
+
+    // Расчёт дневной нормы. Тело: {weight?, height?, age?, gender?,
+    //   activity_level?, diet_goal?}.
+    // Ответ: {daily_goal_kcal, target_proteins, target_fats, target_carbs,
+    //   diet_goal, bmr, tdee}.
+    // ВНИМАНИЕ: сервер сам сохраняет результат в профиль.
+    calculateGoal: function (payload) {
+      return request("/goal/calculate", { method: "POST", body: payload });
+    },
+
+    /* -------------------------------------------------------------------
+     *  УВЕДОМЛЕНИЯ
+     * ------------------------------------------------------------------- */
+
+    // Текущие настройки уведомлений.
+    // Ответ: {telegram_id, meal_reminder_enabled, breakfast_time, lunch_time,
+    //   dinner_time, training_reminder_enabled, training_time,
+    //   supplement_reminder_enabled, daily_summary_enabled, summary_time}.
+    getNotificationSettings: function () {
+      return request("/notifications/settings");
+    },
+
+    // Сохранение настроек уведомлений (частичный объект тех же полей).
+    // Ответ: NotificationSettingsOut.
+    saveNotificationSettings: function (payload) {
+      return request("/notifications/settings", {
+        method: "POST",
+        body: payload
+      });
     }
   };
 
