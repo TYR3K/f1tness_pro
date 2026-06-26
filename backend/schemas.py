@@ -37,6 +37,9 @@ class ProfileOut(BaseModel):
     target_carbs: Optional[float] = None     # целевые углеводы, г
     supplement_goal: Optional[str] = None    # цель улучшения для AI-советов по спортпиту
     language: Optional[str] = None           # язык пользователя: "ru" | "en"
+    # Адаптивные калории (Этап 3).
+    adaptive_enabled: Optional[bool] = None       # включён ли адаптивный пересчёт цели
+    calculated_maintenance: Optional[int] = None  # фактическое поддержание, ккал/день
 
 
 class ProfileIn(BaseModel):
@@ -55,6 +58,8 @@ class ProfileIn(BaseModel):
     target_carbs: Optional[float] = None
     supplement_goal: Optional[str] = None
     language: Optional[str] = None           # язык пользователя: "ru" | "en"
+    # Адаптивные калории (Этап 3): включение адаптивного пересчёта цели.
+    adaptive_enabled: Optional[bool] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -523,3 +528,61 @@ class VoiceFoodOut(BaseModel):
     transcript: str                              # распознанный текст речи
     meal_type: Optional[str] = None              # breakfast|lunch|dinner|snack|None
     items: List[VoiceItemOut] = []               # разобранные блюда с КБЖУ
+
+
+# --------------------------------------------------------------------------- #
+#  Трекинг веса и адаптивные калории (Этап 3)
+# --------------------------------------------------------------------------- #
+class WeightAddIn(BaseModel):
+    """Добавление/обновление замера веса за конкретную дату."""
+
+    date: str               # ISO-дата "YYYY-MM-DD"
+    weight: float           # вес, кг
+
+
+class WeightLogOut(BaseModel):
+    """Замер веса, отдаваемый клиенту (с идентификатором)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    date: str               # ISO-дата "YYYY-MM-DD"
+    weight: float           # вес, кг
+
+
+class WeightPoint(BaseModel):
+    """Одна точка графика веса (дата + значение)."""
+
+    date: str               # ISO-дата "YYYY-MM-DD"
+    weight: float           # вес, кг
+
+
+class WeightHistoryOut(BaseModel):
+    """История веса за период: фактические замеры, линия тренда и сводка.
+
+    logs — фактические замеры по возрастанию даты;
+    trend — сглаженная линия тренда (линейная регрессия) для графика;
+    latest — последний известный вес; change_kg — изменение за период
+    (последний минус первый замер).
+    """
+
+    logs: List[WeightPoint] = []                 # фактические замеры
+    trend: List[WeightPoint] = []                # линия тренда
+    latest: Optional[float] = None               # последний вес, кг
+    change_kg: Optional[float] = None            # изменение за период, кг
+
+
+class AdaptiveResultOut(BaseModel):
+    """Результат адаптивного пересчёта дневной цели по динамике веса.
+
+    enough_data — хватило ли данных для расчёта; при False остальные числовые
+    поля обычно None, а explanation поясняет, чего не хватает.
+    """
+
+    enough_data: bool                            # достаточно ли данных для расчёта
+    maintenance: Optional[int] = None            # фактическое поддержание, ккал/день
+    new_goal: Optional[int] = None               # скорректированная дневная цель, ккал
+    weekly_change_kg: Optional[float] = None     # изменение веса, кг/неделю
+    avg_intake: Optional[int] = None             # средний дневной калораж, ккал
+    days_used: int = 0                           # охват данных в днях
+    explanation: str                             # пояснение результата (RU/EN)

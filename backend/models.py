@@ -19,6 +19,10 @@ ORM-модели приложения (SQLAlchemy).
 Таблицы подписки и доступа (Этап 1):
   - Payment   — журнал успешных платежей за подписку (Stars / Tribute и т.п.);
   - ProGrant  — журнал ручной выдачи/отзыва доступа владельцем (через бота).
+
+Трекинг веса и адаптивные калории (Этап 3):
+  - WeightLog — замер веса пользователя за конкретный день
+                (для построения тренда и расчёта фактического поддержания).
 """
 
 from datetime import datetime
@@ -102,6 +106,18 @@ class User(Base):
     # Дата (ISO "YYYY-MM-DD"), к которой относится счётчик daily_scans_used.
     # При наступлении новых суток счётчик обнуляется.
     daily_scans_date = Column(String, nullable=True)
+
+    # --- Поля адаптивных калорий (Этап 3, добавлены поверх таблицы) ---
+    # Включён ли адаптивный пересчёт дневной цели по реальной динамике веса.
+    adaptive_enabled = Column(Boolean, nullable=True, default=False)
+
+    # Вычисленное фактическое поддержание (ккал/день) по последнему пересчёту.
+    # None — пока не рассчитывалось (мало данных).
+    calculated_maintenance = Column(Integer, nullable=True)
+
+    # ISO-дата ("YYYY-MM-DD") последнего авто/ручного адаптивного пересчёта.
+    # Используется планировщиком для дедупликации (не чаще раза в 7 дней).
+    adaptive_last_calc = Column(String, nullable=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -434,6 +450,35 @@ class ProGrant(Base):
 
     # Действие: "give" (выдать) | "revoke" (отозвать).
     action = Column(String)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WeightLog(Base):
+    """
+    Замер веса пользователя за конкретный день (Этап 3).
+
+    На один день храним одну запись (логика upsert на уровне эндпоинта):
+    повторный ввод за ту же дату обновляет существующий вес. По набору
+    замеров строится линия тренда и вычисляется фактическое поддержание калорий.
+    """
+
+    __tablename__ = "weight_logs"
+
+    # Идентификатор записи (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Владелец записи — ссылка на пользователя по Telegram ID.
+    telegram_id = Column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+
+    # Вес, кг.
+    weight = Column(Float)
+
+    # Дата замера в формате ISO "YYYY-MM-DD" (с индексом для выборок по периоду).
+    date = Column(String, index=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)

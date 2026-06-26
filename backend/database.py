@@ -76,6 +76,10 @@ def run_migrations():
         ("daily_scans_date", "TEXT", None),        # дата счётчика сканов (ISO)
         # Язык интерфейса/сообщений пользователя ("ru" | "en"), nullable.
         ("language", "TEXT", None),
+        # --- Поля адаптивных калорий (Этап 3) ---
+        ("adaptive_enabled", "INTEGER", "0"),      # включён ли адаптивный пересчёт (0/1)
+        ("calculated_maintenance", "INTEGER", None),  # фактическое поддержание (ккал/день)
+        ("adaptive_last_calc", "TEXT", None),      # дата последнего пересчёта (ISO)
     ]
 
     try:

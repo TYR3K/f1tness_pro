@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from backend import (
+    adaptive,
     config,
     fitness,
     notifications,
@@ -65,9 +66,11 @@ from backend.models import (
     SupplementReminderItem,
     TrainingReminder,
     User,
+    WeightLog,
     Workout,
 )
 from backend.schemas import (
+    AdaptiveResultOut,
     AnalyzeOut,
     DiaryDayOut,
     DiaryEntryIn,
@@ -107,6 +110,10 @@ from backend.schemas import (
     TrainingRemindersOut,
     VoiceFoodOut,
     VoiceItemOut,
+    WeightAddIn,
+    WeightHistoryOut,
+    WeightLogOut,
+    WeightPoint,
     WorkoutDayOut,
     WorkoutEstimateIn,
     WorkoutEstimateOut,
@@ -283,6 +290,8 @@ def update_profile(
         "target_fats",
         "target_carbs",
         "language",
+        # Этап 3: флаг адаптивных калорий (вкл/выкл авто-пересчёт по динамике веса).
+        "adaptive_enabled",
     ):
         if field in payload:
             setattr(user, field, payload[field])
@@ -1473,6 +1482,132 @@ async def payment_tribute_webhook(
 
     # Всегда 200, чтобы провайдер не ретраил и мы не палили детали.
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  Трекинг веса и адаптивные калории (Этап 3) — ПРЕМИУМ
+#
+#  Пользователь вносит вес; по реальной динамике веса за ~2-3 недели против
+#  среднего потребления калорий вычисляем фактическое поддержание и
+#  корректируем дневную цель под цель диеты. Все три эндпоинта — премиум
+#  (require_premium -> 402 без подписки) и объявлены ВЫШЕ app.mount.
+# --------------------------------------------------------------------------- #
+@app.post("/weight/add", response_model=WeightLogOut)
+def weight_add(
+    data: WeightAddIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> WeightLog:
+    """Добавить замер веса (upsert по дате).
+
+    Если за указанную дату у пользователя уже есть запись — обновляем её вес,
+    иначе создаём новую. Так на одну дату приходится ровно один замер, что
+    важно для корректного построения тренда и адаптивного расчёта.
+    """
+    existing = (
+        db.query(WeightLog)
+        .filter(
+            WeightLog.telegram_id == user.telegram_id,
+            WeightLog.date == data.date,
+        )
+        .first()
+    )
+    if existing is not None:
+        # Запись за эту дату уже есть — просто обновляем вес.
+        existing.weight = data.weight
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    # Новой даты ещё не было — создаём замер.
+    log = WeightLog(
+        telegram_id=user.telegram_id,
+        date=data.date,
+        weight=data.weight,
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return log
+
+
+@app.get("/weight/history", response_model=WeightHistoryOut)
+def weight_history(
+    days: int = 90,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> WeightHistoryOut:
+    """Вернуть историю веса за период: точки замеров, линию тренда и сводку.
+
+    logs — фактические замеры за последние <days> дней по возрастанию даты;
+    trend — сглаженная линия тренда (линейная регрессия) через adaptive.build_trend;
+    latest — последний внесённый вес; change_kg — изменение веса за период
+    (последний минус первый, округлённо).
+    """
+    # Защита от некорректных значений параметра.
+    if days < 1:
+        days = 1
+
+    today = date_cls.today()
+    start = today - timedelta(days=days - 1)
+    start_str = start.isoformat()
+    end_str = today.isoformat()
+
+    rows = (
+        db.query(WeightLog)
+        .filter(
+            WeightLog.telegram_id == user.telegram_id,
+            WeightLog.date >= start_str,
+            WeightLog.date <= end_str,
+        )
+        .order_by(WeightLog.date.asc(), WeightLog.id.asc())
+        .all()
+    )
+
+    # Точки замеров для графика (по возрастанию даты).
+    logs = [WeightPoint(date=r.date, weight=r.weight) for r in rows]
+
+    # Линия тренда строится в adaptive.build_trend (чистая математика, без зависимостей).
+    # Передаём ему список dict с полями date/weight, который он ожидает.
+    trend_raw = adaptive.build_trend([{"date": r.date, "weight": r.weight} for r in rows])
+    trend = [WeightPoint(date=p["date"], weight=p["weight"]) for p in trend_raw]
+
+    # Последний вес и изменение за период (последний - первый).
+    latest = rows[-1].weight if rows else None
+    change_kg = round(rows[-1].weight - rows[0].weight, 1) if len(rows) >= 2 else None
+
+    return WeightHistoryOut(
+        logs=logs,
+        trend=trend,
+        latest=latest,
+        change_kg=change_kg,
+    )
+
+
+@app.post("/calories/recalculate-adaptive", response_model=AdaptiveResultOut)
+def calories_recalculate_adaptive(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> AdaptiveResultOut:
+    """Пересчитать дневную цель по фактической динамике веса (по кнопке).
+
+    Делегируем всю логику adaptive.run_adaptive_recalc: он собирает замеры веса
+    и средний калораж за окно, вычисляет фактическое поддержание и при достатке
+    данных сохраняет новую дневную цель в профиль. Возвращаем результат расчёта
+    (включая enough_data и пояснение) клиенту. Язык — из профиля пользователя.
+    """
+    result = adaptive.run_adaptive_recalc(db, user, lang=user.language)
+    # run_adaptive_recalc всегда возвращает dict с полем enough_data и понятным
+    # пояснением (даже при ошибке/нехватке данных), поэтому собираем ответ мягко.
+    return AdaptiveResultOut(
+        enough_data=bool(result.get("enough_data", False)),
+        maintenance=result.get("maintenance"),
+        new_goal=result.get("new_goal"),
+        weekly_change_kg=result.get("weekly_change_kg"),
+        avg_intake=result.get("avg_intake"),
+        days_used=result.get("days_used", 0),
+        explanation=result.get("explanation", ""),
+    )
 
 
 # --------------------------------------------------------------------------- #

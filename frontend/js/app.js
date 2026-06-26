@@ -522,6 +522,37 @@
         method: "POST",
         body: { tariff: tariff }
       });
+    },
+
+    /* -------------------------------------------------------------------
+     *  ТРЕКИНГ ВЕСА И АДАПТИВНЫЕ КАЛОРИИ (Этап 3, ПРЕМИУМ)
+     *  Все три роута платные: для free бэкенд отдаёт 402 (paywall).
+     * ------------------------------------------------------------------- */
+
+    // Добавление/обновление замера веса (upsert по дате).
+    // Тело: {date:"YYYY-MM-DD", weight:float}.
+    // Ответ: {id, date, weight}.
+    addWeight: function (payload) {
+      return request("/weight/add", { method: "POST", body: payload });
+    },
+
+    // История веса за N дней (по умолчанию 90).
+    // Ответ: {logs:[{date, weight}], trend:[{date, weight}],
+    //   latest:float|null, change_kg:float|null}.
+    getWeightHistory: function (days) {
+      var d = days || 90;
+      return request("/weight/history?days=" + encodeURIComponent(d));
+    },
+
+    // Пересчёт адаптивной цели по реальной динамике веса.
+    // Тело: {} (пустое). Ответ: {enough_data:bool, maintenance:int|null,
+    //   new_goal:int|null, weekly_change_kg:float|null, avg_intake:int|null,
+    //   days_used:int, explanation:str}.
+    recalcAdaptive: function () {
+      return request("/calories/recalculate-adaptive", {
+        method: "POST",
+        body: {}
+      });
     }
   };
 

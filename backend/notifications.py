@@ -69,6 +69,7 @@ try:
 except Exception:  # pragma: no cover - очень старый Python
     ZoneInfo = None
 
+from backend import adaptive
 from backend.database import SessionLocal
 from backend.models import (
     DiaryEntry,
@@ -221,6 +222,18 @@ _TEXTS = {
             "Eaten: <b>{eaten}</b> kcal\n"
             "Goal: <b>{goal}</b> kcal\n"
             "{tail}"
+        ),
+    },
+    # Авто-пересчёт адаптивных калорий (Этап 3). {explanation} — готовый
+    # локализованный текст пояснения из adaptive.run_adaptive_recalc.
+    "adaptive_recalc": {
+        "ru": (
+            "📊 <b>Адаптивные калории обновлены</b>\n"
+            "{explanation}"
+        ),
+        "en": (
+            "📊 <b>Adaptive calories updated</b>\n"
+            "{explanation}"
         ),
     },
     # Вечерняя сводка дня, когда цель НЕ задана. {eaten}.
@@ -591,6 +604,68 @@ def _process_supplement_reminder(db, reminder: "SupplementReminder",
 
 
 # --------------------------------------------------------------------------- #
+#  Авто-пересчёт адаптивных калорий раз в неделю (Этап 3)
+# --------------------------------------------------------------------------- #
+def _adaptive_due(user: "User", today: str) -> bool:
+    """Пора ли пересчитать адаптивные калории пользователю.
+
+    Пересчитываем, если расчёта ещё не было (adaptive_last_calc пусто) ИЛИ с
+    последнего прошло 7 дней и более. Сравниваем ISO-даты ("YYYY-MM-DD"):
+    лексикографическое сравнение строк дат корректно совпадает с хронологией.
+    Любой сбой парсинга трактуем как «пора» — лучше пересчитать, чем застрять.
+    """
+    last = getattr(user, "adaptive_last_calc", None)
+    if not last:
+        return True
+    try:
+        from datetime import date as _date
+
+        last_date = _date.fromisoformat(str(last)[:10])
+        today_date = _date.fromisoformat(today)
+        return (today_date - last_date).days >= 7
+    except Exception:
+        # Кривое значение в БД — считаем, что пора пересчитать.
+        return True
+
+
+def _process_adaptive_recalc(db, user: "User", today: str) -> None:
+    """Раз в неделю пересчитать адаптивные калории и уведомить пользователя.
+
+    Запускаем только для пользователей с adaptive_enabled и только если пора
+    (adaptive_last_calc пуст или старше 7 дней). Сам пересчёт делает
+    adaptive.run_adaptive_recalc: при достатке данных он сохраняет новую цель и
+    обновляет adaptive_last_calc (это же обеспечивает дедуп — раз в 7 дней).
+    Если данных хватило (enough_data) — шлём уведомление на языке пользователя.
+    """
+    tid = getattr(user, "telegram_id", None)
+    if tid is None:
+        return
+    if not getattr(user, "adaptive_enabled", False):
+        return
+    if not _adaptive_due(user, today):
+        return
+
+    # Пересчёт полностью изолирован внутри run_adaptive_recalc (свой try/except),
+    # но дополнительно страхуемся здесь, чтобы сбой не сорвал остальную рассылку.
+    try:
+        result = adaptive.run_adaptive_recalc(db, user, lang=getattr(user, "language", None))
+    except Exception as exc:
+        logger.warning("_process_adaptive_recalc: ошибка пересчёта tid=%s: %s", tid, exc)
+        return
+
+    if not isinstance(result, dict) or not result.get("enough_data"):
+        # Данных пока недостаточно — ничего не шлём (повторим на следующей проверке).
+        return
+
+    lang = _norm_lang(getattr(user, "language", None))
+    explanation = result.get("explanation") or ""
+    text = _msg("adaptive_recalc", lang, explanation=explanation)
+    # Уведомление не критично: если отправка не удалась — adaptive_last_calc уже
+    # обновлён внутри recalc, поэтому повторного спама не будет.
+    send_telegram(tid, text)
+
+
+# --------------------------------------------------------------------------- #
 #  Главная функция проверки (вызывается планировщиком каждую минуту)
 # --------------------------------------------------------------------------- #
 def check_notifications() -> None:
@@ -715,6 +790,37 @@ def check_notifications() -> None:
                 rid = getattr(reminder, "id", None)
                 logger.warning(
                     "check_notifications: сбой напоминания о спортпите id=%s: %s", rid, exc
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        # --- 4) Авто-пересчёт адаптивных калорий раз в неделю (Этап 3) -------- #
+        # Изолированно: для пользователей с adaptive_enabled, у кого пересчёт не
+        # делался или старше 7 дней. Дедуп обеспечивается обновлением
+        # adaptive_last_calc внутри run_adaptive_recalc. Весь блок в try/except,
+        # чтобы новая логика не сорвала существующую рассылку.
+        try:
+            adaptive_users = (
+                db.query(User)
+                .filter(User.adaptive_enabled == True)  # noqa: E712 — нужно для SQL
+                .all()
+            )
+        except Exception as exc:
+            logger.warning(
+                "check_notifications: не удалось прочитать adaptive-пользователей (%s)", exc
+            )
+            adaptive_users = []
+
+        for user in adaptive_users:
+            try:
+                _process_adaptive_recalc(db, user, today)
+            except Exception as exc:
+                # Сбой по одному пользователю не должен прерывать остальные.
+                tid = getattr(user, "telegram_id", None)
+                logger.warning(
+                    "check_notifications: сбой адаптивного пересчёта tid=%s: %s", tid, exc
                 )
                 try:
                     db.rollback()

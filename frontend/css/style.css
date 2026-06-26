@@ -4858,3 +4858,321 @@ select.field__input {
     font-size: 12px;
   }
 }
+
+/* =====================================================================
+ *  ПРЕМИУМ: ТРЕКИНГ ВЕСА (wt-*) и АДАПТИВНЫЕ КАЛОРИИ (adapt-*) — Этап 3
+ *  Пастельная палитра, аккуратный SVG-график, кнопки наследуют .btn (52px).
+ * ===================================================================== */
+
+/* ---- Карточка «Вес» ---- */
+.wt-card {
+  display: block;
+}
+
+/* Когда вместо содержимого карточки показан paywall — убираем фон/паддинг
+   карточки, чтобы блок paywall выглядел самостоятельно. */
+.wt-card.wt-gate {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.wt-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.wt-input-row {
+  display: block;
+}
+
+.wt-input-field {
+  margin-bottom: 4px;
+}
+
+/* Поле ввода веса. Базовый вид берёт из .field__input (52px, рамка, фокус);
+   здесь — лёгкий акцент именно для замера веса. */
+.wt-input {
+  font-weight: 600;
+  letter-spacing: .2px;
+}
+
+.wt-save-btn {
+  margin-top: 14px;
+}
+
+/* ---- Обёртка графика ---- */
+.wt-chart-wrap {
+  margin-top: 18px;
+}
+
+/* Сводка над графиком: текущий вес и изменение. */
+.wt-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.wt-stat {
+  flex: 1 1 auto;
+  min-width: 120px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  text-align: center;
+}
+
+.wt-stat__value {
+  display: block;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.wt-stat__value.wt-change--up {
+  color: var(--danger);
+}
+
+.wt-stat__value.wt-change--down {
+  color: var(--cta);
+}
+
+.wt-stat__label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+/* ---- SVG-график динамики веса ---- */
+.wt-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+}
+
+/* Сетка графика — тонкие приглушённые линии. */
+.wt-grid-line {
+  stroke: var(--accent);
+  stroke-width: 1;
+  opacity: .5;
+  stroke-dasharray: 3 4;
+}
+
+/* Подписи осей (вес/даты). */
+.wt-axis-label {
+  fill: var(--muted);
+  font-size: 9px;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+/* Линия замеров — приглушённая, тонкая. */
+.wt-line-logs {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: .85;
+}
+
+/* Точки замеров. */
+.wt-dot {
+  fill: var(--accent);
+  stroke: var(--white);
+  stroke-width: 1;
+}
+
+/* Линия тренда — выделенная, цвет CTA (зелёный). */
+.wt-line-trend {
+  fill: none;
+  stroke: var(--cta);
+  stroke-width: 2.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* Легенда под графиком. */
+.wt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.wt-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.wt-legend__swatch {
+  display: inline-block;
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+}
+
+.wt-legend__swatch--logs {
+  background: var(--accent);
+}
+
+.wt-legend__swatch--trend {
+  background: var(--cta);
+}
+
+/* Пустое состояние графика. */
+.wt-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 28px 16px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+
+.wt-empty__icon {
+  font-size: 38px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.wt-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---- Карточка «Адаптивные калории» ---- */
+.adapt-card {
+  display: block;
+}
+
+.adapt-card[hidden] {
+  display: none;
+}
+
+.adapt-row {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* Тумблер «Адаптивные калории» (одинаковый стиль с вечерней сводкой). */
+.adapt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.adapt-toggle__input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.adapt-toggle__label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.adapt-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 10px;
+}
+
+/* Строка «Фактическое поддержание ≈ N ккал». */
+.adapt-maint {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+
+.adapt-recalc-btn {
+  margin-top: 16px;
+}
+
+/* Блок результата пересчёта. */
+.adapt-result {
+  margin-top: 16px;
+}
+
+.adapt-result[hidden] {
+  display: none;
+}
+
+.adapt-expl {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.adapt-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.adapt-stat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+/* Выделенная строка «Новая цель». */
+.adapt-stat--accent {
+  background: rgba(125, 155, 118, .16);
+}
+
+.adapt-stat__label {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.adapt-stat__value {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.adapt-stat--accent .adapt-stat__value {
+  color: var(--cta);
+}
+
+/* Заметка (мало данных). */
+.adapt-note {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.adapt-note--warn {
+  color: var(--text);
+  background: rgba(194, 102, 77, .12);
+}

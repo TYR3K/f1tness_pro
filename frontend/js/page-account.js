@@ -12,6 +12,10 @@
  *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile
  *     (включая diet_goal).
  *   - Карточка «Язык / Language»: переключатель RU/EN -> App.setLang(...).
+ *   - ПРЕМИУМ: карточка «Вес / Weight» — ввод замера + SVG-график динамики
+ *     (замеры + линия тренда), текущий вес и изменение за период.
+ *   - ПРЕМИУМ: карточка «Адаптивные калории / Adaptive calories» — тумблер
+ *     adaptive_enabled + кнопка пересчёта дневной цели по реальной динамике веса.
  *   - Карточка «Вечерняя сводка»: ТОЛЬКО тумблер daily_summary_enabled и время
  *     summary_time (App.api.getNotificationSettings / saveNotificationSettings).
  *     Остальные напоминания вынесены в свои разделы (Тренировки, Добавки, Рацион).
@@ -25,6 +29,12 @@
 (function () {
   "use strict";
 
+  // Локальный хелпер локализации — короткий псевдоним App.pick(ru, en).
+  // Все видимые строки этой страницы проходят через L/App.pick на момент рендера.
+  function L(ru, en) {
+    return App.pick(ru, en);
+  }
+
   // Варианты уровня активности для выпадающего списка.
   // value — коэффициент TDEE, label() — локализованное описание (RU/EN),
   // вычисляется на момент рендера через App.pick.
@@ -32,7 +42,7 @@
     {
       value: 1.2,
       label: function () {
-        return App.pick(
+        return L(
           "Минимальная (сидячий образ жизни)",
           "Minimal (sedentary lifestyle)"
         );
@@ -41,7 +51,7 @@
     {
       value: 1.375,
       label: function () {
-        return App.pick(
+        return L(
           "Лёгкая (1-3 тренировки в неделю)",
           "Light (1-3 workouts per week)"
         );
@@ -50,7 +60,7 @@
     {
       value: 1.55,
       label: function () {
-        return App.pick(
+        return L(
           "Средняя (3-5 тренировок в неделю)",
           "Moderate (3-5 workouts per week)"
         );
@@ -59,7 +69,7 @@
     {
       value: 1.725,
       label: function () {
-        return App.pick(
+        return L(
           "Высокая (6-7 тренировок в неделю)",
           "High (6-7 workouts per week)"
         );
@@ -68,7 +78,7 @@
     {
       value: 1.9,
       label: function () {
-        return App.pick(
+        return L(
           "Очень высокая (тяжёлый физический труд)",
           "Very high (hard physical labor)"
         );
@@ -82,19 +92,19 @@
     {
       value: "loss",
       label: function () {
-        return App.pick("Похудение", "Weight loss");
+        return L("Похудение", "Weight loss");
       }
     },
     {
       value: "maintain",
       label: function () {
-        return App.pick("Поддержание", "Maintenance");
+        return L("Поддержание", "Maintenance");
       }
     },
     {
       value: "gain",
       label: function () {
-        return App.pick("Набор массы", "Muscle gain");
+        return L("Набор массы", "Muscle gain");
       }
     }
   ];
@@ -133,7 +143,7 @@
     // Владелец и вечная подписка — доступ навсегда.
     if (sub.is_owner || type === "lifetime") {
       return {
-        text: App.pick("Вечная подписка", "Lifetime subscription"),
+        text: L("Вечная подписка", "Lifetime subscription"),
         premium: true
       };
     }
@@ -142,7 +152,7 @@
       var until = formatSubDate(sub.subscription_until);
       if (until) {
         return {
-          text: App.pick(
+          text: L(
             "Премиум активен до " + until,
             "Premium active until " + until
           ),
@@ -150,13 +160,13 @@
         };
       }
       return {
-        text: App.pick("Премиум активен", "Premium active"),
+        text: L("Премиум активен", "Premium active"),
         premium: true
       };
     }
 
     return {
-      text: App.pick("Бесплатный доступ", "Free access"),
+      text: L("Бесплатный доступ", "Free access"),
       premium: false
     };
   }
@@ -178,7 +188,7 @@
     if (!displayName.trim()) {
       displayName = u.username
         ? "@" + u.username
-        : App.pick("Пользователь", "User");
+        : L("Пользователь", "User");
     }
 
     // Опции уровня активности (локализованные подписи).
@@ -206,7 +216,7 @@
     // Аватар: либо картинка из Telegram, либо заглушка с эмодзи.
     var avatarHtml = u.photo_url
       ? '<img class="acc-avatar" id="accAvatar" alt="' +
-        App.escapeHtml(App.pick("Аватар", "Avatar")) +
+        App.escapeHtml(L("Аватар", "Avatar")) +
         '" src="' +
         App.escapeHtml(u.photo_url) +
         '">'
@@ -243,7 +253,7 @@
       '<span class="acc-sub-card__icon">💎</span>' +
       '<span class="acc-sub-card__body">' +
       '<span class="acc-sub-card__title">' +
-      App.escapeHtml(App.pick("Подписка", "Subscription")) +
+      App.escapeHtml(L("Подписка", "Subscription")) +
       "</span>" +
       '<span class="acc-sub-card__status" id="accSubStatus">' +
       App.escapeHtml(sub.text) +
@@ -257,10 +267,10 @@
       // Активная кнопка соответствует текущему App.lang.
       '<section class="acc-lang card" id="accLang">' +
       '<h2 class="acc-title">' +
-      App.escapeHtml(App.pick("Язык", "Language")) +
+      App.escapeHtml(L("Язык", "Language")) +
       "</h2>" +
       '<div class="acc-lang__switch" role="group" aria-label="' +
-      App.escapeHtml(App.pick("Выбор языка", "Language selection")) +
+      App.escapeHtml(L("Выбор языка", "Language selection")) +
       '">' +
       '<button type="button" class="acc-lang__btn' +
       (curLang === "ru" ? " acc-lang__btn--active" : "") +
@@ -278,41 +288,41 @@
       // ---- Форма профиля ----
       '<form class="acc-form card" id="accForm" novalidate>' +
       '<h2 class="acc-title">' +
-      App.escapeHtml(App.pick("Мои параметры", "My parameters")) +
+      App.escapeHtml(L("Мои параметры", "My parameters")) +
       "</h2>" +
 
       '<div class="acc-grid">' +
       '<label class="field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Вес, кг", "Weight, kg")) +
+      App.escapeHtml(L("Вес, кг", "Weight, kg")) +
       "</span>" +
       '<input class="field__input" id="accWeight" type="number" inputmode="decimal" min="0" step="0.1" placeholder="70">' +
       "</label>" +
 
       '<label class="field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Рост, см", "Height, cm")) +
+      App.escapeHtml(L("Рост, см", "Height, cm")) +
       "</span>" +
       '<input class="field__input" id="accHeight" type="number" inputmode="decimal" min="0" step="0.1" placeholder="175">' +
       "</label>" +
 
       '<label class="field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Возраст, лет", "Age, years")) +
+      App.escapeHtml(L("Возраст, лет", "Age, years")) +
       "</span>" +
       '<input class="field__input" id="accAge" type="number" inputmode="numeric" min="0" step="1" placeholder="30">' +
       "</label>" +
 
       '<label class="field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Пол", "Gender")) +
+      App.escapeHtml(L("Пол", "Gender")) +
       "</span>" +
       '<select class="field__input" id="accGender">' +
       '<option value="male">' +
-      App.escapeHtml(App.pick("Мужской", "Male")) +
+      App.escapeHtml(L("Мужской", "Male")) +
       "</option>" +
       '<option value="female">' +
-      App.escapeHtml(App.pick("Женский", "Female")) +
+      App.escapeHtml(L("Женский", "Female")) +
       "</option>" +
       "</select>" +
       "</label>" +
@@ -320,7 +330,7 @@
 
       '<label class="field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Уровень активности", "Activity level")) +
+      App.escapeHtml(L("Уровень активности", "Activity level")) +
       "</span>" +
       '<select class="field__input" id="accActivity">' +
       activityOptionsHtml +
@@ -330,7 +340,7 @@
       // ---- Цель питания (diet_goal) ----
       '<label class="field goal-field">' +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Цель питания", "Nutrition goal")) +
+      App.escapeHtml(L("Цель питания", "Nutrition goal")) +
       "</span>" +
       '<select class="field__input" id="accDietGoal">' +
       dietGoalOptionsHtml +
@@ -340,7 +350,7 @@
       '<label class="field">' +
       '<span class="field__label">' +
       App.escapeHtml(
-        App.pick("Цель по калориям, ккал/день", "Calorie goal, kcal/day")
+        L("Цель по калориям, ккал/день", "Calorie goal, kcal/day")
       ) +
       "</span>" +
       '<input class="field__input" id="accGoal" type="number" inputmode="numeric" min="0" step="1" placeholder="2000">' +
@@ -349,25 +359,25 @@
       // ---- Блок целевых БЖУ (скрыт, пока нет данных) ----
       '<div class="goal-macros" id="accGoalMacros" hidden>' +
       '<div class="goal-macros__title">' +
-      App.escapeHtml(App.pick("Целевые БЖУ в день", "Daily target P/F/C")) +
+      App.escapeHtml(L("Целевые БЖУ в день", "Daily target P/F/C")) +
       "</div>" +
       '<div class="goal-macros__grid">' +
       '<div class="goal-macro goal-macro--prot">' +
       '<span class="goal-macro__value" id="accTargetProt">—</span>' +
       '<span class="goal-macro__label">' +
-      App.escapeHtml(App.pick("Белки, г", "Protein, g")) +
+      App.escapeHtml(L("Белки, г", "Protein, g")) +
       "</span>" +
       "</div>" +
       '<div class="goal-macro goal-macro--fat">' +
       '<span class="goal-macro__value" id="accTargetFat">—</span>' +
       '<span class="goal-macro__label">' +
-      App.escapeHtml(App.pick("Жиры, г", "Fat, g")) +
+      App.escapeHtml(L("Жиры, г", "Fat, g")) +
       "</span>" +
       "</div>" +
       '<div class="goal-macro goal-macro--carb">' +
       '<span class="goal-macro__value" id="accTargetCarb">—</span>' +
       '<span class="goal-macro__label">' +
-      App.escapeHtml(App.pick("Углеводы, г", "Carbs, g")) +
+      App.escapeHtml(L("Углеводы, г", "Carbs, g")) +
       "</span>" +
       "</div>" +
       "</div>" +
@@ -375,16 +385,16 @@
 
       '<button type="button" class="btn btn--ghost" id="accCalcBtn">⚙️ ' +
       App.escapeHtml(
-        App.pick("Рассчитать автоматически", "Calculate automatically")
+        L("Рассчитать автоматически", "Calculate automatically")
       ) +
       "</button>" +
       '<button type="submit" class="btn btn--cta" id="accSaveBtn">' +
-      App.escapeHtml(App.pick("Сохранить", "Save")) +
+      App.escapeHtml(L("Сохранить", "Save")) +
       "</button>" +
 
       '<p class="acc-hint">' +
       App.escapeHtml(
-        App.pick(
+        L(
           "Автоматический расчёт учитывает ваши параметры, уровень активности и цель питания.",
           "Automatic calculation takes into account your parameters, activity level and nutrition goal."
         )
@@ -392,16 +402,22 @@
       "</p>" +
       "</form>" +
 
+      // ---- ПРЕМИУМ: Вес / Weight (контейнер заполняется в renderWeight) ----
+      '<section class="wt-card card" id="accWeightCard"></section>' +
+
+      // ---- ПРЕМИУМ: Адаптивные калории (контейнер заполняется в renderAdaptive) ----
+      '<section class="adapt-card card" id="accAdaptCard"></section>' +
+
       // ---- Карточка «Вечерняя сводка» ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
       '<section class="acc-summary card" id="accSummary">' +
       '<h2 class="acc-title">' +
-      App.escapeHtml(App.pick("Вечерняя сводка", "Evening summary")) +
+      App.escapeHtml(L("Вечерняя сводка", "Evening summary")) +
       "</h2>" +
       '<p class="acc-summary-hint">' +
       App.escapeHtml(
-        App.pick(
+        L(
           "Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.",
           "Once a day we'll send a short recap: how many calories and macros you logged."
         )
@@ -415,7 +431,7 @@
       // ---- История за 30 дней ----
       '<section class="acc-history card">' +
       '<h2 class="acc-title">' +
-      App.escapeHtml(App.pick("История за 30 дней", "Last 30 days")) +
+      App.escapeHtml(L("История за 30 дней", "Last 30 days")) +
       "</h2>" +
       '<div id="accHistory" class="acc-history__body">' +
       '<div class="skeleton skeleton--block"></div>' +
@@ -515,7 +531,7 @@
 
     if (weight == null || height == null || age == null) {
       App.toast(
-        App.pick(
+        L(
           "Заполните вес, рост и возраст для расчёта",
           "Fill in weight, height and age to calculate"
         )
@@ -540,7 +556,7 @@
       .calculateGoal(payload)
       .then(function (res) {
         if (!res) {
-          throw new Error(App.pick("Пустой ответ сервера", "Empty server response"));
+          throw new Error(L("Пустой ответ сервера", "Empty server response"));
         }
         // Подставляем дневную норму в поле цели.
         if (res.daily_goal_kcal != null) {
@@ -566,7 +582,7 @@
         }
         App.haptic("success");
         App.toast(
-          App.pick(
+          L(
             "Норма рассчитана: " + App.fmt(res.daily_goal_kcal) + " ккал",
             "Goal calculated: " + App.fmt(res.daily_goal_kcal) + " kcal"
           )
@@ -574,9 +590,9 @@
       })
       .catch(function (err) {
         App.haptic("error");
-        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
         App.toast(
-          App.pick(
+          L(
             "Не удалось рассчитать: " + reason,
             "Failed to calculate: " + reason
           )
@@ -619,13 +635,13 @@
         App.state.profile = profile;
         fillForm(profile);
         App.haptic("success");
-        App.toast(App.pick("Профиль сохранён", "Profile saved"));
+        App.toast(L("Профиль сохранён", "Profile saved"));
       })
       .catch(function (err) {
         App.haptic("error");
-        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
         App.toast(
-          App.pick("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
         );
       })
       .finally(function () {
@@ -655,6 +671,721 @@
       // setLang сам перерисует страницу аккаунта — подсветка обновится в template().
       App.setLang(lang);
     }
+  }
+
+  /* =====================================================================
+   *  ПРЕМИУМ: ВЕС / WEIGHT (Этап 3)
+   *  Ввод замера веса + SVG-график динамики (точки замеров и линия тренда),
+   *  текущий вес и изменение за период. Платный роут (для free — 402).
+   * ===================================================================== */
+
+  /**
+   * Округляет число до одного знака после запятой и возвращает строкой.
+   * Нечисловые значения превращаются в "—".
+   */
+  function fmt1(n) {
+    var num = Number(n);
+    if (!isFinite(num)) return "—";
+    return String(Math.round(num * 10) / 10);
+  }
+
+  /**
+   * Изменение веса со знаком: "+1.2" / "-0.8" / "0".
+   */
+  function fmtChange(n) {
+    var num = Number(n);
+    if (!isFinite(num)) return "0";
+    var rounded = Math.round(num * 10) / 10;
+    return (rounded > 0 ? "+" : "") + rounded;
+  }
+
+  /**
+   * Строит карточку «Вес». Для free вместо содержимого вставляет paywall
+   * (один общий блок для веса и адаптивных калорий). Для премиум — форма
+   * ввода замера + контейнер графика, который заполняется loadWeight().
+   */
+  function renderWeight() {
+    var card = els.weightCard;
+    if (!card) return;
+
+    if (!App.isPremium()) {
+      // Гейтинг: показываем paywall в саму карточку (суб-контейнер, не весь #view).
+      renderPremiumGate(card);
+      return;
+    }
+
+    // Снимаем класс-гейт (мог остаться от прошлого рендера, когда статус
+    // подписки ещё не подтянулся): иначе карточка теряет фон/паддинг.
+    card.classList.remove("wt-gate");
+
+    card.innerHTML =
+      '<h2 class="acc-title">' +
+      App.escapeHtml(L("Вес", "Weight")) +
+      "</h2>" +
+      '<p class="wt-hint">' +
+      App.escapeHtml(
+        L(
+          "Записывайте вес регулярно — по динамике строится тренд и адаптивная норма.",
+          "Log your weight regularly — the trend and adaptive goal are built from it."
+        )
+      ) +
+      "</p>" +
+      '<div class="wt-input-row">' +
+      '<label class="field wt-input-field">' +
+      '<span class="field__label">' +
+      App.escapeHtml(L("Вес сегодня, кг", "Weight today, kg")) +
+      "</span>" +
+      '<input class="field__input wt-input" id="accWeightInput" type="number" inputmode="decimal" min="0" step="0.1" placeholder="70.0">' +
+      "</label>" +
+      "</div>" +
+      '<button type="button" class="btn btn--cta wt-save-btn" id="accWeightSave">' +
+      App.escapeHtml(L("Сохранить вес", "Save weight")) +
+      "</button>" +
+      '<div class="wt-chart-wrap" id="accWeightChart">' +
+      '<div class="skeleton skeleton--block"></div>' +
+      "</div>";
+
+    var input = card.querySelector("#accWeightInput");
+    var saveBtn = card.querySelector("#accWeightSave");
+    var chart = card.querySelector("#accWeightChart");
+
+    // Предзаполняем поле последним известным весом из профиля (удобно).
+    if (App.state.profile && App.state.profile.weight != null) {
+      input.value = App.state.profile.weight;
+    }
+
+    if (saveBtn) {
+      saveBtn.addEventListener("click", function () {
+        onSaveWeight(input, saveBtn, chart);
+      });
+    }
+
+    // Загружаем историю и рисуем график.
+    loadWeight(chart);
+  }
+
+  /**
+   * Сохраняет замер веса (upsert по сегодняшней дате) и перезагружает график.
+   */
+  function onSaveWeight(input, saveBtn, chart) {
+    var weight = readNum(input);
+    if (weight == null || weight <= 0) {
+      App.toast(L("Введите корректный вес", "Enter a valid weight"));
+      App.haptic("error");
+      return;
+    }
+
+    if (saveBtn) saveBtn.disabled = true;
+    App.showLoading();
+
+    App.api
+      .addWeight({ date: App.todayStr(), weight: weight })
+      .then(function () {
+        App.haptic("success");
+        App.toast(L("Вес сохранён", "Weight saved"));
+        // Перезагружаем график динамики после нового замера.
+        loadWeight(chart);
+      })
+      .catch(function (err) {
+        App.haptic("error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
+        App.toast(
+          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+        );
+      })
+      .finally(function () {
+        if (saveBtn) saveBtn.disabled = false;
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Загружает историю веса за 90 дней и отрисовывает SVG-график.
+   */
+  function loadWeight(chart) {
+    if (!chart) return;
+    chart.innerHTML = '<div class="skeleton skeleton--block"></div>';
+
+    App.api
+      .getWeightHistory(90)
+      .then(function (res) {
+        renderWeightChart(chart, res || {});
+      })
+      .catch(function (err) {
+        chart.innerHTML =
+          '<div class="acc-error">' +
+          "<p>" +
+          App.escapeHtml(
+            L("Не удалось загрузить график веса.", "Failed to load weight chart.")
+          ) +
+          "</p>" +
+          '<p class="acc-error__msg">' +
+          App.escapeHtml(
+            err && err.message ? err.message : L("Ошибка сети", "Network error")
+          ) +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accWeightRetry">' +
+          App.escapeHtml(L("Повторить", "Retry")) +
+          "</button>" +
+          "</div>";
+        var retry = chart.querySelector("#accWeightRetry");
+        if (retry) {
+          retry.addEventListener("click", function () {
+            loadWeight(chart);
+          });
+        }
+      });
+  }
+
+  /**
+   * Отрисовывает SVG-график динамики веса.
+   * @param {HTMLElement} chart — контейнер графика.
+   * @param {Object} res — {logs:[{date,weight}], trend:[{date,weight}],
+   *   latest:float|null, change_kg:float|null}.
+   */
+  function renderWeightChart(chart, res) {
+    var logs = Array.isArray(res.logs) ? res.logs : [];
+    var trend = Array.isArray(res.trend) ? res.trend : [];
+
+    // Пустое состояние — мягкое приглашение добавить первый замер.
+    if (!logs.length) {
+      chart.innerHTML =
+        '<div class="wt-empty">' +
+        '<div class="wt-empty__icon" aria-hidden="true">⚖️</div>' +
+        '<div class="wt-empty__text">' +
+        App.escapeHtml(
+          L(
+            "Пока нет замеров. Добавьте первый замер веса выше.",
+            "No measurements yet. Add your first weight above."
+          )
+        ) +
+        "</div>" +
+        "</div>";
+      return;
+    }
+
+    // ---- Геометрия SVG (адаптивная через viewBox + width:100%) ----
+    var W = 320;
+    var H = 180;
+    var padL = 34; // место под подписи веса слева
+    var padR = 12;
+    var padT = 12;
+    var padB = 22; // место под подписи дат снизу
+    var plotW = W - padL - padR;
+    var plotH = H - padT - padB;
+
+    // Собираем все точки (даты по порядку) — за основу берём logs.
+    // Ось X — индекс по отсортированным датам логов (равномерно).
+    var dates = logs.map(function (p) {
+      return p.date;
+    });
+    var indexByDate = {};
+    dates.forEach(function (d, i) {
+      indexByDate[d] = i;
+    });
+    var n = dates.length;
+
+    // Диапазон значений Y: учитываем и замеры, и тренд, с небольшим запасом.
+    var allVals = [];
+    logs.forEach(function (p) {
+      if (p.weight != null && isFinite(Number(p.weight))) {
+        allVals.push(Number(p.weight));
+      }
+    });
+    trend.forEach(function (p) {
+      if (p.weight != null && isFinite(Number(p.weight))) {
+        allVals.push(Number(p.weight));
+      }
+    });
+    var minV = Math.min.apply(null, allVals);
+    var maxV = Math.max.apply(null, allVals);
+    if (!isFinite(minV) || !isFinite(maxV)) {
+      minV = 0;
+      maxV = 1;
+    }
+    if (minV === maxV) {
+      // Единственное значение — даём симметричный запас в 1 кг.
+      minV -= 1;
+      maxV += 1;
+    } else {
+      var pad = (maxV - minV) * 0.12;
+      minV -= pad;
+      maxV += pad;
+    }
+    var spanV = maxV - minV || 1;
+
+    // Хелперы перевода данных в координаты SVG.
+    function xAt(i) {
+      if (n <= 1) return padL + plotW / 2;
+      return padL + (plotW * i) / (n - 1);
+    }
+    function yAt(v) {
+      return padT + plotH - ((Number(v) - minV) / spanV) * plotH;
+    }
+
+    // ---- Сетка: горизонтальные линии min / середина / max ----
+    var gridLines = "";
+    var gridVals = [maxV, (maxV + minV) / 2, minV];
+    gridVals.forEach(function (gv) {
+      var y = yAt(gv);
+      gridLines +=
+        '<line class="wt-grid-line" x1="' +
+        padL +
+        '" y1="' +
+        y.toFixed(1) +
+        '" x2="' +
+        (W - padR) +
+        '" y2="' +
+        y.toFixed(1) +
+        '"></line>';
+    });
+
+    // Подписи по оси Y (округлённый вес).
+    var yLabels = "";
+    [maxV, minV].forEach(function (gv) {
+      var y = yAt(gv);
+      yLabels +=
+        '<text class="wt-axis-label" x="' +
+        (padL - 4) +
+        '" y="' +
+        (y + 3).toFixed(1) +
+        '" text-anchor="end">' +
+        App.escapeHtml(fmt1(gv)) +
+        "</text>";
+    });
+
+    // ---- Линия замеров (приглушённая) + точки ----
+    var logPointsStr = logs
+      .map(function (p) {
+        return xAt(indexByDate[p.date]).toFixed(1) + "," + yAt(p.weight).toFixed(1);
+      })
+      .join(" ");
+    var logLine =
+      n > 1
+        ? '<polyline class="wt-line-logs" points="' + logPointsStr + '"></polyline>'
+        : "";
+    var logDots = logs
+      .map(function (p) {
+        return (
+          '<circle class="wt-dot" cx="' +
+          xAt(indexByDate[p.date]).toFixed(1) +
+          '" cy="' +
+          yAt(p.weight).toFixed(1) +
+          '" r="2.6"></circle>'
+        );
+      })
+      .join("");
+
+    // ---- Линия тренда (выделенная, цвет CTA/зелёный) ----
+    var trendLine = "";
+    if (trend.length > 1) {
+      // Тренд может приходить по своим датам — мапим на ось X логов, где
+      // возможно, иначе равномерно распределяем по индексу самого тренда.
+      var trendPts = trend
+        .map(function (p, i) {
+          var xi;
+          if (indexByDate.hasOwnProperty(p.date)) {
+            xi = xAt(indexByDate[p.date]);
+          } else if (trend.length > 1) {
+            xi = padL + (plotW * i) / (trend.length - 1);
+          } else {
+            xi = padL + plotW / 2;
+          }
+          return xi.toFixed(1) + "," + yAt(p.weight).toFixed(1);
+        })
+        .join(" ");
+      trendLine =
+        '<polyline class="wt-line-trend" points="' + trendPts + '"></polyline>';
+    }
+
+    // ---- Подписи дат по оси X (первая и последняя) ----
+    var xLabels = "";
+    if (n >= 1) {
+      xLabels +=
+        '<text class="wt-axis-label" x="' +
+        xAt(0).toFixed(1) +
+        '" y="' +
+        (H - 6) +
+        '" text-anchor="start">' +
+        App.escapeHtml(formatDate(dates[0])) +
+        "</text>";
+    }
+    if (n >= 2) {
+      xLabels +=
+        '<text class="wt-axis-label" x="' +
+        xAt(n - 1).toFixed(1) +
+        '" y="' +
+        (H - 6) +
+        '" text-anchor="end">' +
+        App.escapeHtml(formatDate(dates[n - 1])) +
+        "</text>";
+    }
+
+    var svg =
+      '<svg class="wt-svg" viewBox="0 0 ' +
+      W +
+      " " +
+      H +
+      '" preserveAspectRatio="xMidYMid meet" role="img" aria-label="' +
+      App.escapeHtml(L("График динамики веса", "Weight dynamics chart")) +
+      '">' +
+      gridLines +
+      yLabels +
+      logLine +
+      trendLine +
+      logDots +
+      xLabels +
+      "</svg>";
+
+    // ---- Сводка: текущий вес и изменение за период ----
+    var kg = L("кг", "kg");
+    var latest = res.latest != null ? res.latest : (logs[n - 1] && logs[n - 1].weight);
+    var change = res.change_kg;
+
+    var changeHtml = "";
+    if (change != null && isFinite(Number(change))) {
+      var num = Number(change);
+      var cls =
+        num > 0 ? " wt-change--up" : num < 0 ? " wt-change--down" : "";
+      changeHtml =
+        '<div class="wt-stat">' +
+        '<span class="wt-stat__value' +
+        cls +
+        '">' +
+        App.escapeHtml(fmtChange(change) + " " + kg) +
+        "</span>" +
+        '<span class="wt-stat__label">' +
+        App.escapeHtml(L("за период", "over the period")) +
+        "</span>" +
+        "</div>";
+    }
+
+    var latestHtml =
+      '<div class="wt-stat">' +
+      '<span class="wt-stat__value">' +
+      App.escapeHtml(fmt1(latest) + " " + kg) +
+      "</span>" +
+      '<span class="wt-stat__label">' +
+      App.escapeHtml(L("текущий вес", "current weight")) +
+      "</span>" +
+      "</div>";
+
+    // ---- Легенда (замеры / тренд) ----
+    var legend =
+      '<div class="wt-legend">' +
+      '<span class="wt-legend__item">' +
+      '<span class="wt-legend__swatch wt-legend__swatch--logs" aria-hidden="true"></span>' +
+      App.escapeHtml(L("Замеры", "Measurements")) +
+      "</span>" +
+      '<span class="wt-legend__item">' +
+      '<span class="wt-legend__swatch wt-legend__swatch--trend" aria-hidden="true"></span>' +
+      App.escapeHtml(L("Тренд", "Trend")) +
+      "</span>" +
+      "</div>";
+
+    chart.innerHTML =
+      '<div class="wt-stats">' +
+      latestHtml +
+      changeHtml +
+      "</div>" +
+      svg +
+      legend;
+  }
+
+  /* =====================================================================
+   *  ПРЕМИУМ: АДАПТИВНЫЕ КАЛОРИИ / ADAPTIVE CALORIES (Этап 3)
+   *  Тумблер adaptive_enabled + кнопка пересчёта дневной цели по реальной
+   *  динамике веса. Платный роут (для free — 402).
+   * ===================================================================== */
+
+  /**
+   * Строит карточку «Адаптивные калории». Для free карточка остаётся пустой —
+   * единый paywall показан в карточке веса (renderWeight). Для премиум —
+   * тумблер + кнопка пересчёта + блок результата.
+   */
+  function renderAdaptive() {
+    var card = els.adaptCard;
+    if (!card) return;
+
+    if (!App.isPremium()) {
+      // Гейтинг общий: paywall показывается в карточке веса. Эту карточку прячем.
+      card.innerHTML = "";
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+
+    var p = App.state.profile || {};
+    var enabled = !!p.adaptive_enabled;
+    var maintenance = p.calculated_maintenance;
+
+    var maintHtml = "";
+    if (maintenance != null && isFinite(Number(maintenance))) {
+      maintHtml =
+        '<div class="adapt-maint" id="accAdaptMaint">' +
+        App.escapeHtml(
+          L("Фактическое поддержание ≈ ", "Real maintenance ≈ ") +
+            App.fmt(maintenance) +
+            L(" ккал", " kcal")
+        ) +
+        "</div>";
+    }
+
+    card.innerHTML =
+      '<h2 class="acc-title">' +
+      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
+      "</h2>" +
+      '<div class="adapt-row">' +
+      '<label class="adapt-toggle">' +
+      '<input class="adapt-toggle__input" type="checkbox" id="accAdaptEnabled"' +
+      (enabled ? " checked" : "") +
+      ">" +
+      '<span class="adapt-toggle__label">' +
+      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
+      "</span>" +
+      "</label>" +
+      "</div>" +
+      '<p class="adapt-hint">' +
+      App.escapeHtml(
+        L(
+          "Корректирует дневную цель по реальной динамике веса.",
+          "Adjusts your daily goal from real weight dynamics."
+        )
+      ) +
+      "</p>" +
+      maintHtml +
+      '<button type="button" class="btn btn--cta adapt-recalc-btn" id="accAdaptRecalc">' +
+      App.escapeHtml(L("Пересчитать по динамике", "Recalculate now")) +
+      "</button>" +
+      '<div class="adapt-result" id="accAdaptResult" hidden></div>';
+
+    var toggle = card.querySelector("#accAdaptEnabled");
+    if (toggle) {
+      toggle.addEventListener("change", function () {
+        onToggleAdaptive(toggle);
+      });
+    }
+
+    var recalcBtn = card.querySelector("#accAdaptRecalc");
+    if (recalcBtn) {
+      recalcBtn.addEventListener("click", function () {
+        onRecalcAdaptive(recalcBtn, card.querySelector("#accAdaptResult"));
+      });
+    }
+  }
+
+  /**
+   * Переключение тумблера adaptive_enabled — сохраняем в профиль на сервере.
+   */
+  function onToggleAdaptive(toggle) {
+    var enabled = !!toggle.checked;
+    App.haptic("selection");
+    toggle.disabled = true;
+
+    App.api
+      .saveProfile({ adaptive_enabled: enabled })
+      .then(function (profile) {
+        // Обновляем кэш профиля актуальными данными от сервера.
+        if (profile && typeof profile === "object") {
+          App.state.profile = profile;
+        } else if (App.state.profile) {
+          App.state.profile.adaptive_enabled = enabled;
+        }
+        App.toast(
+          enabled
+            ? L("Адаптивные калории включены", "Adaptive calories enabled")
+            : L("Адаптивные калории выключены", "Adaptive calories disabled")
+        );
+      })
+      .catch(function (err) {
+        // При ошибке возвращаем тумблер в прежнее положение.
+        toggle.checked = !enabled;
+        App.haptic("error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
+        App.toast(
+          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+        );
+      })
+      .finally(function () {
+        toggle.disabled = false;
+      });
+  }
+
+  /**
+   * Пересчёт адаптивной цели по реальной динамике веса.
+   * При enough_data — показываем поддержание, новую цель и недельное изменение,
+   * обновляем поле цели в форме и кэш профиля. Иначе — показываем пояснение.
+   */
+  function onRecalcAdaptive(btn, resultBox) {
+    if (btn) btn.disabled = true;
+    App.showLoading();
+
+    App.api
+      .recalcAdaptive()
+      .then(function (res) {
+        res = res || {};
+        renderAdaptiveResult(resultBox, res);
+
+        if (res.enough_data && res.new_goal != null) {
+          // Обновляем поле цели в форме профиля и кэш.
+          if (els && els.goal) {
+            els.goal.value = Math.round(res.new_goal);
+          }
+          if (App.state.profile) {
+            App.state.profile.daily_goal_kcal = res.new_goal;
+            if (res.maintenance != null) {
+              App.state.profile.calculated_maintenance = res.maintenance;
+            }
+          }
+          // Обновляем подпись поддержания в карточке, если она есть.
+          updateMaintenanceLabel(res.maintenance);
+          App.haptic("success");
+          App.toast(
+            L(
+              "Новая цель: " + App.fmt(res.new_goal) + " ккал",
+              "New goal: " + App.fmt(res.new_goal) + " kcal"
+            )
+          );
+        } else {
+          App.haptic("warning");
+          App.toast(
+            L(
+              "Недостаточно данных для пересчёта",
+              "Not enough data to recalculate"
+            )
+          );
+        }
+      })
+      .catch(function (err) {
+        App.haptic("error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
+        App.toast(
+          L(
+            "Не удалось пересчитать: " + reason,
+            "Failed to recalculate: " + reason
+          )
+        );
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Обновляет (или создаёт) строку «Фактическое поддержание ≈ N ккал».
+   */
+  function updateMaintenanceLabel(maintenance) {
+    if (!els || !els.adaptCard) return;
+    if (maintenance == null || !isFinite(Number(maintenance))) return;
+    var line = els.adaptCard.querySelector("#accAdaptMaint");
+    var text =
+      L("Фактическое поддержание ≈ ", "Real maintenance ≈ ") +
+      App.fmt(maintenance) +
+      L(" ккал", " kcal");
+    if (line) {
+      line.textContent = text;
+    }
+  }
+
+  /**
+   * Отрисовывает результат пересчёта адаптивной цели.
+   * @param {HTMLElement} box — контейнер результата.
+   * @param {Object} res — ответ /calories/recalculate-adaptive.
+   */
+  function renderAdaptiveResult(box, res) {
+    if (!box) return;
+
+    var explanation = res.explanation || "";
+
+    if (!res.enough_data) {
+      // Мало данных — показываем только пояснение.
+      box.innerHTML =
+        '<div class="adapt-note adapt-note--warn">' +
+        App.escapeHtml(
+          explanation ||
+            L(
+              "Недостаточно данных. Добавляйте вес и приёмы пищи регулярно.",
+              "Not enough data. Log your weight and meals regularly."
+            )
+        ) +
+        "</div>";
+      box.hidden = false;
+      return;
+    }
+
+    var rows = "";
+    if (res.maintenance != null) {
+      rows +=
+        '<div class="adapt-stat">' +
+        '<span class="adapt-stat__label">' +
+        App.escapeHtml(L("Поддержание", "Maintenance")) +
+        "</span>" +
+        '<span class="adapt-stat__value">≈ ' +
+        App.escapeHtml(App.fmt(res.maintenance)) +
+        " " +
+        App.escapeHtml(L("ккал", "kcal")) +
+        "</span>" +
+        "</div>";
+    }
+    if (res.new_goal != null) {
+      rows +=
+        '<div class="adapt-stat adapt-stat--accent">' +
+        '<span class="adapt-stat__label">' +
+        App.escapeHtml(L("Новая цель", "New goal")) +
+        "</span>" +
+        '<span class="adapt-stat__value">' +
+        App.escapeHtml(App.fmt(res.new_goal)) +
+        " " +
+        App.escapeHtml(L("ккал", "kcal")) +
+        "</span>" +
+        "</div>";
+    }
+    if (res.weekly_change_kg != null && isFinite(Number(res.weekly_change_kg))) {
+      rows +=
+        '<div class="adapt-stat">' +
+        '<span class="adapt-stat__label">' +
+        App.escapeHtml(L("Изменение веса", "Weight change")) +
+        "</span>" +
+        '<span class="adapt-stat__value">' +
+        App.escapeHtml(
+          fmtChange(res.weekly_change_kg) + " " + L("кг/нед", "kg/week")
+        ) +
+        "</span>" +
+        "</div>";
+    }
+
+    var explHtml = explanation
+      ? '<p class="adapt-expl">' + App.escapeHtml(explanation) + "</p>"
+      : "";
+
+    box.innerHTML =
+      explHtml + '<div class="adapt-stats">' + rows + "</div>";
+    box.hidden = false;
+  }
+
+  /**
+   * Вставляет ЕДИНЫЙ paywall (вес + адаптивные калории) в переданный контейнер.
+   * Использует App.paywall в суб-контейнере (не весь #view).
+   */
+  function renderPremiumGate(container) {
+    if (!container) return;
+    // Сбрасываем класс card-обёртки, чтобы paywall не дублировал фон карточки.
+    container.innerHTML = "";
+    container.classList.add("wt-gate");
+    App.paywall(container, {
+      icon: "⚖️",
+      title: L("Вес и адаптивные калории", "Weight & adaptive calories"),
+      desc: L(
+        "Следите за трендом веса и подстраивайте норму калорий",
+        "Track your weight trend and auto-tune your calories"
+      ),
+      bullets: [
+        L("График тренда веса", "Weight trend chart"),
+        L("Фактическое поддержание", "Real maintenance estimate"),
+        L("Авто-коррекция цели", "Auto goal adjustment")
+      ]
+    });
   }
 
   /* =====================================================================
@@ -692,7 +1423,7 @@
           '<div class="acc-summary-error">' +
           "<p>" +
           App.escapeHtml(
-            App.pick(
+            L(
               "Не удалось загрузить настройки сводки.",
               "Failed to load summary settings."
             )
@@ -702,11 +1433,11 @@
           App.escapeHtml(
             err && err.message
               ? err.message
-              : App.pick("Ошибка сети", "Network error")
+              : L("Ошибка сети", "Network error")
           ) +
           "</p>" +
           '<button type="button" class="btn btn--ghost" id="accSummaryRetry">' +
-          App.escapeHtml(App.pick("Повторить", "Retry")) +
+          App.escapeHtml(L("Повторить", "Retry")) +
           "</button>" +
           "</div>";
         var retry = box.querySelector("#accSummaryRetry");
@@ -733,7 +1464,7 @@
       ">" +
       '<span class="acc-summary-toggle__label">' +
       App.escapeHtml(
-        App.pick("Присылать вечернюю сводку", "Send evening summary")
+        L("Присылать вечернюю сводку", "Send evening summary")
       ) +
       "</span>" +
       "</label>" +
@@ -742,14 +1473,14 @@
       (enabled ? "" : " hidden") +
       ">" +
       '<span class="field__label">' +
-      App.escapeHtml(App.pick("Время сводки", "Summary time")) +
+      App.escapeHtml(L("Время сводки", "Summary time")) +
       "</span>" +
       '<input class="field__input acc-summary-time__input" type="time" id="accSummaryTime" value="' +
       App.escapeHtml(time) +
       '" placeholder="21:00">' +
       "</label>" +
       '<button type="button" class="btn btn--cta acc-summary-save" id="accSummarySave">' +
-      App.escapeHtml(App.pick("Сохранить", "Save")) +
+      App.escapeHtml(L("Сохранить", "Save")) +
       "</button>";
 
     var toggle = box.querySelector("#accSummaryEnabled");
@@ -800,14 +1531,14 @@
         renderSummary(settings || payload);
         App.haptic("success");
         App.toast(
-          App.pick("Настройки сводки сохранены", "Summary settings saved")
+          L("Настройки сводки сохранены", "Summary settings saved")
         );
       })
       .catch(function (err) {
         App.haptic("error");
-        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
         App.toast(
-          App.pick("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
         );
         if (saveBtn) saveBtn.disabled = false;
       })
@@ -837,18 +1568,18 @@
           '<div class="acc-error">' +
           "<p>" +
           App.escapeHtml(
-            App.pick("Не удалось загрузить историю.", "Failed to load history.")
+            L("Не удалось загрузить историю.", "Failed to load history.")
           ) +
           "</p>" +
           '<p class="acc-error__msg">' +
           App.escapeHtml(
             err && err.message
               ? err.message
-              : App.pick("Ошибка сети", "Network error")
+              : L("Ошибка сети", "Network error")
           ) +
           "</p>" +
           '<button type="button" class="btn btn--ghost" id="accHistRetry">' +
-          App.escapeHtml(App.pick("Повторить", "Retry")) +
+          App.escapeHtml(L("Повторить", "Retry")) +
           "</button>" +
           "</div>";
         var retry = box.querySelector("#accHistRetry");
@@ -869,7 +1600,7 @@
       box.innerHTML =
         '<div class="acc-empty">' +
         App.escapeHtml(
-          App.pick(
+          L(
             "Пока нет данных. Добавьте приёмы пищи в раздел «Мой рацион».",
             "No data yet. Add meals in the «Diary» section."
           )
@@ -886,7 +1617,7 @@
     if (goal != null && goal > maxVal) maxVal = goal;
     if (maxVal <= 0) maxVal = 1; // защита от деления на ноль
 
-    var kcalUnit = App.pick("ккал", "kcal");
+    var kcalUnit = L("ккал", "kcal");
 
     var rows = days
       .map(function (d) {
@@ -918,13 +1649,13 @@
     var goalLine =
       goal != null
         ? '<div class="hist-goal">' +
-          App.escapeHtml(App.pick("Цель: ", "Goal: ")) +
+          App.escapeHtml(L("Цель: ", "Goal: ")) +
           App.fmt(goal) +
           " " +
-          App.escapeHtml(App.pick("ккал/день", "kcal/day")) +
+          App.escapeHtml(L("ккал/день", "kcal/day")) +
           "</div>"
         : '<div class="hist-goal hist-goal--muted">' +
-          App.escapeHtml(App.pick("Цель не задана", "Goal not set")) +
+          App.escapeHtml(L("Цель не задана", "Goal not set")) +
           "</div>";
 
     box.innerHTML = goalLine + '<div class="hist-list">' + rows + "</div>";
@@ -984,9 +1715,21 @@
       targetCarb: viewEl.querySelector("#accTargetCarb"),
       calcBtn: viewEl.querySelector("#accCalcBtn"),
       saveBtn: viewEl.querySelector("#accSaveBtn"),
+      weightCard: viewEl.querySelector("#accWeightCard"),
+      adaptCard: viewEl.querySelector("#accAdaptCard"),
       summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
+  }
+
+  /**
+   * Перерисовывает премиум-секции (вес + адаптивные калории) по текущему
+   * статусу подписки и кэшу профиля. Безопасно к отсутствию элементов.
+   */
+  function renderPremiumSections() {
+    if (!els) return;
+    renderWeight();
+    renderAdaptive();
   }
 
   // ---- Контроллер страницы ----
@@ -1029,9 +1772,15 @@
       // Обновляем статус подписки при показе (best-effort, без блокировок).
       // Сначала отображаем известный статус, затем тихо подтягиваем свежий.
       refreshSubCard();
+      // Премиум-секции рендерим по известному статусу сразу...
+      renderPremiumSections();
       if (App.refreshSubscription) {
         App.refreshSubscription()
-          .then(refreshSubCard)
+          .then(function () {
+            refreshSubCard();
+            // ...и перерисовываем их, когда статус подписки обновился.
+            renderPremiumSections();
+          })
           .catch(function () {
             // Статус не критичен для аккаунта — оставляем как есть.
           });
@@ -1047,13 +1796,16 @@
         .then(function (profile) {
           App.state.profile = profile;
           fillForm(profile);
+          // Профиль содержит adaptive_enabled / calculated_maintenance —
+          // перерисовываем премиум-секции актуальными данными.
+          renderPremiumSections();
         })
         .catch(function (err) {
           // Профиль не критичен — форму можно заполнить вручную.
           var reason =
-            err && err.message ? err.message : App.pick("ошибка", "error");
+            err && err.message ? err.message : L("ошибка", "error");
           App.toast(
-            App.pick(
+            L(
               "Не удалось загрузить профиль: " + reason,
               "Failed to load profile: " + reason
             )
