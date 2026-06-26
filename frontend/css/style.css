@@ -4717,7 +4717,10 @@ select.field__input {
    подсказки/кнопок задаём здесь, само видео-окно идёт «в край» по ширине. */
 .scan-cam-card {
   background: var(--white);
-  padding: 14px;
+  /* Меньше внутренних отступов + лёгкий вынос за края -> видео-окно ШИРЕ. */
+  padding: 8px;
+  margin-left: -6px;
+  margin-right: -6px;
   text-align: center;
 }
 
@@ -4726,7 +4729,10 @@ select.field__input {
 .scan-cam-window {
   position: relative;
   width: 100%;
-  aspect-ratio: 4 / 3;
+  /* Портретное окно ПОВЫШЕ — заполняет свободное место под камерой.
+     max-height страхует от вылезания за экран на низких устройствах. */
+  aspect-ratio: 3 / 4;
+  max-height: 62vh;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--card);
@@ -4737,10 +4743,10 @@ select.field__input {
 
 /* Запасной aspect-ratio для старых вебвью без поддержки свойства:
    padding-hack даёт пропорцию 3/4 = 75% (видео позиционируется абсолютно). */
-@supports not (aspect-ratio: 4 / 3) {
+@supports not (aspect-ratio: 3 / 4) {
   .scan-cam-window {
     height: 0;
-    padding-bottom: 75%;
+    padding-bottom: 133.33%;
   }
 }
 
@@ -4844,7 +4850,7 @@ select.field__input {
 /* На узких экранах слегка ужимаем внутренние отступы карточки камеры. */
 @media (max-width: 360px) {
   .scan-cam-card {
-    padding: 12px;
+    padding: 8px;
   }
 
   .scan-cam-hint {
