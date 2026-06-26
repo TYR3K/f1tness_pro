@@ -4732,7 +4732,8 @@ select.field__input {
   /* Портретное окно ПОВЫШЕ — заполняет свободное место под камерой.
      max-height страхует от вылезания за экран на низких устройствах. */
   aspect-ratio: 3 / 4;
-  max-height: 62vh;
+  /* Ограничиваем высоту, чтобы кнопки под камерой влезали без прокрутки. */
+  max-height: 42vh;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--card);
