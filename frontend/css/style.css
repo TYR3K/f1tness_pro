@@ -4693,3 +4693,161 @@ select.field__input {
     font-size: 30px;
   }
 }
+
+/* ============================================================
+   ЖИВАЯ КАМЕРА НА ГЛАВНОМ ЭКРАНЕ СКАНЕРА (scan-cam-*)
+   Главный экран «Определение» сразу показывает живой поток камеры
+   (getUserMedia, facingMode "environment"). Спуск затвора — повторный
+   тап по центральной кнопке-камере в нижнем меню (см. app.js / PageScan.capture).
+   Под видео: подсказка, счётчик сканирований (#scan-counter-slot),
+   кнопка «🎤 Записать голосом» и вторичная ссылка «Загрузить из галереи».
+   Если камера недоступна/запрещена — рендерится прежняя .scan-dropzone (фолбэк).
+
+   Контракт классов (использует page-scan.js):
+     .scan-cam-card     — карточка-обёртка живого экрана камеры;
+     .scan-cam-window   — окно с видео (aspect-ratio ~4:3, скруглённое, тень);
+     .scan-cam-video    — сам <video> (object-fit: cover, заполняет окно);
+     .scan-cam-badge    — мелкий бейдж-индикатор «LIVE» в углу окна (опц.);
+     .scan-cam-hint     — приглушённая подсказка под видео;
+     .scan-cam-actions  — обёртка кнопки голоса + ссылки галереи под видео;
+     .scan-cam-gallery  — вторичная ссылка-кнопка «Загрузить из галереи».
+   ============================================================ */
+
+/* Карточка живого экрана камеры (наследует .card). Внутренние отступы для
+   подсказки/кнопок задаём здесь, само видео-окно идёт «в край» по ширине. */
+.scan-cam-card {
+  background: var(--white);
+  padding: 14px;
+  text-align: center;
+}
+
+/* Окно с видеопотоком: соотношение ~4:3, скруглённые углы, мягкая тень.
+   На время инициализации камеры показываем нейтральную пастельную подложку. */
+.scan-cam-window {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  /* Тонкая рамка в тон акценту — аккуратно очерчивает окно. */
+  border: 1.5px solid var(--accent);
+}
+
+/* Запасной aspect-ratio для старых вебвью без поддержки свойства:
+   padding-hack даёт пропорцию 3/4 = 75% (видео позиционируется абсолютно). */
+@supports not (aspect-ratio: 4 / 3) {
+  .scan-cam-window {
+    height: 0;
+    padding-bottom: 75%;
+  }
+}
+
+/* Сам видеопоток: заполняет окно целиком, кадрируется по центру. */
+.scan-cam-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: var(--card);
+}
+
+/* Мелкий индикатор «живого» потока в углу окна (необязательный).
+   Полупрозрачная тёмная плашка с зелёной точкой-пульсом. */
+.scan-cam-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: rgba(58, 53, 47, .55);
+  color: var(--white);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+/* Зелёная точка-пульс перед текстом бейджа. */
+.scan-cam-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--cta);
+  box-shadow: 0 0 0 0 rgba(125, 155, 118, .6);
+  animation: scan-cam-pulse 1.6s ease-out infinite;
+}
+
+@keyframes scan-cam-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(125, 155, 118, .55);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(125, 155, 118, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(125, 155, 118, 0);
+  }
+}
+
+/* Приглушённая подсказка под видео: «Наведите на блюдо и нажмите 📷…». */
+.scan-cam-hint {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+  margin-top: 14px;
+}
+
+/* Обёртка действий под видео: кнопка голоса + ссылка «Загрузить из галереи».
+   Счётчик (#scan-counter-slot) рендерится отдельным блоком над/под действиями. */
+.scan-cam-actions {
+  margin-top: 14px;
+}
+
+/* Кнопка «🎤 Записать голосом» под камерой наследует .btn .btn-ghost .btn-block
+   (min-height 52px). Если она первая в блоке действий — убираем двойной отступ. */
+.scan-cam-actions .scan-voice-btn {
+  margin-top: 0;
+}
+
+/* Вторичная ссылка-кнопка «Загрузить из галереи»: ненавязчивая, текстовая.
+   Открывает скрытый input#scan-file (камера/галерея системного выбора). */
+.scan-cam-gallery {
+  display: inline-block;
+  width: auto;
+  min-height: 0;
+  margin-top: 12px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.scan-cam-gallery:active {
+  color: var(--text);
+  transform: none;
+}
+
+/* На узких экранах слегка ужимаем внутренние отступы карточки камеры. */
+@media (max-width: 360px) {
+  .scan-cam-card {
+    padding: 12px;
+  }
+
+  .scan-cam-hint {
+    font-size: 12px;
+  }
+}

@@ -63,6 +63,63 @@
     mealType: "breakfast", // выбранный приём пищи для голосового результата
   };
 
+  // ===== Внутреннее состояние ЖИВОЙ КАМЕРЫ главного экрана =====
+  // Главный экран «Определение» сразу показывает живой видеопоток камеры
+  // (getUserMedia, facingMode "environment"). Спуск затвора — повторный тап по
+  // центральной кнопке-камере (app.js -> PageScan.capture()).
+  // ВАЖНО (утечки): треки потока обязательно останавливаются во ВСЕХ ветках ухода
+  // с главного экрана (превью/результат/ошибка/голос/анализ), при onHide и перед
+  // повторным открытием камеры (не плодим потоки).
+  var cam = {
+    active: false,        // показан ли сейчас живой экран камеры (renderCamera)
+    stream: null,         // активный MediaStream видео (треки нужно останавливать)
+    video: null,          // ссылка на <video> элемент текущего экрана
+    starting: false,      // идёт ли сейчас запрос getUserMedia (защита от гонок)
+    token: 0,             // монотонный токен запроса камеры (отбрасываем устаревшие)
+  };
+
+  // Поддерживается ли получение видеопотока камеры в этом окружении.
+  function cameraSupported() {
+    return !!(
+      navigator &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function"
+    );
+  }
+
+  // Останавливает все треки активного видеопотока камеры и сбрасывает ссылки.
+  // Идемпотентна: безопасно вызывать в любой ветке (уход с экрана/onHide/перезапуск).
+  function camStopStream() {
+    // Инвалидируем текущий запрос камеры: если getUserMedia ещё резолвится —
+    // его результат будет отброшен по устаревшему токену (см. startCamera).
+    cam.token += 1;
+    cam.starting = false;
+    cam.active = false;
+    if (cam.video) {
+      try {
+        cam.video.srcObject = null;
+      } catch (e) {
+        /* игнорируем — элемент мог быть уже удалён из DOM */
+      }
+      cam.video = null;
+    }
+    if (cam.stream) {
+      try {
+        var tracks = cam.stream.getTracks ? cam.stream.getTracks() : [];
+        for (var i = 0; i < tracks.length; i++) {
+          try {
+            tracks[i].stop();
+          } catch (e2) {
+            /* игнорируем — трек мог уже остановиться */
+          }
+        }
+      } catch (e3) {
+        /* игнорируем */
+      }
+      cam.stream = null;
+    }
+  }
+
   // Соответствие ключей приёмов пищи и подписей (для кнопок-чипов).
   // Источник истины по подписям — App.mealLabel, но порядок задаём здесь.
   var MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
@@ -90,9 +147,12 @@
     }
   }
 
-  // Полный сброс состояния страницы к исходному (экран загрузки фото).
+  // Полный сброс состояния страницы к исходному (главный экран сканера).
+  // Камеру останавливаем здесь же — render()/renderUpload() переоткроют её
+  // заново на главном экране (не плодим параллельные потоки).
   function reset() {
     revokePreview();
+    camStopStream();
     state.file = null;
     state.result = null;
     state.base = null;
@@ -271,8 +331,29 @@
     }
   }
 
-  // --- Экран 1: загрузка/съёмка фото ---
+  // --- Экран 1: ГЛАВНЫЙ экран сканера ---
+  // По умолчанию пытаемся показать ЖИВУЮ камеру (renderCamera). Если камера не
+  // поддерживается/запрещена/недоступна — фолбэк на прежнюю дропзону
+  // (renderUploadFallback) с системным выбором файла. Оба варианта сохраняют
+  // голосовой ввод и счётчик сканирований.
   function renderUpload() {
+    // Перед любым повторным показом главного экрана гасим прошлый поток камеры,
+    // чтобы не держать два потока одновременно.
+    camStopStream();
+
+    if (!cameraSupported()) {
+      renderUploadFallback();
+      return;
+    }
+    // Рисуем каркас живого экрана сразу (с нейтральной подложкой видео), затем
+    // асинхронно запрашиваем поток. При отказе/ошибке — переключаемся на фолбэк.
+    renderCamera();
+    startCamera();
+  }
+
+  // --- Экран 1a: ФОЛБЭК главного экрана — прежняя дропзона с выбором файла ---
+  // Используется, если живая камера недоступна/запрещена/не поддерживается.
+  function renderUploadFallback() {
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
@@ -335,6 +416,163 @@
 
     // Подгружаем актуальный остаток сканирований (best-effort) — обновит счётчик.
     loadScansRemaining();
+  }
+
+  // --- Экран 1b: ЖИВАЯ камера (видеопоток + подсказка + голос + галерея) ---
+  // Рисует каркас: видео-окно с нейтральной подложкой (поток подключается в
+  // startCamera), подсказку «нажмите 📷 в меню», счётчик, кнопку голоса и
+  // вторичную ссылку «Загрузить из галереи» (открывает скрытый input).
+  function renderCamera() {
+    cam.active = true;
+
+    viewEl.innerHTML =
+      '<section class="page page-scan">' +
+        '<header class="page-head">' +
+          '<h1 class="page-title">' +
+            esc(L("Определение еды", "Food recognition")) +
+          "</h1>" +
+        "</header>" +
+        '<div class="card scan-cam-card">' +
+          '<div class="scan-cam-window">' +
+            '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>' +
+            '<span class="scan-cam-badge">' + esc(L("В эфире", "Live")) + "</span>" +
+          "</div>" +
+          '<p class="scan-cam-hint">' +
+            esc(L(
+              "Наведите на блюдо и нажмите 📷 в меню, чтобы снять",
+              "Point at your dish and tap 📷 in the menu to capture"
+            )) +
+          "</p>" +
+          // Счётчик бесплатных сканирований (заполняется асинхронно из state.scans).
+          '<div id="scan-counter-slot">' + scanCounterHtml() + "</div>" +
+          '<div class="scan-cam-actions">' +
+            // Голосовой ввод (Этап 2, премиум). Та же кнопка, что и в фолбэке.
+            '<button type="button" class="btn btn-ghost btn-block scan-voice-btn" id="scan-voice-pick">' +
+              "🎤 " + esc(L("Записать голосом", "Record by voice")) +
+            "</button>" +
+            // Вторичная ссылка: системный выбор фото (камера/галерея).
+            '<button type="button" class="scan-cam-gallery" id="scan-cam-gallery">' +
+              esc(L("Загрузить из галереи", "Upload from gallery")) +
+            "</button>" +
+          "</div>" +
+          // Скрытый input для выбора файла из галереи/камеры системы.
+          '<input type="file" id="scan-file" accept="image/*" capture="environment" hidden>' +
+        "</div>" +
+      "</section>";
+
+    var fileInput = viewEl.querySelector("#scan-file");
+
+    // Вторичная ссылка «Загрузить из галереи» открывает системный выбор файла.
+    var galleryBtn = viewEl.querySelector("#scan-cam-gallery");
+    if (galleryBtn) {
+      galleryBtn.addEventListener("click", function () {
+        haptic("light");
+        if (fileInput) fileInput.click();
+      });
+    }
+
+    // При выборе файла — валидируем и запускаем анализ (как в фолбэке).
+    if (fileInput) {
+      fileInput.addEventListener("change", function () {
+        var f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        onFileChosen(f);
+      });
+    }
+
+    // Голосовой ввод — отдельный поток (премиум-гейтинг внутри).
+    var voiceBtn = viewEl.querySelector("#scan-voice-pick");
+    if (voiceBtn) {
+      voiceBtn.addEventListener("click", function () {
+        haptic("light");
+        onVoiceTap();
+      });
+    }
+
+    // Подгружаем актуальный остаток сканирований (best-effort) — обновит счётчик.
+    loadScansRemaining();
+  }
+
+  // Запрашивает видеопоток камеры и подключает его к <video> главного экрана.
+  // Защита от гонок: каждый вызов получает свой token; если за время запроса
+  // экран сменился (token устарел) — поток сразу останавливается. При любом
+  // отказе/ошибке — мягкий фолбэк на дропзону.
+  function startCamera() {
+    if (!cameraSupported()) {
+      renderUploadFallback();
+      return;
+    }
+    cam.token += 1;
+    var myToken = cam.token;
+    cam.starting = true;
+
+    var constraints = { video: { facingMode: "environment" }, audio: false };
+
+    navigator.mediaDevices
+      .getUserMedia(constraints)
+      .then(function (stream) {
+        // Экран сменился, пока ждали доступ (ушли с главного/повторный запуск) —
+        // полученный поток нам уже не нужен, освобождаем камеру.
+        if (myToken !== cam.token || !cam.active) {
+          stopRawStream(stream);
+          return;
+        }
+        cam.stream = stream;
+        cam.starting = false;
+
+        var videoEl = viewEl && viewEl.querySelector("#scan-cam-video");
+        if (!videoEl) {
+          // Видео-узла нет (DOM сменился) — поток не к чему подключать.
+          stopRawStream(stream);
+          cam.stream = null;
+          return;
+        }
+        cam.video = videoEl;
+        try {
+          videoEl.srcObject = stream;
+        } catch (e) {
+          // Совсем старые вебвью без srcObject — фолбэк через createObjectURL.
+          try {
+            videoEl.src = URL.createObjectURL(stream);
+          } catch (e2) {
+            camStopStream();
+            renderUploadFallback();
+            return;
+          }
+        }
+        // play() может вернуть промис, который отклоняется в фоне — гасим.
+        try {
+          var p = videoEl.play();
+          if (p && typeof p.catch === "function") p.catch(function () {});
+        } catch (e3) {
+          /* автоплей с muted обычно работает и без явного play() */
+        }
+      })
+      .catch(function () {
+        // Доступ запрещён/нет камеры/не поддерживается — фолбэк на дропзону.
+        // Останавливать нечего (поток не получен), но сбросим флаги через
+        // camStopStream для единообразия и инвалидации токена.
+        if (myToken !== cam.token) return; // экран уже сменился — не трогаем
+        camStopStream();
+        renderUploadFallback();
+      });
+  }
+
+  // Останавливает «сырой» MediaStream (когда он не сохранён в cam.stream).
+  function stopRawStream(stream) {
+    if (!stream) return;
+    try {
+      var tracks = stream.getTracks ? stream.getTracks() : [];
+      for (var i = 0; i < tracks.length; i++) {
+        try {
+          tracks[i].stop();
+        } catch (e) {
+          /* игнорируем */
+        }
+      }
+    } catch (e2) {
+      /* игнорируем */
+    }
   }
 
   // --- Экран 2: превью выбранного фото (анализ идёт автоматически) ---
@@ -708,6 +946,8 @@
       toast(L("Пожалуйста, выберите изображение", "Please choose an image"));
       return;
     }
+    // Уходим с главного экрана — освобождаем камеру (не держим поток в фоне).
+    camStopStream();
     // Освобождаем предыдущее превью и готовим новое.
     revokePreview();
     state.file = file;
@@ -960,6 +1200,10 @@
 
   // Тап по кнопке голосового ввода: гейтинг -> запись (или фолбэк).
   function onVoiceTap() {
+    // Уходим с главного экрана камеры в голосовой поток — освобождаем камеру,
+    // чтобы не держать видеопоток во время записи/paywall. На возврате к
+    // главному экрану (render -> renderUpload) камера откроется заново.
+    camStopStream();
     // ГЕЙТИНГ: голос — премиум.
     if (!isPremium()) {
       showVoicePaywall();
@@ -1589,13 +1833,71 @@
       });
   }
 
+  // Снимает текущий кадр живого видео в JPEG-File и запускает существующий анализ.
+  // Возвращает true, если кадр успешно снят (иначе false — звать фолбэк).
+  function captureFromVideo() {
+    var videoEl = cam.video || (viewEl && viewEl.querySelector("#scan-cam-video"));
+    if (!videoEl) return false;
+
+    var w = videoEl.videoWidth || 0;
+    var h = videoEl.videoHeight || 0;
+    // Поток ещё не готов (нет кадров) — снять нечего.
+    if (!w || !h) return false;
+
+    var canvas;
+    try {
+      canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext("2d");
+      if (!ctx) return false;
+      ctx.drawImage(videoEl, 0, 0, w, h);
+    } catch (e) {
+      // Рисование может упасть (напр. CORS-tainted) — отдаём управление фолбэку.
+      return false;
+    }
+
+    // canvas.toBlob может отсутствовать в очень старых вебвью — проверяем.
+    if (typeof canvas.toBlob !== "function") return false;
+
+    // Освобождаем камеру СРАЗУ после снятия кадра: дальше идёт превью/анализ.
+    camStopStream();
+
+    canvas.toBlob(
+      function (blob) {
+        if (!blob) {
+          // Не удалось получить Blob — возвращаемся на главный экран камеры.
+          reset();
+          return;
+        }
+        var file;
+        try {
+          file = new File([blob], "photo.jpg", { type: "image/jpeg" });
+        } catch (e) {
+          // Старые вебвью без конструктора File — дополняем Blob именем.
+          try {
+            blob.name = "photo.jpg";
+          } catch (e2) {}
+          file = blob;
+        }
+        onFileChosen(file);
+      },
+      "image/jpeg",
+      0.9
+    );
+    return true;
+  }
+
   // ===== Контроллер страницы =====
   window.PageScan = {
-    // Вызывается при показе вкладки. Получаем контейнер и рисуем экран загрузки.
+    // Вызывается при показе вкладки. Получаем контейнер и рисуем главный экран
+    // (живую камеру или фолбэк-дропзону).
     onShow: function (el) {
       viewEl = el;
       // Каждый показ начинаем «с чистого листа», освобождая прошлое превью.
       revokePreview();
+      // На всякий случай гасим прошлый видеопоток камеры (не плодим потоки).
+      camStopStream();
       state.file = null;
       state.result = null;
       state.base = null;
@@ -1605,11 +1907,56 @@
       voiceReset();
       render();
     },
-    // Вызывается при уходе с вкладки — освобождаем ресурсы превью и микрофон.
+    // Вызывается при уходе с вкладки — освобождаем ресурсы превью, камеру и микрофон.
     onHide: function () {
       revokePreview();
+      // Останавливаем видеопоток камеры при уходе со страницы (важно: иначе
+      // индикатор камеры останется гореть).
+      camStopStream();
       // Останавливаем активную запись/поток (микрофон) при уходе со страницы.
       voiceStopStream();
+    },
+    // ПУБЛИЧНЫЙ СПУСК ЗАТВОРА. Вызывается из app.js при повторном тапе по уже
+    // активной центральной кнопке-камере. Поведение:
+    //   - живой поток готов и мы на главном экране -> снять кадр и анализировать;
+    //   - поток не готов, но есть фолбэк-input (#scan-file) -> открыть выбор файла;
+    //   - мы НЕ на главном экране (превью/результат/голос/ошибка) -> вернуться
+    //     на главный экран камеры (reset переоткроет камеру).
+    capture: function () {
+      if (!viewEl) return;
+
+      // Не на главном экране сканера (идёт превью/результат/голос/ошибка) —
+      // возвращаемся на главный экран камеры. reset() переоткроет поток.
+      if (state.file || state.result || voice.recording || voice.result) {
+        reset();
+        return;
+      }
+
+      // Главный экран с живой камерой: пробуем снять кадр.
+      if (cam.active) {
+        if (captureFromVideo()) return;
+        // Поток ещё не готов (нет кадров) — открываем системный выбор файла,
+        // если на экране есть скрытый input (камера/галерея).
+        var inputEl = viewEl.querySelector("#scan-file");
+        if (inputEl) {
+          inputEl.click();
+          return;
+        }
+        // Совсем нечего снять — мягко переоткрываем главный экран.
+        reset();
+        return;
+      }
+
+      // Главный экран в режиме фолбэка (камеры нет) — открываем выбор файла.
+      var fallbackInput = viewEl.querySelector("#scan-file");
+      if (fallbackInput) {
+        fallbackInput.click();
+        return;
+      }
+
+      // Прочие экраны без камеры и без выбора файла (paywall голоса, экран
+      // ошибки/«пусто» голоса) — возвращаемся на главный экран сканера.
+      reset();
     },
   };
 
