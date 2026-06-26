@@ -40,9 +40,13 @@ try:
 except Exception:  # pragma: no cover - на случай отсутствия httpx
     httpx = None
 
+from datetime import datetime
+
 from backend.config import OWNER_ID, TARIFFS, BOT_USERNAME
-from backend.models import User, ProGrant
+from backend.models import User, ProGrant, DiaryEntry
 from backend import payment_providers
+from backend import subscription
+from backend import ai_service
 
 logger = logging.getLogger("telegram_bot")
 
@@ -122,6 +126,98 @@ def _payment_success_text(lang: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
+#  Локализация голосового ввода еды (Этап 2)
+# --------------------------------------------------------------------------- #
+# Человекочитаемые названия приёмов пищи для сводки (RU / EN).
+_MEAL_TITLES = {
+    "ru": {
+        "breakfast": "завтрак",
+        "lunch": "обед",
+        "dinner": "ужин",
+        "snack": "перекус",
+    },
+    "en": {
+        "breakfast": "breakfast",
+        "lunch": "lunch",
+        "dinner": "dinner",
+        "snack": "snack",
+    },
+}
+
+
+def _voice_premium_required_text(lang: str) -> str:
+    """Вежливый отказ free-пользователю на голосовой ввод (нужна подписка)."""
+    if lang == "en":
+        return (
+            "🎤 Voice food logging is a premium feature.\n"
+            "Open the «Calories» app to subscribe and add meals just by speaking."
+        )
+    # Русский вариант (по умолчанию).
+    return (
+        "🎤 Голосовой ввод еды — премиум-функция.\n"
+        "Откройте приложение «Калории», оформите подписку — и добавляйте "
+        "приёмы пищи просто голосом."
+    )
+
+
+def _voice_error_text(lang: str) -> str:
+    """Вежливое сообщение об ошибке обработки голосового (не распознали и т.п.)."""
+    if lang == "en":
+        return (
+            "😔 Couldn't process your voice message. "
+            "Try again and describe what you ate a bit more clearly."
+        )
+    # Русский вариант (по умолчанию).
+    return (
+        "😔 Не удалось обработать голосовое сообщение. "
+        "Попробуйте ещё раз и опишите чуть чётче, что вы съели."
+    )
+
+
+def _voice_summary_text(lang: str, transcript: str, meal_type: str, items: list) -> str:
+    """
+    Собрать сводку по распознанному голосовому приёму пищи (RU / EN).
+
+    transcript — распознанный Whisper текст; meal_type — итоговый приём пищи
+    ("breakfast"/"lunch"/"dinner"/"snack"); items — список словарей блюд с
+    полями dish_name/calories. Возвращает готовый текст сообщения пользователю:
+    распознанный текст + список «блюдо — N ккал» + «Итого X ккал» + приём пищи.
+    """
+    meal_title = _MEAL_TITLES.get(lang, _MEAL_TITLES["ru"]).get(meal_type, meal_type)
+
+    # Итоговая калорийность по всем добавленным блюдам.
+    total = 0
+    lines = []
+    for it in items:
+        try:
+            cal = int(it.get("calories") or 0)
+        except Exception:
+            cal = 0
+        total += cal
+        name = str(it.get("dish_name") or "").strip() or ("dish" if lang == "en" else "блюдо")
+        if lang == "en":
+            lines.append(f"• {name} — {cal} kcal")
+        else:
+            lines.append(f"• {name} — {cal} ккал")
+
+    body = "\n".join(lines)
+    if lang == "en":
+        return (
+            f"🎤 Recognized: «{transcript}»\n\n"
+            f"{body}\n\n"
+            f"Total: {total} kcal\n"
+            f"Added to: {meal_title}."
+        )
+    # Русский вариант (по умолчанию).
+    return (
+        f"🎤 Распознано: «{transcript}»\n\n"
+        f"{body}\n\n"
+        f"Итого: {total} ккал\n"
+        f"Добавлено в приём: {meal_title}."
+    )
+
+
+# --------------------------------------------------------------------------- #
 #  Низкоуровневый вызов Telegram Bot API
 # --------------------------------------------------------------------------- #
 def _bot_api(method: str, payload: dict):
@@ -163,6 +259,44 @@ def _bot_api(method: str, payload: dict):
     except Exception as exc:
         # Сетевой/прочий сбой — логируем и считаем неуспехом.
         logger.warning("_bot_api: ошибка вызова метода %s: %s", method, exc)
+        return None
+
+
+# --------------------------------------------------------------------------- #
+#  Скачивание файла из Telegram (для голосовых сообщений)
+# --------------------------------------------------------------------------- #
+def _download_file(file_path: str) -> bytes | None:
+    """
+    Скачать содержимое файла Telegram по его file_path.
+
+    file_path берётся из ответа метода getFile (result["file_path"]). Сам файл
+    лежит по адресу https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}.
+    Возвращает байты файла при успехе, иначе None (никогда не бросает наружу).
+
+    Без BOT_TOKEN или httpx, а также при любой сетевой/HTTP-ошибке — тихо
+    возвращаем None: это не должно валить обработку апдейта.
+    """
+    if not BOT_TOKEN:
+        logger.debug("_download_file: BOT_TOKEN не задан, скачивание пропущено")
+        return None
+    if httpx is None:
+        logger.warning("_download_file: httpx не установлен, скачивание невозможно")
+        return None
+    if not file_path:
+        return None
+
+    url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+    try:
+        resp = httpx.get(url, timeout=30)
+        if resp.status_code == 200 and resp.content:
+            return resp.content
+        logger.warning(
+            "_download_file: статус=%s длина=%s",
+            resp.status_code, len(resp.content or b""),
+        )
+        return None
+    except Exception as exc:
+        logger.warning("_download_file: ошибка скачивания файла: %s", exc)
         return None
 
 
@@ -366,6 +500,174 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Голосовой ввод еды (Этап 2): voice / audio -> Whisper -> GPT -> дневник
+# --------------------------------------------------------------------------- #
+def _handle_voice_message(db, message: dict) -> None:
+    """
+    Обработать голосовое (voice) или аудио (audio) сообщение пользователя.
+
+    Сценарий (всё внутри try/except — сбой не валит обработку апдейта):
+      1) определяем отправителя и его язык;
+      2) проверяем премиум: free-пользователю вежливо отвечаем про подписку
+         и выходим (subscription.is_premium);
+      3) скачиваем файл (getFile -> file_path -> _download_file);
+      4) распознаём речь (ai_service.transcribe_audio) и парсим блюда
+         (ai_service.parse_food_text) на языке пользователя;
+      5) добавляем каждое блюдо в DiaryEntry за сегодня (meal_type из фразы,
+         либо "snack" по умолчанию), коммитим;
+      6) отправляем пользователю сводку на его языке (RU/EN).
+
+    При любой ошибке ИИ/скачивания — вежливое сообщение пользователю, без падения.
+    """
+    # --- 1) Отправитель и чат для ответа -------------------------------------- #
+    from_id = None
+    try:
+        from_id = int(message.get("from", {}).get("id"))
+    except Exception:
+        from_id = None
+
+    chat_id = None
+    try:
+        chat_id = message.get("chat", {}).get("id")
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        chat_id = from_id
+
+    if from_id is None or chat_id is None:
+        # Без отправителя/чата ответить и сохранить данные некуда.
+        return
+
+    # --- 2) Премиум-проверка -------------------------------------------------- #
+    # Ищем пользователя в БД. Язык: по User.language, а для незнакомого
+    # пользователя — по language_code из самого апдейта.
+    user = None
+    try:
+        user = db.query(User).filter(User.telegram_id == from_id).first()
+    except Exception as exc:
+        logger.warning("_handle_voice_message: ошибка поиска пользователя tid=%s: %s", from_id, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        user = None
+
+    if user is not None:
+        lang = _norm_lang(getattr(user, "language", None))
+    else:
+        lang_code = ""
+        try:
+            lang_code = message.get("from", {}).get("language_code", "") or ""
+        except Exception:
+            lang_code = ""
+        lang = _norm_lang(lang_code)
+
+    # Нет пользователя в БД или нет активной подписки — вежливый отказ.
+    if user is None or not subscription.is_premium(user):
+        _bot_api("sendMessage", {
+            "chat_id": chat_id,
+            "text": _voice_premium_required_text(lang),
+        })
+        return
+
+    # --- Дальше работаем в защищённом блоке: любая ошибка -> вежливый ответ ---- #
+    try:
+        # --- 3) Достаём file_id из voice или audio и скачиваем файл ----------- #
+        voice = message.get("voice")
+        audio = message.get("audio")
+        media = voice if isinstance(voice, dict) else audio
+        file_id = None
+        if isinstance(media, dict):
+            file_id = media.get("file_id")
+        if not file_id:
+            logger.warning("_handle_voice_message: не найден file_id (tid=%s)", from_id)
+            _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+            return
+
+        file_info = _bot_api("getFile", {"file_id": file_id})
+        file_path = None
+        if isinstance(file_info, dict):
+            file_path = file_info.get("file_path")
+        if not file_path:
+            logger.warning("_handle_voice_message: getFile не вернул file_path (tid=%s)", from_id)
+            _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+            return
+
+        audio_bytes = _download_file(file_path)
+        if not audio_bytes:
+            logger.warning("_handle_voice_message: не удалось скачать файл (tid=%s)", from_id)
+            _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+            return
+
+        # --- 4) Распознавание речи и парсинг блюд ----------------------------- #
+        text = ai_service.transcribe_audio(audio_bytes, "voice.ogg", lang=lang)
+        parsed = ai_service.parse_food_text(text, lang=lang)
+
+        items = parsed.get("items") or []
+        if not items:
+            # GPT не выделил ни одного блюда — сообщаем пользователю.
+            _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+            return
+
+        # Приём пищи: из фразы, иначе "snack" по умолчанию.
+        meal_type = parsed.get("meal_type")
+        if meal_type not in ("breakfast", "lunch", "dinner", "snack"):
+            meal_type = "snack"
+
+        # --- 5) Добавляем каждое блюдо в дневник за сегодня ------------------- #
+        today = datetime.utcnow().date().isoformat()
+        added = []
+        for it in items:
+            try:
+                entry = DiaryEntry(
+                    telegram_id=from_id,
+                    date=today,
+                    meal_type=meal_type,
+                    dish_name=str(it.get("dish_name") or "").strip(),
+                    calories=int(it.get("calories") or 0),
+                    proteins=float(it.get("proteins") or 0),
+                    fats=float(it.get("fats") or 0),
+                    carbs=float(it.get("carbs") or 0),
+                )
+                db.add(entry)
+                added.append(it)
+            except Exception as exc:
+                logger.warning("_handle_voice_message: пропуск блюда %r: %s", it, exc)
+
+        if not added:
+            # Ничего не удалось добавить — откатываем и сообщаем об ошибке.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+            return
+
+        db.commit()
+
+        # --- 6) Сводка пользователю на его языке ------------------------------ #
+        summary = _voice_summary_text(lang, text, meal_type, added)
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": summary})
+
+    except ai_service.AIError as exc:
+        # Ошибка ИИ (нет речи / не распознали / GPT не ответил) — вежливый ответ.
+        logger.warning("_handle_voice_message: AIError (tid=%s): %s", from_id, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+    except Exception as exc:
+        # Любой иной сбой — логируем, вежливо отвечаем, не падаем.
+        logger.warning("_handle_voice_message: общий сбой (tid=%s): %s", from_id, exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": _voice_error_text(lang)})
+
+
+# --------------------------------------------------------------------------- #
 #  Главный обработчик входящего апдейта (webhook)
 # --------------------------------------------------------------------------- #
 def handle_update(db, update: dict) -> None:
@@ -375,6 +677,7 @@ def handle_update(db, update: dict) -> None:
     Поддерживаемые виды апдейтов:
       * pre_checkout_query        — подтверждаем готовность принять оплату;
       * message.successful_payment — оплата прошла, активируем premium;
+      * message.voice|audio       — голосовой ввод еды (премиум, Этап 2);
       * message.text /givepro|/revokepro — команды владельца (см. выше);
       * message.text /start       — приветствие.
 
@@ -439,7 +742,14 @@ def handle_update(db, update: dict) -> None:
                     pass
             return
 
-        # --- 3) Текстовые команды -------------------------------------------- #
+        # --- 3) Голосовой / аудио ввод еды (премиум, Этап 2) ----------------- #
+        # Если в сообщении есть voice или audio — обрабатываем как голосовой
+        # ввод еды. Премиум-проверка и вся обработка — внутри _handle_voice_message.
+        if isinstance(message.get("voice"), dict) or isinstance(message.get("audio"), dict):
+            _handle_voice_message(db, message)
+            return
+
+        # --- 4) Текстовые команды -------------------------------------------- #
         text = message.get("text")
         if isinstance(text, str):
             stripped = text.strip()

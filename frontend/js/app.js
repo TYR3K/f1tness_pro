@@ -274,6 +274,19 @@
       });
     },
 
+    // Голосовой ввод еды (Этап 2, ПРЕМИУМ). Принимает аудио File, отправляет
+    // multipart/form-data (поле "file"). Для free бэкенд отдаёт 402 (paywall).
+    // Ответ: {transcript, meal_type, items:[{dish_name,calories,proteins,fats,carbs}]}.
+    analyzeVoice: function (file) {
+      var form = new FormData();
+      form.append("file", file);
+      return request("/food/voice", {
+        method: "POST",
+        body: form,
+        isForm: true
+      });
+    },
+
     // Добавление записи в дневник (тело — DiaryEntryIn).
     addDiary: function (entry) {
       return request("/diary/add", { method: "POST", body: entry });

@@ -48,9 +48,11 @@ from backend import (
 from backend.ai_service import (
     AIError,
     analyze_food_image,
+    parse_food_text,
     recommend_meals,
     recommend_supplements,
     suggest_supplements,
+    transcribe_audio,
 )
 from backend.auth import get_current_user
 from backend.database import get_db, init_db
@@ -103,6 +105,8 @@ from backend.schemas import (
     TrainingReminderIn,
     TrainingReminderOut,
     TrainingRemindersOut,
+    VoiceFoodOut,
+    VoiceItemOut,
     WorkoutDayOut,
     WorkoutEstimateIn,
     WorkoutEstimateOut,
@@ -115,6 +119,9 @@ MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
 
 # Максимальный размер загружаемого фото (8 МБ) — защита от перерасхода памяти.
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+
+# Максимальный размер загружаемого голосового сообщения (20 МБ) — защита памяти.
+MAX_AUDIO_BYTES = 20 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +375,79 @@ async def food_analyze(
         confidence=result.get("confidence"),
         # debug отдаём только в режиме отладки, чтобы не светить «сырой» ответ в проде.
         debug=result.get("_debug") if DEBUG_AI else None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#  Голосовой ввод еды (Этап 2): речь -> текст (Whisper) -> разбор блюд (GPT)
+# --------------------------------------------------------------------------- #
+@app.post("/food/voice", response_model=VoiceFoodOut)
+async def food_voice(
+    file: UploadFile = File(...),
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> VoiceFoodOut:
+    """Принять голосовое сообщение, распознать речь и разобрать блюда с КБЖУ.
+
+    Премиум-функция (доступ только через require_premium, иначе 402).
+    Шаги: читаем аудио с лимитом размера -> Whisper переводит речь в текст ->
+    GPT извлекает блюда с количеством, оценивает КБЖУ и определяет приём пищи.
+    Язык распознавания/разбора берём из профиля пользователя ("ru" по умолчанию).
+    Запись в дневник здесь НЕ создаём — клиент сам решает, что добавить.
+    """
+    # Читаем не больше лимита + 1 байт, чтобы поймать превышение размера.
+    audio_bytes = await file.read(MAX_AUDIO_BYTES + 1)
+    if not audio_bytes:
+        # Пустой файл — некорректная загрузка.
+        raise HTTPException(status_code=400, detail="Пустой аудиофайл")
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        # Слишком большой файл — не тратим память и не дёргаем ИИ впустую.
+        raise HTTPException(status_code=413, detail="Аудиофайл слишком большой (макс. 20 МБ)")
+
+    # Язык распознавания берём из профиля пользователя ("ru" по умолчанию).
+    lang = user.language or "ru"
+    # Имя файла нужно Whisper для определения формата; даём дефолт, если пусто.
+    filename = file.filename or "audio.ogg"
+
+    try:
+        # 1) Речь -> текст (Whisper).
+        text = transcribe_audio(audio_bytes, filename, lang)
+        # 2) Текст -> блюда с количеством, КБЖУ и определением приёма пищи (GPT).
+        parsed = parse_food_text(text, lang)
+    except AIError as exc:
+        # Сырой ответ модели всегда пишем в лог сервера (виден в логах Railway).
+        logger.warning(
+            "food/voice: %s | finish=%s refusal=%s raw=%s",
+            exc, exc.finish_reason, exc.refusal, (exc.raw or "")[:600],
+        )
+        # Пользователю — понятный текст; при DEBUG_AI добавляем причину и сырой ответ.
+        detail = "Не удалось распознать еду из голосового сообщения. Попробуйте сказать чётче."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        # Прочие сбои сервиса (нет ключа, недоступность OpenAI и т.п.).
+        logger.warning("food/voice: %s", exc)
+        detail = "Сервис распознавания речи временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    # Собираем список блюд; «мусорные» элементы parse_food_text уже отфильтровал.
+    items = [
+        VoiceItemOut(
+            dish_name=it["dish_name"],
+            calories=it["calories"],
+            proteins=it["proteins"],
+            fats=it["fats"],
+            carbs=it["carbs"],
+        )
+        for it in parsed.get("items", [])
+    ]
+    return VoiceFoodOut(
+        transcript=text,
+        meal_type=parsed.get("meal_type"),
+        items=items,
     )
 
 

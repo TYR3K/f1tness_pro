@@ -4371,3 +4371,325 @@ select.field__input {
   color: var(--white);
   box-shadow: 0 4px 12px rgba(125, 155, 118, .28);
 }
+
+/* ============================================================
+   ============================================================
+   ЭТАП 2: ГОЛОСОВОЙ ВВОД ЕДЫ (page-scan, классы scan-voice-*)
+   ------------------------------------------------------------
+   Премиум-фича на экране «Определение». Отдельный от фото поток:
+     • вторичная кнопка «🎤 Записать голосом» под фото-кнопкой;
+     • экран записи: пульсирующий индикатор + таймер + Стоп/Отмена;
+     • фолбэк «запись недоступна» и экран ошибки голоса;
+     • экран результата: распознанный текст (мелким), чипы приёма
+       пищи (.meal-chip), список РЕДАКТИРУЕМЫХ блюд (название + ккал
+       + Б/Ж/У) с кнопкой удаления ✕.
+
+   Всё ниже — ДОПОЛНЕНИЕ к стилям выше; существующие правила НЕ
+   менялись. Та же пастельная палитра (--bg / --card / --accent /
+   --cta / --text / --muted / --danger), радиусы (--radius /
+   --radius-sm), тень (--shadow). Кнопки наследуют .btn
+   (min-height 52px). Контроль доступа — на бэкенде; здесь только
+   визуальная подача. Все комментарии — на русском.
+   ============================================================
+   ============================================================ */
+
+/* --- Кнопка «🎤 Записать голосом» (вторичная, под фото-кнопкой) --- */
+/* Наследует .btn .btn-ghost .btn-block; отделяем от фото-кнопки сверху.
+   (.btn-block + .btn-block уже даёт 10px, дублируем на случай иной верстки.) */
+.scan-voice-btn {
+  margin-top: 10px;
+}
+
+/* ============================================================
+   ЭКРАН ЗАПИСИ (scan-voice-rec*)
+   Заметный пульсирующий индикатор с микрофоном, статус и таймер.
+   ============================================================ */
+
+/* Карточка экрана записи (наследует .card): центрируем содержимое. */
+.scan-voice-rec {
+  background: var(--white);
+  text-align: center;
+  padding: 28px 18px;
+}
+
+/* Индикатор записи: кружок-подложка с пульсацией и иконкой микрофона. */
+.scan-voice-rec__indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  height: 92px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  /* Мягкая персиковая подложка — «горит» во время записи. */
+  background: rgba(194, 102, 77, .12);
+}
+
+/* Пульсирующее кольцо вокруг микрофона (расходящаяся волна). */
+.scan-voice-rec__pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(194, 102, 77, .35);
+  /* Бесконечная пульсация — визуальный признак активной записи. */
+  animation: scanVoicePulse 1.6s ease-out infinite;
+}
+
+/* Иконка микрофона поверх пульсации. */
+.scan-voice-rec__mic {
+  position: relative;
+  z-index: 1;
+  font-size: 40px;
+  line-height: 1;
+}
+
+/* Анимация пульсации: кольцо разрастается и гаснет. */
+@keyframes scanVoicePulse {
+  0% {
+    transform: scale(.65);
+    opacity: .8;
+  }
+  70% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+/* Статус «Идёт запись…» — приглушённый. */
+.scan-voice-rec__status {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+/* Таймер длительности записи (M:SS) — крупный, моноширинный. */
+.scan-voice-rec__timer {
+  font-size: 34px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Кнопки экрана записи (наследуют .btn .btn-*).
+   «■ Стоп» — CTA; «Отмена» — вторичная. Якоря для точечных правок. */
+.scan-voice-stop {
+  margin-top: 0;
+}
+
+.scan-voice-cancel {
+  margin-top: 10px;
+}
+
+/* ============================================================
+   ФОЛБЭК «ЗАПИСЬ НЕДОСТУПНА» (scan-voice-unavailable*)
+   ============================================================ */
+.scan-voice-unavailable {
+  background: var(--white);
+  text-align: center;
+  padding: 26px 18px;
+}
+
+.scan-voice-unavailable__icon {
+  font-size: 44px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.scan-voice-unavailable__msg {
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+/* Кнопка «Назад» в фолбэке (наследует .btn .btn-cta .btn-block). */
+.scan-voice-back {
+  margin-top: 0;
+}
+
+/* ============================================================
+   ЭКРАН ОШИБКИ ГОЛОСА (scan-voice-error)
+   Наследует .error-card; модификатор — «якорь» для точечных правок.
+   ============================================================ */
+.scan-voice-error {
+  display: block;
+}
+
+/* ============================================================
+   ПУСТОЙ РЕЗУЛЬТАТ — НИЧЕГО НЕ РАСПОЗНАНО (scan-voice-empty*)
+   ============================================================ */
+.scan-voice-empty {
+  background: var(--white);
+  text-align: center;
+  padding: 26px 18px;
+}
+
+.scan-voice-empty__icon {
+  font-size: 44px;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.scan-voice-empty__msg {
+  font-size: 15px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+/* ============================================================
+   ЭКРАН РЕЗУЛЬТАТА ГОЛОСА (scan-voice-card*)
+   Транскрипт + чипы приёма пищи (.meal-chip) + список блюд.
+   ============================================================ */
+
+/* Карточка результата голоса (наследует .card): текст по левому краю. */
+.scan-voice-card {
+  background: var(--white);
+  text-align: left;
+}
+
+/* --- Распознанный текст (transcript) — мелкий, приглушённый --- */
+.scan-voice-transcript {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  word-break: break-word;
+}
+
+/* Подпись «Распознано:» перед текстом — чуть плотнее. */
+.scan-voice-transcript__label {
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* --- Список редактируемых строк блюд --- */
+.scan-voice-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+/* Одна строка блюда: название + кнопка ✕, ниже — компактные числа. */
+.scan-voice-item {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  animation: fadeIn .24s ease;
+}
+
+/* Шапка строки: поле названия + кнопка удаления в одну линию. */
+.scan-voice-item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* Кнопка удаления строки ✕ (иконочная, как .diary-entry__del). */
+.scan-voice-item__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.scan-voice-item__remove:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+/* Сетка компактных числовых полей: Ккал | Б | Ж | У (четыре колонки). */
+.scan-voice-item__nums {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 8px;
+}
+
+/* Одно числовое поле: подпись над компактным input. */
+.scan-voice-num {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.scan-voice-num__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* --- Поля ввода голосового результата (наследуют .field__input) --- */
+.scan-voice-input {
+  width: 100%;
+}
+
+/* Поле названия блюда — на всю ширину шапки строки. */
+.scan-voice-input--name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Компактные числовые поля (ккал/Б/Ж/У) — ниже и плотнее обычного .field__input. */
+.scan-voice-input--num {
+  min-height: 46px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+/* ============================================================
+   АДАПТАЦИЯ ГОЛОСОВОГО ВВОДА ПОД ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 360px) {
+  /* Числовые поля блюда — ужимаем разрывы и кегль подписей/инпутов. */
+  .scan-voice-item__nums {
+    gap: 6px;
+  }
+
+  .scan-voice-num__label {
+    font-size: 10px;
+  }
+
+  .scan-voice-input--num {
+    padding: 0 8px;
+  }
+
+  /* Индикатор записи и таймер слегка уменьшаем. */
+  .scan-voice-rec__indicator {
+    width: 82px;
+    height: 82px;
+  }
+
+  .scan-voice-rec__mic {
+    font-size: 34px;
+  }
+
+  .scan-voice-rec__timer {
+    font-size: 30px;
+  }
+}

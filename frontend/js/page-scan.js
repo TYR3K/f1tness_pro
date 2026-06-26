@@ -47,6 +47,22 @@
     scans: null,           // последний ответ getScansRemaining { used, limit, remaining, is_premium } или null
   };
 
+  // ===== Внутреннее состояние ГОЛОСОВОГО ввода (Этап 2) =====
+  // Отдельно от фото-потока. Хранит активную запись (MediaRecorder/stream/чанки)
+  // и результат распознавания со списком РЕДАКТИРУЕМЫХ блюд.
+  // Сбрасывается через voiceReset() и при каждом show страницы.
+  var voice = {
+    recording: false,      // идёт ли сейчас запись
+    recorder: null,        // экземпляр MediaRecorder
+    stream: null,          // активный MediaStream (треки нужно останавливать)
+    chunks: [],            // собранные аудио-чанки (ondataavailable)
+    timer: null,           // setInterval таймера записи
+    seconds: 0,            // длительность текущей записи (сек)
+    result: null,          // { transcript, meal_type } последнего распознавания
+    items: null,           // массив редактируемых блюд [{dish_name,calories,proteins,fats,carbs}]
+    mealType: "breakfast", // выбранный приём пищи для голосового результата
+  };
+
   // Соответствие ключей приёмов пищи и подписей (для кнопок-чипов).
   // Источник истины по подписям — App.mealLabel, но порядок задаём здесь.
   var MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
@@ -283,6 +299,10 @@
           '<button type="button" class="btn btn-cta btn-block" id="scan-pick">' +
             esc(L("Сфотографировать / Загрузить", "Take photo / Upload")) +
           "</button>" +
+          // Голосовой ввод (Этап 2, премиум). Отдельная кнопка под фото.
+          '<button type="button" class="btn btn-ghost btn-block scan-voice-btn" id="scan-voice-pick">' +
+            "🎤 " + esc(L("Записать голосом", "Record by voice")) +
+          "</button>" +
           // Счётчик бесплатных сканирований (заполняется асинхронно из state.scans).
           '<div id="scan-counter-slot">' + scanCounterHtml() + "</div>" +
         "</div>" +
@@ -303,6 +323,15 @@
       if (!f) return;
       onFileChosen(f);
     });
+
+    // Голосовой ввод — отдельный поток (премиум-гейтинг внутри).
+    var voiceBtn = viewEl.querySelector("#scan-voice-pick");
+    if (voiceBtn) {
+      voiceBtn.addEventListener("click", function () {
+        haptic("light");
+        onVoiceTap();
+      });
+    }
 
     // Подгружаем актуальный остаток сканирований (best-effort) — обновит счётчик.
     loadScansRemaining();
@@ -829,6 +858,737 @@
       });
   }
 
+  /* =====================================================================
+   *  ГОЛОСОВОЙ ВВОД ЕДЫ (Этап 2)
+   *  Отдельный от фото поток. Премиум-фича: гейтинг через App.paywall.
+   *  Поддержка записи проверяется по navigator.mediaDevices + MediaRecorder.
+   *  При отсутствии поддержки/доступа — фолбэк «отправьте голосовое боту».
+   * ===================================================================== */
+
+  // Поддерживается ли запись звука в этом окружении.
+  function voiceRecordingSupported() {
+    return !!(
+      navigator &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function" &&
+      typeof window.MediaRecorder !== "undefined"
+    );
+  }
+
+  // Останавливает все треки активного аудиопотока и очищает таймер записи.
+  // Вызывается в ЛЮБОМ исходе (стоп/отмена/ошибка), чтобы не держать микрофон.
+  function voiceStopStream() {
+    if (voice.timer) {
+      try {
+        clearInterval(voice.timer);
+      } catch (e) {
+        /* игнорируем */
+      }
+      voice.timer = null;
+    }
+    if (voice.stream) {
+      try {
+        var tracks = voice.stream.getTracks ? voice.stream.getTracks() : [];
+        for (var i = 0; i < tracks.length; i++) {
+          try {
+            tracks[i].stop();
+          } catch (e2) {
+            /* игнорируем — трек мог уже остановиться */
+          }
+        }
+      } catch (e3) {
+        /* игнорируем */
+      }
+      voice.stream = null;
+    }
+    voice.recorder = null;
+    voice.recording = false;
+  }
+
+  // Полный сброс голосового состояния (ресурсы + данные результата).
+  function voiceReset() {
+    voiceStopStream();
+    voice.chunks = [];
+    voice.seconds = 0;
+    voice.result = null;
+    voice.items = null;
+    voice.mealType = "breakfast";
+  }
+
+  // Параметры paywall голосового ввода (контракт задачи).
+  function voicePaywallOpts() {
+    return {
+      icon: "🎤",
+      title: L("Голосовой ввод", "Voice input"),
+      desc: L(
+        "Опишите еду голосом — ИИ распознает блюда и калории",
+        "Describe your meal by voice — AI detects dishes and calories"
+      ),
+      bullets: [
+        L("Голосом вместо фото", "Voice instead of photo"),
+        L("Несколько блюд за раз", "Several dishes at once"),
+        L("Авто-расчёт КБЖУ", "Automatic calories & macros"),
+      ],
+    };
+  }
+
+  // Показывает paywall голосового ввода в текущем контейнере.
+  function showVoicePaywall() {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+    if (App && typeof App.paywall === "function") {
+      App.paywall(viewEl, voicePaywallOpts());
+    }
+  }
+
+  // Похоже ли на ошибку «нужен премиум» (402) для голосового потока.
+  function isVoicePremiumError(err) {
+    if (!err) return false;
+    var status = err.status || err.code || err.httpStatus;
+    if (status === 402 || status === "402") return true;
+    var code = (err && err.code ? String(err.code) : "").toLowerCase();
+    if (code.indexOf("premium") !== -1 || code.indexOf("subscription") !== -1) return true;
+    var msg = (err && err.message ? String(err.message) : "").toLowerCase();
+    if (!msg) return false;
+    return (
+      msg.indexOf("402") !== -1 ||
+      msg.indexOf("премиум") !== -1 ||
+      msg.indexOf("premium") !== -1 ||
+      msg.indexOf("подписк") !== -1 ||
+      msg.indexOf("subscription") !== -1
+    );
+  }
+
+  // Тап по кнопке голосового ввода: гейтинг -> запись (или фолбэк).
+  function onVoiceTap() {
+    // ГЕЙТИНГ: голос — премиум.
+    if (!isPremium()) {
+      showVoicePaywall();
+      return;
+    }
+    // Запись недоступна -> сразу фолбэк «отправьте голосовое боту».
+    if (!voiceRecordingSupported()) {
+      renderVoiceUnavailable();
+      return;
+    }
+    startVoiceRecording();
+  }
+
+  // Запрашивает доступ к микрофону и запускает запись.
+  function startVoiceRecording() {
+    voiceReset();
+    var stream;
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then(function (s) {
+        stream = s;
+        voice.stream = s;
+
+        var rec;
+        try {
+          rec = new MediaRecorder(s);
+        } catch (e) {
+          // Некоторые окружения не умеют создать MediaRecorder из потока.
+          voiceStopStream();
+          renderVoiceUnavailable();
+          return;
+        }
+        voice.recorder = rec;
+        voice.chunks = [];
+
+        rec.ondataavailable = function (ev) {
+          if (ev && ev.data && ev.data.size > 0) {
+            voice.chunks.push(ev.data);
+          }
+        };
+        // onstop обрабатываем явно при нажатии «Стоп» (см. stopVoiceRecording),
+        // чтобы отличить отправку от отмены.
+        rec.onerror = function () {
+          voiceStopStream();
+          renderVoiceError(
+            L(
+              "Не удалось записать голос. Попробуйте ещё раз.",
+              "Could not record the voice. Please try again."
+            )
+          );
+        };
+
+        try {
+          rec.start();
+        } catch (e2) {
+          voiceStopStream();
+          renderVoiceUnavailable();
+          return;
+        }
+
+        voice.recording = true;
+        voice.seconds = 0;
+        renderVoiceRecording();
+
+        // Таймер длительности записи.
+        voice.timer = setInterval(function () {
+          voice.seconds += 1;
+          updateVoiceTimer();
+        }, 1000);
+      })
+      .catch(function () {
+        // Доступ к микрофону отклонён или недоступен -> фолбэк.
+        voiceStopStream();
+        renderVoiceUnavailable();
+      });
+  }
+
+  // Останавливает запись по «Стоп», собирает Blob и отправляет на распознавание.
+  function stopVoiceRecording() {
+    var rec = voice.recorder;
+    if (!rec) {
+      // Нечего останавливать — возвращаемся к экрану загрузки.
+      voiceReset();
+      render();
+      return;
+    }
+
+    // Останавливаем таймер сразу (визуально запись завершена).
+    if (voice.timer) {
+      try {
+        clearInterval(voice.timer);
+      } catch (e) {}
+      voice.timer = null;
+    }
+    voice.recording = false;
+
+    var mime = rec.mimeType || "audio/webm";
+
+    // По событию stop собираем Blob и отправляем.
+    rec.onstop = function () {
+      // Освобождаем микрофон СРАЗУ после остановки рекордера.
+      voiceStopStream();
+
+      var blob;
+      try {
+        blob = new Blob(voice.chunks, { type: mime });
+      } catch (e) {
+        blob = new Blob(voice.chunks);
+      }
+      voice.chunks = [];
+
+      if (!blob || blob.size === 0) {
+        renderVoiceError(
+          L(
+            "Запись пустая. Попробуйте ещё раз.",
+            "The recording is empty. Please try again."
+          )
+        );
+        return;
+      }
+
+      var file = blobToVoiceFile(blob, mime);
+      submitVoice(file);
+    };
+
+    try {
+      rec.stop();
+    } catch (e) {
+      // Если stop не сработал — освобождаем ресурсы и показываем ошибку.
+      voiceStopStream();
+      renderVoiceError(
+        L(
+          "Не удалось завершить запись. Попробуйте ещё раз.",
+          "Could not finish the recording. Please try again."
+        )
+      );
+    }
+  }
+
+  // Отмена записи: останавливаем без отправки, сбрасываем к экрану загрузки.
+  function cancelVoiceRecording() {
+    var rec = voice.recorder;
+    if (rec) {
+      // Глушим onstop, чтобы не отправить запись после отмены.
+      rec.onstop = null;
+      try {
+        if (rec.state !== "inactive") rec.stop();
+      } catch (e) {}
+    }
+    voiceReset();
+    render();
+  }
+
+  // Делает File из Blob с именем по mime (контракт: webm/mp4/ogg -> иначе webm).
+  function blobToVoiceFile(blob, mime) {
+    var m = (mime || "").toLowerCase();
+    var name = "voice.webm";
+    if (m.indexOf("mp4") !== -1) name = "voice.mp4";
+    else if (m.indexOf("ogg") !== -1) name = "voice.ogg";
+    else if (m.indexOf("webm") !== -1) name = "voice.webm";
+
+    var type = blob.type || mime || "audio/webm";
+    try {
+      return new File([blob], name, { type: type });
+    } catch (e) {
+      // Старые webview без конструктора File: дополняем Blob именем вручную.
+      try {
+        blob.name = name;
+      } catch (e2) {}
+      return blob;
+    }
+  }
+
+  // Отправка аудио на бэкенд и обработка ответа.
+  function submitVoice(file) {
+    if (App && typeof App.showLoading === "function") App.showLoading();
+
+    App.api
+      .analyzeVoice(file)
+      .then(function (res) {
+        var rawItems = res && Array.isArray(res.items) ? res.items : [];
+        // Нормализуем блюда к редактируемой форме.
+        voice.items = rawItems.map(function (it) {
+          it = it || {};
+          return {
+            dish_name: it.dish_name == null ? "" : String(it.dish_name),
+            calories: Math.round(num(it.calories)),
+            proteins: round1(num(it.proteins)),
+            fats: round1(num(it.fats)),
+            carbs: round1(num(it.carbs)),
+          };
+        });
+        voice.result = {
+          transcript: res && res.transcript ? String(res.transcript) : "",
+          meal_type: res && res.meal_type ? res.meal_type : null,
+        };
+        // Приём пищи по умолчанию: из ответа или "breakfast".
+        var mt = voice.result.meal_type;
+        voice.mealType = MEAL_TYPES.indexOf(mt) !== -1 ? mt : "breakfast";
+
+        renderVoiceResult();
+      })
+      .catch(function (err) {
+        // 402/премиум -> paywall; иначе экран ошибки голоса.
+        if (isVoicePremiumError(err)) {
+          showVoicePaywall();
+          return;
+        }
+        renderVoiceError(
+          L(
+            "Не удалось распознать голос. Попробуйте ещё раз.",
+            "Could not recognize the voice. Please try again."
+          )
+        );
+      })
+      .finally(function () {
+        if (App && typeof App.hideLoading === "function") App.hideLoading();
+      });
+  }
+
+  // --- Экран записи голоса (таймер + индикатор + Стоп/Отмена) ---
+  function renderVoiceRecording() {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+
+    viewEl.innerHTML =
+      '<section class="page page-scan">' +
+        '<header class="page-head">' +
+          '<h1 class="page-title">' +
+            esc(L("Голосовой ввод", "Voice input")) +
+          "</h1>" +
+          '<p class="page-subtitle">' +
+            esc(L(
+              "Назовите блюда и примерные порции — затем нажмите «Стоп».",
+              "Say the dishes and rough portions — then tap “Stop”."
+            )) +
+          "</p>" +
+        "</header>" +
+        '<div class="card scan-voice-rec">' +
+          '<div class="scan-voice-rec__indicator" aria-hidden="true">' +
+            '<span class="scan-voice-rec__pulse"></span>' +
+            '<span class="scan-voice-rec__mic">🎤</span>' +
+          "</div>" +
+          '<p class="scan-voice-rec__status">' +
+            esc(L("Идёт запись…", "Recording…")) +
+          "</p>" +
+          '<div class="scan-voice-rec__timer" id="scan-voice-timer">' +
+            esc(formatVoiceTime(voice.seconds)) +
+          "</div>" +
+        "</div>" +
+        '<button type="button" class="btn btn-cta btn-block scan-voice-stop" id="scan-voice-stop">' +
+          esc(L("■ Стоп", "■ Stop")) +
+        "</button>" +
+        '<button type="button" class="btn btn-ghost btn-block scan-voice-cancel" id="scan-voice-cancel">' +
+          esc(L("Отмена", "Cancel")) +
+        "</button>" +
+      "</section>";
+
+    viewEl.querySelector("#scan-voice-stop").addEventListener("click", function () {
+      haptic("medium");
+      stopVoiceRecording();
+    });
+    viewEl.querySelector("#scan-voice-cancel").addEventListener("click", function () {
+      haptic("light");
+      cancelVoiceRecording();
+    });
+  }
+
+  // Форматирует длительность записи в M:SS.
+  function formatVoiceTime(totalSec) {
+    var s = Math.max(0, Math.round(num(totalSec)));
+    var m = Math.floor(s / 60);
+    var sec = s % 60;
+    return m + ":" + (sec < 10 ? "0" + sec : "" + sec);
+  }
+
+  // Обновляет только узел таймера (без полной перерисовки экрана записи).
+  function updateVoiceTimer() {
+    if (!viewEl) return;
+    var t = viewEl.querySelector("#scan-voice-timer");
+    if (t) t.textContent = formatVoiceTime(voice.seconds);
+  }
+
+  // --- Экран «запись недоступна» (фолбэк на бота) ---
+  function renderVoiceUnavailable() {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+    voiceReset();
+
+    viewEl.innerHTML =
+      '<section class="page page-scan">' +
+        '<header class="page-head">' +
+          '<h1 class="page-title">' +
+            esc(L("Голосовой ввод", "Voice input")) +
+          "</h1>" +
+        "</header>" +
+        '<div class="card scan-voice-unavailable">' +
+          '<div class="scan-voice-unavailable__icon" aria-hidden="true">🎤</div>' +
+          '<p class="scan-voice-unavailable__msg">' +
+            esc(L(
+              "Запись недоступна. Отправьте голосовое сообщение боту — он распознает и добавит еду.",
+              "Recording is unavailable. Send a voice message to the bot — it will recognize and add the food."
+            )) +
+          "</p>" +
+          '<button type="button" class="btn btn-cta btn-block scan-voice-back" id="scan-voice-back">' +
+            esc(L("Назад", "Back")) +
+          "</button>" +
+        "</div>" +
+      "</section>";
+
+    viewEl.querySelector("#scan-voice-back").addEventListener("click", function () {
+      haptic("light");
+      voiceReset();
+      render();
+    });
+  }
+
+  // --- Экран ошибки голоса (Повторить/Назад) ---
+  function renderVoiceError(message) {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+    voiceStopStream();
+
+    viewEl.innerHTML =
+      '<section class="page page-scan">' +
+        '<header class="page-head">' +
+          '<h1 class="page-title">' +
+            esc(L("Что-то пошло не так", "Something went wrong")) +
+          "</h1>" +
+        "</header>" +
+        '<div class="card error-card scan-voice-error">' +
+          '<div class="error-card__icon" aria-hidden="true">⚠️</div>' +
+          '<div class="error-card__msg">' + esc(message) + "</div>" +
+          '<button type="button" class="btn btn-cta btn-block" id="scan-voice-retry">' +
+            esc(L("Повторить", "Retry")) +
+          "</button>" +
+          '<button type="button" class="btn btn-ghost btn-block" id="scan-voice-error-back">' +
+            esc(L("Назад", "Back")) +
+          "</button>" +
+        "</div>" +
+      "</section>";
+
+    viewEl.querySelector("#scan-voice-retry").addEventListener("click", function () {
+      haptic("medium");
+      voiceReset();
+      onVoiceTap();
+    });
+    viewEl.querySelector("#scan-voice-error-back").addEventListener("click", function () {
+      haptic("light");
+      voiceReset();
+      render();
+    });
+  }
+
+  // --- Экран результата голоса: транскрипт + выбор приёма + список блюд ---
+  function renderVoiceResult() {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+
+    var items = Array.isArray(voice.items) ? voice.items : [];
+
+    // Если ничего не распознано — сообщение и кнопка назад.
+    if (!items.length) {
+      viewEl.innerHTML =
+        '<section class="page page-scan">' +
+          '<header class="page-head">' +
+            '<h1 class="page-title">' +
+              esc(L("Голосовой ввод", "Voice input")) +
+            "</h1>" +
+          "</header>" +
+          '<div class="card scan-voice-empty">' +
+            '<div class="scan-voice-empty__icon" aria-hidden="true">🤷</div>' +
+            (voice.result && voice.result.transcript
+              ? '<p class="scan-voice-transcript">' + esc(voice.result.transcript) + "</p>"
+              : "") +
+            '<p class="scan-voice-empty__msg">' +
+              esc(L(
+                "Не удалось распознать блюда. Попробуйте сказать чётче.",
+                "Could not detect any dishes. Try speaking more clearly."
+              )) +
+            "</p>" +
+            '<button type="button" class="btn btn-cta btn-block" id="scan-voice-empty-retry">' +
+              esc(L("Записать снова", "Record again")) +
+            "</button>" +
+            '<button type="button" class="btn btn-ghost btn-block" id="scan-voice-empty-back">' +
+              esc(L("Назад", "Back")) +
+            "</button>" +
+          "</div>" +
+        "</section>";
+
+      viewEl.querySelector("#scan-voice-empty-retry").addEventListener("click", function () {
+        haptic("medium");
+        voiceReset();
+        onVoiceTap();
+      });
+      viewEl.querySelector("#scan-voice-empty-back").addEventListener("click", function () {
+        haptic("light");
+        voiceReset();
+        render();
+      });
+      return;
+    }
+
+    // Транскрипт (мелким) — данные распознавания, экранируем.
+    var transcriptHtml =
+      voice.result && voice.result.transcript
+        ? '<p class="scan-voice-transcript">' +
+            '<span class="scan-voice-transcript__label">' +
+              esc(L("Распознано:", "Recognized:")) +
+            "</span> " +
+            esc(voice.result.transcript) +
+          "</p>"
+        : "";
+
+    // Чипы выбора приёма пищи.
+    var chips = MEAL_TYPES.map(function (t) {
+      var active = t === voice.mealType ? " is-active" : "";
+      return (
+        '<button type="button" class="meal-chip' + active + '" data-meal="' + t + '">' +
+          esc(mealLabel(t)) +
+        "</button>"
+      );
+    }).join("");
+
+    // Редактируемые строки блюд.
+    var rowsHtml = items.map(function (it, idx) {
+      return voiceItemRowHtml(it, idx);
+    }).join("");
+
+    viewEl.innerHTML =
+      '<section class="page page-scan">' +
+        '<header class="page-head">' +
+          '<h1 class="page-title">' +
+            esc(L("Распознанные блюда", "Recognized dishes")) +
+          "</h1>" +
+          '<p class="page-subtitle">' +
+            esc(L(
+              "Проверьте и поправьте значения перед добавлением.",
+              "Review and adjust the values before adding."
+            )) +
+          "</p>" +
+        "</header>" +
+        '<div class="card scan-voice-card">' +
+          transcriptHtml +
+          '<div class="meal-picker">' +
+            '<p class="meal-picker__label">' +
+              esc(L("Добавить как:", "Add as:")) +
+            "</p>" +
+            '<div class="meal-chips" id="scan-voice-meals">' + chips + "</div>" +
+          "</div>" +
+          '<div class="scan-voice-items" id="scan-voice-items">' + rowsHtml + "</div>" +
+        "</div>" +
+        '<button type="button" class="btn btn-cta btn-block" id="scan-voice-add">' +
+          esc(L("Добавить в рацион", "Add to diary")) +
+        "</button>" +
+        '<button type="button" class="btn btn-ghost btn-block" id="scan-voice-result-cancel">' +
+          esc(L("Отмена", "Cancel")) +
+        "</button>" +
+      "</section>";
+
+    // Выбор приёма пищи.
+    var mealsWrap = viewEl.querySelector("#scan-voice-meals");
+    mealsWrap.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".meal-chip");
+      if (!btn) return;
+      var t = btn.getAttribute("data-meal");
+      if (!t) return;
+      voice.mealType = t;
+      haptic("light");
+      var all = mealsWrap.querySelectorAll(".meal-chip");
+      all.forEach(function (b) {
+        b.classList.toggle("is-active", b.getAttribute("data-meal") === t);
+      });
+    });
+
+    bindVoiceItemInputs();
+
+    // Добавить все оставшиеся блюда в рацион.
+    viewEl.querySelector("#scan-voice-add").addEventListener("click", function () {
+      addVoiceToDiary();
+    });
+
+    // Отмена — полный сброс к экрану загрузки.
+    viewEl.querySelector("#scan-voice-result-cancel").addEventListener("click", function () {
+      haptic("light");
+      voiceReset();
+      render();
+    });
+  }
+
+  // HTML одной редактируемой строки блюда голосового результата.
+  function voiceItemRowHtml(it, idx) {
+    it = it || {};
+    return (
+      '<div class="scan-voice-item" data-idx="' + idx + '">' +
+        '<div class="scan-voice-item__head">' +
+          '<input type="text" class="field__input scan-voice-input scan-voice-input--name" ' +
+            'data-field="dish_name" data-idx="' + idx + '" ' +
+            'value="' + esc(it.dish_name == null ? "" : it.dish_name) + '" ' +
+            'placeholder="' + esc(L("Название блюда", "Dish name")) + '" maxlength="120">' +
+          '<button type="button" class="scan-voice-item__remove" data-idx="' + idx + '" ' +
+            'aria-label="' + esc(L("Удалить", "Remove")) + '">✕</button>' +
+        "</div>" +
+        '<div class="scan-voice-item__nums">' +
+          voiceNumFieldHtml(L("Ккал", "Kcal"), "calories", idx, it.calories, "1") +
+          voiceNumFieldHtml(L("Б", "P"), "proteins", idx, it.proteins, "0.1") +
+          voiceNumFieldHtml(L("Ж", "F"), "fats", idx, it.fats, "0.1") +
+          voiceNumFieldHtml(L("У", "C"), "carbs", idx, it.carbs, "0.1") +
+        "</div>" +
+      "</div>"
+    );
+  }
+
+  // HTML компактного числового поля строки блюда.
+  function voiceNumFieldHtml(label, field, idx, value, step) {
+    return (
+      '<label class="scan-voice-num">' +
+        '<span class="scan-voice-num__label">' + esc(label) + "</span>" +
+        '<input type="number" inputmode="decimal" min="0" step="' + esc(step) + '" ' +
+          'class="field__input scan-voice-input scan-voice-input--num" ' +
+          'data-field="' + esc(field) + '" data-idx="' + idx + '" ' +
+          'value="' + esc(value == null ? "" : value) + '" placeholder="0">' +
+      "</label>"
+    );
+  }
+
+  // Привязка обработчиков к инпутам и кнопкам удаления строк голосового результата.
+  function bindVoiceItemInputs() {
+    var wrap = viewEl.querySelector("#scan-voice-items");
+    if (!wrap) return;
+
+    // Синхронизация значений инпутов в voice.items.
+    wrap.addEventListener("input", function (ev) {
+      var el = ev.target;
+      if (!el || !el.getAttribute) return;
+      var field = el.getAttribute("data-field");
+      if (!field) return;
+      var idx = parseInt(el.getAttribute("data-idx"), 10);
+      if (isNaN(idx) || !voice.items || !voice.items[idx]) return;
+
+      if (field === "dish_name") {
+        voice.items[idx].dish_name = el.value;
+        return;
+      }
+      if (el.value === "") {
+        voice.items[idx][field] = "";
+        return;
+      }
+      var v = num(el.value);
+      voice.items[idx][field] = field === "calories" ? Math.round(v) : round1(v);
+    });
+
+    // Удаление строки блюда.
+    wrap.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".scan-voice-item__remove");
+      if (!btn) return;
+      var idx = parseInt(btn.getAttribute("data-idx"), 10);
+      if (isNaN(idx) || !voice.items) return;
+      voice.items.splice(idx, 1);
+      haptic("light");
+      // Перерисовываем результат (переиндексация строк); если строк не осталось —
+      // renderVoiceResult покажет «пусто».
+      renderVoiceResult();
+    });
+  }
+
+  // Добавление всех оставшихся распознанных блюд в дневник за сегодня.
+  function addVoiceToDiary() {
+    var items = Array.isArray(voice.items) ? voice.items : [];
+    if (!items.length) {
+      toast(L("Нет блюд для добавления", "No dishes to add"));
+      return;
+    }
+
+    // Готовим записи строго по DiaryEntryIn; пропускаем строки без названия.
+    var date = App.todayStr();
+    var mealType = voice.mealType;
+    var entries = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i] || {};
+      var dishName = (it.dish_name == null ? "" : String(it.dish_name)).trim();
+      if (!dishName) continue;
+      entries.push({
+        date: date,
+        meal_type: mealType,
+        dish_name: dishName,
+        calories: Math.round(num(it.calories)),
+        proteins: num(it.proteins),
+        fats: num(it.fats),
+        carbs: num(it.carbs),
+      });
+    }
+
+    if (!entries.length) {
+      haptic("warning");
+      toast(L("Укажите названия блюд", "Enter dish names"));
+      return;
+    }
+
+    if (App && typeof App.showLoading === "function") App.showLoading();
+
+    Promise.all(
+      entries.map(function (entry) {
+        return App.api.addDiary(entry);
+      })
+    )
+      .then(function () {
+        haptic("success");
+        toast(
+          L("Добавлено в рацион: ", "Added to diary: ") + mealLabel(mealType)
+        );
+        // Инвалидируем кэш дневника на сегодня.
+        if (App.state && App.state.diaryByDate) {
+          delete App.state.diaryByDate[date];
+        }
+        voiceReset();
+        render();
+      })
+      .catch(function (err) {
+        haptic("error");
+        var msg =
+          (err && err.message) ||
+          L(
+            "Не удалось добавить записи. Проверьте соединение и попробуйте снова.",
+            "Could not add the entries. Check your connection and try again."
+          );
+        toast(msg);
+      })
+      .finally(function () {
+        if (App && typeof App.hideLoading === "function") App.hideLoading();
+      });
+  }
+
   // ===== Контроллер страницы =====
   window.PageScan = {
     // Вызывается при показе вкладки. Получаем контейнер и рисуем экран загрузки.
@@ -841,11 +1601,15 @@
       state.base = null;
       state.edited = null;
       state.mealType = "breakfast";
+      // Сбрасываем голосовой поток и освобождаем микрофон, если он был занят.
+      voiceReset();
       render();
     },
-    // Вызывается при уходе с вкладки — освобождаем ресурсы превью.
+    // Вызывается при уходе с вкладки — освобождаем ресурсы превью и микрофон.
     onHide: function () {
       revokePreview();
+      // Останавливаем активную запись/поток (микрофон) при уходе со страницы.
+      voiceStopStream();
     },
   };
 

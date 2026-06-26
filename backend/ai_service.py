@@ -32,6 +32,11 @@ Pillow для снижения стоимости запроса.
                           diet_goal, lang="ru") -> dict
         Персональный подбор добавок с учётом цели улучшения, частоты/типа
         тренировок и цели диеты.
+    transcribe_audio(audio_bytes, filename="audio.ogg", lang=None) -> str
+        Распознаёт речь в тексте через Whisper (whisper-1).
+    parse_food_text(text, lang="ru") -> dict
+        По текстовому описанию приёма пищи извлекает список блюд с КБЖУ и
+        определяет тип приёма пищи (Этап 2 — голосовой ввод еды).
 """
 
 import base64
@@ -1009,3 +1014,162 @@ def recommend_supplements(
         )
 
     return {"suggestions": suggestions}
+
+
+# --------------------------------------------------------------------------- #
+#  Голосовой ввод еды (Этап 2): распознавание речи (Whisper) + разбор текста
+# --------------------------------------------------------------------------- #
+
+# Допустимые приёмы пищи для голосового разбора.
+_VOICE_MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
+
+# Системный промпт разбора текстового описания еды на блюда с КБЖУ (RU).
+PARSE_FOOD_SYSTEM_PROMPT = (
+    "Ты — внимательный нутрициолог. Пользователь голосом/текстом описал, что съел "
+    "(например: «на завтрак два варёных яйца, 100 г колбасы и 100 г хлеба»). "
+    "Извлеки КАЖДЫЙ продукт/блюдо с учётом количества и оцени его КБЖУ.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '  "meal_type" — "breakfast" | "lunch" | "dinner" | "snack" — приём пищи из фразы '
+    "(завтрак->breakfast, обед->lunch, ужин->dinner, перекус->snack); если не указано — null;\n"
+    '  "items" — массив блюд, по одному объекту на продукт: '
+    '{"dish_name": строка на русском, "calories": целое ккал, "proteins": число г, '
+    '"fats": число г, "carbs": число г}.\n\n'
+    "Правила:\n"
+    "- Учитывай количество/вес (штуки, граммы) при оценке.\n"
+    "- Оценивай реалистично; для настоящей еды калории и БЖУ больше нуля.\n"
+    "- Не добавляй того, чего нет в описании; если еды в тексте нет — items пустой.\n"
+    "- dish_name — на русском языке."
+)
+
+# Английский аналог: те же ключи JSON, dish_name — на английском.
+PARSE_FOOD_SYSTEM_PROMPT_EN = (
+    "You are an attentive nutritionist. The user described by voice/text what they ate "
+    '(e.g. "for breakfast two boiled eggs, 100 g of sausage and 100 g of bread"). '
+    "Extract EACH product/dish taking quantity into account and estimate its calories and macros.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '  "meal_type" — "breakfast" | "lunch" | "dinner" | "snack" — the meal detected from the '
+    "phrase; if not stated — null;\n"
+    '  "items" — array of dishes, one object per product: '
+    '{"dish_name": string in English, "calories": integer kcal, "proteins": number g, '
+    '"fats": number g, "carbs": number g}.\n\n'
+    "Rules:\n"
+    "- Take the stated quantity/weight (pieces, grams) into account.\n"
+    "- Estimate realistically; for real food calories and macros are greater than zero.\n"
+    "- Do not add anything not in the description; if there is no food — items is empty.\n"
+    "- dish_name must be in English."
+)
+
+
+def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg", lang: str | None = None) -> str:
+    """
+    Распознаёт речь в тексте через OpenAI Whisper (whisper-1).
+
+    audio_bytes — байты аудио (ogg/webm/mp3/m4a/wav и т.п.);
+    filename    — имя файла с расширением (важно для определения формата Whisper);
+    lang        — подсказка языка ("ru"/"en"); если не задан — Whisper определит сам.
+
+    Возвращает распознанный текст (без крайних пробелов). При пустом аудио,
+    пустом результате или ошибке Whisper выбрасывает AIError.
+    """
+    if not audio_bytes:
+        raise AIError("Пустое аудио — нечего распознавать")
+
+    # Подсказка языка только как двухбуквенный ISO-639-1, иначе не передаём.
+    norm = None
+    code = str(lang or "").strip().lower()
+    if code.startswith("ru"):
+        norm = "ru"
+    elif code.startswith("en"):
+        norm = "en"
+
+    client = OpenAI()
+    try:
+        kwargs = {
+            "model": "whisper-1",
+            "file": (filename or "audio.ogg", audio_bytes),
+        }
+        if norm:
+            kwargs["language"] = norm
+        resp = client.audio.transcriptions.create(**kwargs)
+        text = (getattr(resp, "text", "") or "").strip()
+    except Exception as exc:  # сеть, ключ, неверный формат и т.п.
+        logger.warning("transcribe_audio: ошибка Whisper: %s", exc)
+        raise AIError(f"Не удалось распознать речь: {exc}")
+
+    if not text:
+        raise AIError("Whisper вернул пустой текст")
+
+    logger.info("transcribe_audio: распознано символов=%d, lang=%s", len(text), norm or "auto")
+    return text
+
+
+def parse_food_text(text: str, lang: str = "ru") -> dict:
+    """
+    По текстовому описанию приёма пищи извлекает список блюд с КБЖУ и определяет
+    тип приёма пищи.
+
+    Возвращает {"meal_type": "breakfast"|"lunch"|"dinner"|"snack"|None,
+                "items": [{"dish_name","calories","proteins","fats","carbs"}, ...]}.
+
+    Параметр lang ("ru"/"en") управляет языком значений dish_name. При неудаче
+    обращения к ИИ или отсутствии блюд выбрасывает AIError.
+    """
+    lang = _normalize_lang(lang)
+    if not text or not str(text).strip():
+        raise AIError("Пустой текст для разбора")
+
+    body = str(text).strip()
+    if lang == "en":
+        user_prompt = (
+            "Meal description:\n" + body
+            + "\n\nReturn the result strictly in JSON format following the instructions."
+        )
+    else:
+        user_prompt = (
+            "Описание приёма пищи:\n" + body
+            + "\n\nВерни результат строго в формате JSON по инструкции."
+        )
+
+    system_prompt = _pick_prompt(
+        PARSE_FOOD_SYSTEM_PROMPT, PARSE_FOOD_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(system_prompt, user_prompt, log_tag="parse_food")
+
+    # Приём пищи: валидируем по набору, иначе None.
+    meal_type = data.get("meal_type")
+    if isinstance(meal_type, str) and meal_type.strip().lower() in _VOICE_MEAL_TYPES:
+        meal_type = meal_type.strip().lower()
+    else:
+        meal_type = None
+
+    # Блюда: чистим типы, пропускаем мусор.
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    items: list[dict] = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            continue
+        dish_name = it.get("dish_name")
+        if not isinstance(dish_name, str) or not dish_name.strip():
+            continue
+        items.append(
+            {
+                "dish_name": dish_name.strip(),
+                "calories": _coerce_int(it.get("calories")),
+                "proteins": _coerce_float(it.get("proteins")),
+                "fats": _coerce_float(it.get("fats")),
+                "carbs": _coerce_float(it.get("carbs")),
+            }
+        )
+
+    if not items:
+        raise AIError(
+            "Не удалось распознать блюда в описании",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return {"meal_type": meal_type, "items": items}

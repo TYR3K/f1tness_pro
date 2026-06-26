@@ -497,3 +497,29 @@ class StarsInvoiceOut(BaseModel):
     """Ссылка-счёт Telegram Stars, которую фронт открывает для оплаты."""
 
     invoice_link: str                            # invoice link от Bot API
+
+
+# --------------------------------------------------------------------------- #
+#  Голосовой ввод еды (Этап 2): распознавание речи -> разбор блюд с КБЖУ
+# --------------------------------------------------------------------------- #
+class VoiceItemOut(BaseModel):
+    """Одно блюдо, распознанное из голосового описания приёма пищи."""
+
+    dish_name: str          # название блюда (на языке пользователя)
+    calories: int           # калории, ккал
+    proteins: float         # белки, г
+    fats: float             # жиры, г
+    carbs: float            # углеводы, г
+
+
+class VoiceFoodOut(BaseModel):
+    """Результат голосового ввода еды.
+
+    transcript — распознанный текст; meal_type — определённый приём пищи
+    (breakfast|lunch|dinner|snack) или None, если его не удалось понять;
+    items — список разобранных блюд с оценкой КБЖУ.
+    """
+
+    transcript: str                              # распознанный текст речи
+    meal_type: Optional[str] = None              # breakfast|lunch|dinner|snack|None
+    items: List[VoiceItemOut] = []               # разобранные блюда с КБЖУ
