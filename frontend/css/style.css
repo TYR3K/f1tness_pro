@@ -100,7 +100,10 @@ a,
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
-  padding: 16px 16px;
+  /* Верхний отступ учитывает безопасную зону Telegram (вырез экрана + плавающие
+     кнопки Close/«…» сверху) — иначе при открытии из поиска контент уезжает
+     под элементы Telegram. Вне Telegram переменная не задана -> отступ 16px. */
+  padding: calc(16px + var(--tg-safe-top, 0px)) 16px 16px;
   padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 44px);
 }
 

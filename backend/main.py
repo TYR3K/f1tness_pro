@@ -1390,4 +1390,19 @@ async def payment_tribute_webhook(
 #  Статика фронтенда — монтируется ПОСЛЕДНЕЙ, чтобы API-маршруты были в приоритете
 # --------------------------------------------------------------------------- #
 frontend_dir = Path(__file__).resolve().parent.parent / "frontend"
+
+
+# index.html отдаём с no-cache, чтобы Telegram не кешировал старую «оболочку» и
+# всегда видел свежие ссылки на ассеты (css/js?v=...). Сами ассеты кешируются по
+# версии в query — это лечит «приложение не обновляется после деплоя».
+@app.get("/", include_in_schema=False)
+def serve_index():
+    from fastapi.responses import FileResponse
+
+    return FileResponse(
+        str(frontend_dir / "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
 app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="static")

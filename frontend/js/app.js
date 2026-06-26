@@ -648,6 +648,28 @@
    * ===================================================================== */
 
   /**
+   * Прокидывает безопасные отступы Telegram в CSS-переменные:
+   *   --tg-safe-top    — вырез экрана + плавающие кнопки Telegram сверху;
+   *   --tg-safe-bottom — нижняя безопасная зона.
+   * Критично при открытии из поиска/по ссылке (полноэкранный режим), иначе
+   * контент уезжает под верхние элементы Telegram (Close/«…»).
+   */
+  function applySafeArea() {
+    if (!App.tg) return;
+    try {
+      var sa = App.tg.safeAreaInset || {};
+      var csa = App.tg.contentSafeAreaInset || {};
+      var top = (Number(sa.top) || 0) + (Number(csa.top) || 0);
+      var bottom = (Number(sa.bottom) || 0) + (Number(csa.bottom) || 0);
+      var root = document.documentElement.style;
+      root.setProperty("--tg-safe-top", top + "px");
+      root.setProperty("--tg-safe-bottom", bottom + "px");
+    } catch (e) {
+      /* безопасные зоны — не критичны, игнорируем сбой */
+    }
+  }
+
+  /**
    * Применяет тему Telegram к CSS-переменным (если данные доступны).
    * Делается мягко: при отсутствии данных просто используется дизайн по умолчанию.
    */
@@ -664,7 +686,10 @@
           stable + "px"
         );
       }
-      // Подписка на изменение размеров вьюпорта (клавиатура, разворот).
+      // Безопасные зоны Telegram (вырез + плавающие кнопки сверху).
+      applySafeArea();
+
+      // Подписка на изменение размеров вьюпорта (клавиатура, разворот) и зон.
       if (typeof App.tg.onEvent === "function") {
         App.tg.onEvent("viewportChanged", function () {
           var h = App.tg.viewportStableHeight;
@@ -674,7 +699,10 @@
               h + "px"
             );
           }
+          applySafeArea();
         });
+        App.tg.onEvent("safeAreaChanged", applySafeArea);
+        App.tg.onEvent("contentSafeAreaChanged", applySafeArea);
       }
     } catch (e) {
       // Тема — не критичный функционал, ошибки игнорируем.
