@@ -15,6 +15,10 @@ ORM-модели приложения (SQLAlchemy).
   - TrainingReminder       — гибкое напоминание о тренировке (дни недели + время);
   - SupplementReminder     — напоминание о приёме спортпита (метка + время);
   - SupplementReminderItem — связь напоминания спортпита с конкретной добавкой.
+
+Таблицы подписки и доступа (Этап 1):
+  - Payment   — журнал успешных платежей за подписку (Stars / Tribute и т.п.);
+  - ProGrant  — журнал ручной выдачи/отзыва доступа владельцем (через бота).
 """
 
 from datetime import datetime
@@ -73,6 +77,25 @@ class User(Base):
     # (например: "сон", "восстановление", "сила", "энергия", "иммунитет"
     # или произвольный текст). Может отсутствовать.
     supplement_goal = Column(String, nullable=True)
+
+    # --- Поля подписки и доступа (Этап 1, добавлены поверх таблицы) ---
+    # Тип подписки: "free" | "monthly" | "yearly" | "lifetime".
+    subscription_type = Column(String, nullable=True, default="free")
+
+    # До какой даты (UTC) действует подписка. None — нет срока:
+    # либо подписки нет (free), либо она пожизненная (lifetime).
+    subscription_until = Column(DateTime, nullable=True)
+
+    # Является ли пользователь владельцем приложения (определяется по OWNER_ID).
+    # Владельцу всегда доступен premium-функционал.
+    is_owner = Column(Boolean, nullable=True, default=False)
+
+    # Счётчик использованных бесплатных сканирований за текущие сутки.
+    daily_scans_used = Column(Integer, nullable=True, default=0)
+
+    # Дата (ISO "YYYY-MM-DD"), к которой относится счётчик daily_scans_used.
+    # При наступлении новых суток счётчик обнуляется.
+    daily_scans_date = Column(String, nullable=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -349,3 +372,62 @@ class SupplementReminderItem(Base):
 
     # Ссылка на конкретную добавку пользователя.
     supplement_id = Column(Integer, ForeignKey("supplements.id"))
+
+
+class Payment(Base):
+    """
+    Журнал успешных платежей за подписку.
+
+    Сюда пишется каждая успешная оплата (Telegram Stars, Tribute и т.п.) —
+    для истории и аналитики. На доступ напрямую не влияет: доступ определяется
+    полями подписки в таблице users, которые обновляются при активации.
+    """
+
+    __tablename__ = "payments"
+
+    # Идентификатор платежа (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Telegram ID плательщика (с индексом для выборок по пользователю).
+    telegram_id = Column(BigInteger, index=True)
+
+    # Платёжный провайдер: "stars" | "tribute" | "owner" (ручная выдача) и т.п.
+    provider = Column(String)
+
+    # Сумма платежа (в единицах провайдера; для Stars — количество звёзд).
+    amount = Column(Float)
+
+    # Валюта платежа (для Telegram Stars — "XTR").
+    currency = Column(String)
+
+    # Какой тариф был оплачён: "monthly" | "yearly" | "lifetime".
+    subscription_type = Column(String)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProGrant(Base):
+    """
+    Журнал ручной выдачи/отзыва premium-доступа владельцем приложения.
+
+    Заполняется при выполнении команд бота /givepro и /revokepro (доступны
+    строго владельцу по OWNER_ID). Служит для аудита действий владельца.
+    """
+
+    __tablename__ = "pro_grants"
+
+    # Идентификатор записи (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Кто выдал/отозвал доступ — Telegram ID владельца (OWNER_ID).
+    granted_by = Column(BigInteger)
+
+    # Кому выдан/отозван доступ — Telegram ID целевого пользователя.
+    granted_to = Column(BigInteger)
+
+    # Действие: "give" (выдать) | "revoke" (отозвать).
+    action = Column(String)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)

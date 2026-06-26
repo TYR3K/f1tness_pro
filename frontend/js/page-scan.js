@@ -13,6 +13,12 @@
  *      в рацион за сегодня (App.api.addDiary) с отредактированными значениями.
  *   6. Корректно обрабатывать ошибки (сеть/AI/неверный файл) с кнопкой повтора.
  *
+ * Подписка (Этап 1): сканирование РАБОТАЕТ для бесплатных пользователей, но с
+ *   дневным лимитом. На экране загрузки показываем счётчик «Осталось N из 3
+ *   бесплатных сканирований» (для premium — «Безлимит»/скрыт). Если бэкенд
+ *   отвечает 402 про исчерпанный лимит — вместо экрана ошибки показываем единый
+ *   App.paywall (контроль доступа серверный, фронт лишь показывает).
+ *
  * Весь UI-текст на русском. Идентификаторы/ключи — на английском.
  */
 (function () {
@@ -28,6 +34,7 @@
     base: null,            // исходные («сырые») значения анализа для пропорционального пересчёта
     edited: null,          // текущие отредактированные значения формы { dish_name, weight, calories, proteins, fats, carbs }
     mealType: "breakfast", // выбранный приём пищи по умолчанию
+    scans: null,           // последний ответ getScansRemaining { used, limit, remaining, is_premium } или null
   };
 
   // Соответствие ключей приёмов пищи и русских подписей (для кнопок-чипов).
@@ -111,6 +118,94 @@
     if (App && typeof App.haptic === "function") App.haptic(kind);
   }
 
+  // Премиум-статус пользователя (источник истины — App; здесь только удобный доступ).
+  function isPremium() {
+    return !!(App && typeof App.isPremium === "function" && App.isPremium());
+  }
+
+  // ===== Лимит бесплатных сканирований =====
+
+  // Эвристика: похоже ли сообщение/ошибка на «лимит сканирований» (HTTP 402).
+  // Бэкенд при free отдаёт detail {error:"scan_limit", message}; App.api бросает
+  // Error с этим message. Дополнительно проверяем числовой код 402, если он есть.
+  function isScanLimitError(err) {
+    if (!err) return false;
+    var status = err.status || err.code || err.httpStatus;
+    if (status === 402 || status === "402") return true;
+    var msg = (err && err.message ? String(err.message) : "").toLowerCase();
+    if (!msg) return false;
+    return (
+      msg.indexOf("лимит") !== -1 ||
+      msg.indexOf("scan") !== -1 ||
+      msg.indexOf("scan_limit") !== -1 ||
+      msg.indexOf("402") !== -1 ||
+      msg.indexOf("сканир") !== -1
+    );
+  }
+
+  // Запрашивает остаток бесплатных сканирований и обновляет счётчик на экране.
+  // Best-effort: при ошибке просто не показываем счётчик (основной поток не ломаем).
+  function loadScansRemaining() {
+    if (!(App && App.api && typeof App.api.getScansRemaining === "function")) return;
+    App.api
+      .getScansRemaining()
+      .then(function (res) {
+        state.scans = res || null;
+        updateScanCounter();
+      })
+      .catch(function () {
+        // Счётчик вспомогательный — при сбое тихо скрываем.
+        state.scans = null;
+        updateScanCounter();
+      });
+  }
+
+  // Возвращает HTML текущего счётчика сканирований (или "" если показывать нечего).
+  function scanCounterHtml() {
+    // Премиум / безлимит — либо «Безлимит», либо скрываем при remaining === -1.
+    var s = state.scans;
+    if (isPremium()) {
+      return (
+        '<p class="scan-counter scan-counter--premium">' +
+        "Сканирование без ограничений" +
+        "</p>"
+      );
+    }
+    if (!s) return ""; // нет данных — ничего не показываем
+    var remaining = num(s.remaining);
+    if (s.is_premium || s.remaining === -1 || remaining < 0) {
+      // На всякий случай дублируем premium-ветку, если статус пришёл из ответа.
+      return (
+        '<p class="scan-counter scan-counter--premium">' +
+        "Сканирование без ограничений" +
+        "</p>"
+      );
+    }
+    var limit = num(s.limit);
+    var low = remaining <= 0 ? " scan-counter--empty" : "";
+    if (remaining <= 0) {
+      return (
+        '<p class="scan-counter scan-counter--free' + low + '">' +
+        "Бесплатные сканирования на сегодня закончились" +
+        "</p>"
+      );
+    }
+    return (
+      '<p class="scan-counter scan-counter--free' + low + '">' +
+      "Осталось " + esc(fmt(remaining)) + " из " + esc(fmt(limit)) +
+      " бесплатных сканирований" +
+      "</p>"
+    );
+  }
+
+  // Перерисовывает только узел счётчика на экране загрузки (если он сейчас виден).
+  function updateScanCounter() {
+    if (!viewEl) return;
+    var slot = viewEl.querySelector("#scan-counter-slot");
+    if (!slot) return; // мы не на экране загрузки — обновлять нечего
+    slot.innerHTML = scanCounterHtml();
+  }
+
   // ===== Корневой элемент представления =====
   // viewEl передаётся в onShow и сохраняется для перерисовок.
   var viewEl = null;
@@ -155,6 +250,8 @@
           '<button type="button" class="btn btn-cta btn-block" id="scan-pick">' +
             "Сфотографировать / Загрузить" +
           "</button>" +
+          // Счётчик бесплатных сканирований (заполняется асинхронно из state.scans).
+          '<div id="scan-counter-slot">' + scanCounterHtml() + "</div>" +
         "</div>" +
       "</section>";
 
@@ -173,6 +270,9 @@
       if (!f) return;
       onFileChosen(f);
     });
+
+    // Подгружаем актуальный остаток сканирований (best-effort) — обновит счётчик.
+    loadScansRemaining();
   }
 
   // --- Экран 2: превью выбранного фото (анализ идёт автоматически) ---
@@ -451,6 +551,38 @@
     });
   }
 
+  // --- Экран лимита сканирований (единый paywall) ---
+  // Вместо экрана ошибки при HTTP 402 (исчерпан лимит) показываем заблокированную
+  // фичу через App.paywall. Контроль доступа серверный — фронт лишь показывает.
+  // Освобождаем превью и сбрасываем выбранный файл, чтобы не зависнуть на превью.
+  function renderScanLimit() {
+    if (App && typeof App.scrollTop === "function") App.scrollTop();
+
+    revokePreview();
+    state.file = null;
+    state.result = null;
+    state.base = null;
+    state.edited = null;
+
+    if (App && typeof App.paywall === "function") {
+      App.paywall(viewEl, {
+        icon: "📷",
+        title: "Лимит сканирований",
+        desc: "На сегодня бесплатные сканирования закончились",
+        bullets: [
+          "Безлимитные сканирования по подписке",
+          "AI-распознавание еды по фото",
+        ],
+      });
+      return;
+    }
+    // Запасной вариант, если единый paywall недоступен — обычный экран ошибки.
+    renderError(
+      "На сегодня бесплатные сканирования закончились. Оформите подписку для безлимита.",
+      "upload"
+    );
+  }
+
   // ===== Логика =====
 
   // Обработка выбранного файла: валидация типа, создание превью, запуск анализа.
@@ -524,9 +656,21 @@
         };
 
         render();
+
+        // Успешный анализ потратил одно бесплатное сканирование — обновляем счётчик
+        // (отрисуется при следующем возврате на экран загрузки; данные подтянем заранее).
+        loadScansRemaining();
       })
       .catch(function (err) {
         if (state.file !== fileAtStart) return;
+        // Если бэкенд отверг запрос из-за исчерпанного лимита (402) — показываем
+        // единый paywall вместо обычного экрана ошибки.
+        if (isScanLimitError(err)) {
+          renderScanLimit();
+          // Подтянем актуальный остаток (на случай, если paywall сменится).
+          loadScansRemaining();
+          return;
+        }
         var msg =
           (err && err.message) ||
           "Не удалось проанализировать фото. Проверьте соединение и попробуйте снова.";

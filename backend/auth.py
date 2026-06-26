@@ -21,6 +21,7 @@ from urllib.parse import parse_qsl
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from backend import config
 from backend.database import get_db
 from backend.models import User
 
@@ -134,6 +135,18 @@ def _upsert_user(db: Session, *, telegram_id: int, username, first_name, photo_u
 
     db.commit()
     db.refresh(user)
+
+    # Инициализация владельца приложения. Владелец определяется СТРОГО по
+    # telegram_id == config.OWNER_ID (никогда по username). Один раз помечаем
+    # его как is_owner и выдаём пожизненную подписку, чтобы premium-функции были
+    # доступны без отдельной оплаты. Делаем это идемпотентно: если флаг уже стоит,
+    # ничего не трогаем.
+    if config.OWNER_ID and telegram_id == config.OWNER_ID and not user.is_owner:
+        user.is_owner = True
+        user.subscription_type = "lifetime"
+        db.commit()
+        db.refresh(user)
+
     return user
 
 

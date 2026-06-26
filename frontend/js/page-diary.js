@@ -296,16 +296,36 @@
   }
 
   /**
+   * Возвращает true, если пользователь премиум (через единый App.isPremium).
+   * Базовый дневник бесплатен; платная только AI-рекомендация «Что съесть?».
+   * @returns {boolean}
+   */
+  function isPremium() {
+    return !!(App && typeof App.isPremium === "function" && App.isPremium());
+  }
+
+  /**
    * Разметка панели действий рациона: «➕ Добавить вручную» и «🤖 Что съесть?».
+   * Кнопка «Что съесть?» — платная: для бесплатных пользователей помечаем её
+   * замком (🔒). Контроль доступа серверный, фронт лишь показывает paywall.
    * @returns {string}
    */
   function actionsHtml() {
+    var locked = !isPremium();
+    // Для бесплатного пользователя добавляем замок и пометку платной фичи.
+    var recommendLabel = locked ? "🤖 Что съесть? 🔒" : "🤖 Что съесть?";
+    var recommendCls =
+      "btn btn--ghost diary-actions__btn diary-actions__btn--recommend" +
+      (locked ? " is-locked" : "");
+
     return (
       '<div class="diary-actions">' +
       '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
       'data-action="manual">➕ Добавить вручную</button>' +
-      '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
-      'data-action="recommend">🤖 Что съесть?</button>' +
+      '<button class="' + recommendCls + '" type="button" ' +
+      'data-action="recommend"' + (locked ? ' data-locked="1"' : "") + ">" +
+      App.escapeHtml(recommendLabel) +
+      "</button>" +
       "</div>" +
       // Контейнер для разворачиваемой панели (ручной ввод / рекомендации).
       '<div id="diary-panel" class="diary-panel"></div>'
@@ -390,7 +410,12 @@
     if (state.panel === "manual") {
       openManualPanel();
     } else if (state.panel === "recommend") {
-      openRecommendPanel();
+      // Платную панель восстанавливаем с учётом статуса: free -> paywall.
+      if (isPremium()) {
+        openRecommendPanel();
+      } else {
+        openRecommendPaywall();
+      }
     }
 
     // Карточка напоминаний о еде (загружается асинхронно, со своим состоянием).
@@ -503,6 +528,16 @@
     var action = ev.currentTarget.getAttribute("data-action");
     App.haptic && App.haptic("light");
 
+    // «Что съесть?» — платная фича. Для бесплатных пользователей вместо панели
+    // рекомендаций показываем единый paywall (ведёт на экран подписки).
+    // Базовый дневник (ручной ввод, недавние, удаление, баланс) остаётся бесплатным.
+    if (action === "recommend" && !isPremium()) {
+      state.panel = "recommend";
+      syncActionButtons();
+      openRecommendPaywall();
+      return;
+    }
+
     // Повторный клик по той же кнопке закрывает панель.
     if (state.panel === action) {
       state.panel = null;
@@ -519,6 +554,46 @@
       openManualPanel();
     } else if (action === "recommend") {
       openRecommendPanel();
+    }
+  }
+
+  /**
+   * Показывает единый paywall для платной фичи «Что съесть?» в области панели
+   * действий (без ухода со страницы). Кнопка внутри ведёт на экран подписки.
+   * Контроль доступа серверный — это лишь визуальная заглушка.
+   */
+  function openRecommendPaywall() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    if (App && typeof App.paywall === "function") {
+      App.paywall(panel, {
+        icon: "🤖",
+        title: "Что съесть?",
+        desc: "AI подберёт блюда под остаток вашей дневной нормы КБЖУ",
+        bullets: [
+          "Персональные рекомендации под цель",
+          "Учёт остатка калорий и БЖУ за день",
+          "Добавление подсказанного блюда в один тап",
+        ],
+      });
+      return;
+    }
+
+    // Запасной вариант, если единый paywall недоступен — ведём в подписку кнопкой.
+    panel.innerHTML =
+      '<section class="card diary-recommend diary-recommend--locked">' +
+      '<h2 class="diary-recommend__title">🔒 Что съесть?</h2>' +
+      '<p class="diary-recommend__sub">AI-подсказки доступны по подписке.</p>' +
+      '<button type="button" class="btn btn--cta btn-block diary-recommend__subscribe">' +
+      "Оформить подписку</button>" +
+      "</section>";
+    var subBtn = panel.querySelector(".diary-recommend__subscribe");
+    if (subBtn) {
+      subBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (App && typeof App.navigate === "function") App.navigate("subscription");
+      });
     }
   }
 

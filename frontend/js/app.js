@@ -28,6 +28,18 @@
       diaryByDate: {} // кэш дневника по датам: { "YYYY-MM-DD": DiaryDayOut }
     },
 
+    // Статус подписки. По умолчанию — НЕ премиум (fail-safe: при сбое
+    // загрузки показываем paywall, а не открываем платные фичи).
+    // Заполняется в App.init после авторизации через App.api.getSubscription().
+    subscription: {
+      is_premium: false,
+      is_owner: false,
+      subscription_type: "free",
+      subscription_until: null,
+      tariffs: {},
+      tribute_url: null
+    },
+
     // Реестр зарегистрированных страниц: { name: controller }.
     _pages: {},
 
@@ -103,13 +115,20 @@
             if (data && typeof data === "object") {
               if (typeof data.detail === "string") {
                 detail = data.detail;
-              } else if (data.detail) {
-                // detail может быть массивом ошибок валидации pydantic.
-                try {
-                  detail = JSON.stringify(data.detail);
-                } catch (e2) {
-                  detail = String(data.detail);
+              } else if (data.detail && typeof data.detail === "object") {
+                // detail может быть объектом {error, message} (например 402)
+                // или массивом ошибок валидации pydantic.
+                if (typeof data.detail.message === "string") {
+                  detail = data.detail.message;
+                } else {
+                  try {
+                    detail = JSON.stringify(data.detail);
+                  } catch (e2) {
+                    detail = String(data.detail);
+                  }
                 }
+              } else if (data.detail) {
+                detail = String(data.detail);
               } else if (typeof data.message === "string") {
                 detail = data.message;
               }
@@ -117,7 +136,15 @@
             if (!detail) {
               detail = raw || "Ошибка " + res.status;
             }
-            throw new Error(detail);
+            var err = new Error(detail);
+            // Прокидываем HTTP-статус и машиночитаемый код ошибки наверх,
+            // чтобы страницы могли отличить paywall (402) от прочих сбоев.
+            err.status = res.status;
+            if (data && data.detail && typeof data.detail === "object" &&
+                typeof data.detail.error === "string") {
+              err.code = data.detail.error;
+            }
+            throw err;
           }
 
           return data;
@@ -359,6 +386,34 @@
         method: "POST",
         body: payload
       });
+    },
+
+    /* -------------------------------------------------------------------
+     *  ПОДПИСКА И ОПЛАТА (Этап 1)
+     * ------------------------------------------------------------------- */
+
+    // Статус подписки пользователя.
+    // Ответ: {subscription_type, subscription_until, is_premium, is_owner,
+    //   tariffs:{monthly:{stars,days}, yearly:{stars,days}, lifetime:{stars,days}},
+    //   tribute_url}.
+    getSubscription: function () {
+      return request("/subscription/status");
+    },
+
+    // Остаток бесплатных сканирований на сегодня.
+    // Ответ: {used, limit, remaining (-1=безлимит), is_premium}.
+    getScansRemaining: function () {
+      return request("/scans/remaining");
+    },
+
+    // Создание инвойса Telegram Stars для оплаты подписки.
+    // Тело: {tariff:"monthly"|"yearly"|"lifetime"}.
+    // Ответ: {invoice_link}.
+    createStarsInvoice: function (tariff) {
+      return request("/payment/stars/invoice", {
+        method: "POST",
+        body: { tariff: tariff }
+      });
     }
   };
 
@@ -368,7 +423,7 @@
 
   /**
    * Регистрирует страницу.
-   * @param {string} name  одно из {scan, diary, account}
+   * @param {string} name  одно из {scan, diary, account, workouts, supplements, subscription}
    * @param {object} controller { onShow(viewEl), onHide?() }
    */
   App.registerPage = function (name, controller) {
@@ -428,6 +483,164 @@
     // Сбрасываем прокрутку наверх: иначе после смены экрана (или короткого
     // экрана ошибки) можно «застрять» прокрученным вниз без возможности вернуться.
     App.scrollTop();
+  };
+
+  /* =====================================================================
+   *  ПОДПИСКА: ЕДИНЫЙ PAYWALL И ОПЛАТА
+   *  Контроль доступа — на бэкенде (платные роуты отдают 402). Фронт лишь
+   *  ПОКАЗЫВАЕТ paywall и предлагает оформить подписку, не дублируя проверки
+   *  как «безопасность».
+   * ===================================================================== */
+
+  /**
+   * Премиум ли текущий пользователь (по кэшированному статусу).
+   * @returns {boolean}
+   */
+  App.isPremium = function () {
+    return !!(App.subscription && App.subscription.is_premium);
+  };
+
+  /**
+   * Перезагружает статус подписки в App.subscription (best-effort).
+   * При ошибке статус НЕ меняется (остаётся прежним).
+   * @returns {Promise}
+   */
+  App.refreshSubscription = function () {
+    return App.api
+      .getSubscription()
+      .then(function (status) {
+        if (status && typeof status === "object") {
+          App.subscription = status;
+        }
+        return App.subscription;
+      })
+      .catch(function (err) {
+        // Не критично: оставляем прежний статус. Логируем для диагностики.
+        console.warn("Не удалось обновить статус подписки: " + err.message);
+        return App.subscription;
+      });
+  };
+
+  /**
+   * Рендерит экран-заглушку (paywall) заблокированной фичи в контейнер.
+   * @param {HTMLElement} viewEl  контейнер для вставки
+   * @param {object} [opts] { icon, title, desc, bullets:[...] }
+   */
+  App.paywall = function (viewEl, opts) {
+    if (!viewEl) {
+      return;
+    }
+    opts = opts || {};
+    var icon = opts.icon || "🔒";
+    var title = opts.title || "Премиум-функция";
+    var desc = opts.desc || "Эта возможность доступна по подписке";
+    var bullets = Array.isArray(opts.bullets) ? opts.bullets : [];
+
+    var bulletsHtml = "";
+    if (bullets.length) {
+      var items = "";
+      for (var i = 0; i < bullets.length; i++) {
+        items +=
+          '<li class="paywall-bullet">' +
+          '<span class="paywall-bullet-mark" aria-hidden="true">✓</span>' +
+          '<span class="paywall-bullet-text">' +
+          App.escapeHtml(bullets[i]) +
+          "</span>" +
+          "</li>";
+      }
+      bulletsHtml = '<ul class="paywall-bullets">' + items + "</ul>";
+    }
+
+    var html =
+      '<section class="paywall">' +
+      '<div class="card paywall-card">' +
+      '<div class="paywall-icon" aria-hidden="true">' +
+      App.escapeHtml(icon) +
+      "</div>" +
+      '<h2 class="paywall-title">' +
+      App.escapeHtml(title) +
+      "</h2>" +
+      '<p class="paywall-desc">' +
+      App.escapeHtml(desc) +
+      "</p>" +
+      bulletsHtml +
+      "</div>" +
+      '<div class="paywall-lock">' +
+      '<span class="paywall-lock-icon" aria-hidden="true">🔒</span>' +
+      '<span class="paywall-lock-text">Недоступно — нужна подписка</span>' +
+      "</div>" +
+      '<button type="button" class="btn btn-cta btn-block paywall-cta" id="paywall-subscribe">' +
+      "Оформить подписку" +
+      "</button>" +
+      "</section>";
+
+    viewEl.innerHTML = html;
+
+    var btn = viewEl.querySelector("#paywall-subscribe");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        App.haptic("light");
+        App.navigate("subscription");
+      });
+    }
+  };
+
+  /**
+   * Требует премиум для показа фичи. Если премиум есть — возвращает true.
+   * Иначе рендерит paywall в контейнер и возвращает false.
+   * Страницы используют как ранний выход:
+   *   if (!App.requirePremium(viewEl, {...})) return;
+   * @param {HTMLElement} viewEl
+   * @param {object} [opts]
+   * @returns {boolean}
+   */
+  App.requirePremium = function (viewEl, opts) {
+    if (App.isPremium()) {
+      return true;
+    }
+    App.paywall(viewEl, opts);
+    return false;
+  };
+
+  /**
+   * Запускает оплату подписки тарифом через Telegram Stars.
+   * Получает invoice_link с бэкенда и открывает нативный инвойс Telegram.
+   * После успешной оплаты обновляет статус и переоткрывает текущую страницу.
+   * @param {string} tariff "monthly"|"yearly"|"lifetime"
+   * @returns {Promise}
+   */
+  App.payStars = function (tariff) {
+    return App.api
+      .createStarsInvoice(tariff)
+      .then(function (res) {
+        var link = res && res.invoice_link;
+        if (!link) {
+          App.toast("Не удалось создать счёт на оплату");
+          return;
+        }
+        if (App.tg && typeof App.tg.openInvoice === "function") {
+          App.tg.openInvoice(link, function (status) {
+            if (status === "paid") {
+              App.refreshSubscription().then(function () {
+                App.toast("Подписка активна!");
+                // Переоткрываем текущий экран, чтобы UI отразил новый статус.
+                if (App._current) {
+                  App.navigate(App._current);
+                }
+              });
+            } else if (status === "failed") {
+              App.toast("Оплата не прошла");
+            }
+            // status === "cancelled" / "pending" — молча игнорируем.
+          });
+        } else {
+          // Вне Telegram оплата недоступна.
+          App.toast("Оплата доступна в Telegram");
+        }
+      })
+      .catch(function (err) {
+        App.toast(err && err.message ? err.message : "Ошибка оплаты");
+      });
   };
 
   /* =====================================================================
@@ -514,9 +727,11 @@
       })(tabs[i]);
     }
 
-    // Best-effort авторизация: подтверждаем пользователя и кэшируем профиль.
-    // Ошибку не показываем агрессивно — приложение продолжит работать,
-    // а конкретные страницы сами обработают отказ авторизации.
+    // Best-effort авторизация: подтверждаем пользователя и кэшируем профиль,
+    // ЗАТЕМ загружаем статус подписки и только после этого делаем первую
+    // навигацию — gated-страницы должны знать статус подписки при показе.
+    // Все шаги fail-safe: ошибки не блокируют запуск, статус подписки при
+    // сбое остаётся дефолтным (НЕ премиум) — пользователю покажется paywall.
     App.api
       .verify()
       .then(function (profile) {
@@ -524,10 +739,15 @@
       })
       .catch(function (err) {
         console.warn("Авторизация не выполнена: " + err.message);
+      })
+      .then(function () {
+        // refreshSubscription сам гасит свои ошибки, статус остаётся дефолтным.
+        return App.refreshSubscription();
+      })
+      .then(function () {
+        // Стартовая страница — «Определение» (после загрузки статуса подписки).
+        App.navigate("scan");
       });
-
-    // Стартовая страница — «Определение».
-    App.navigate("scan");
   };
 
   /* =====================================================================

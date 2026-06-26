@@ -31,12 +31,20 @@ logger = logging.getLogger("main")
 # включён в dev-режиме (ALLOW_INSECURE_AUTH=1); на проде включается DEBUG_AI=1.
 DEBUG_AI = os.getenv("DEBUG_AI") == "1" or os.getenv("ALLOW_INSECURE_AUTH") == "1"
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from backend import fitness, notifications, nutrition
+from backend import (
+    config,
+    fitness,
+    notifications,
+    nutrition,
+    payment_providers,
+    subscription,
+    telegram_bot,
+)
 from backend.ai_service import (
     AIError,
     analyze_food_image,
@@ -77,6 +85,10 @@ from backend.schemas import (
     RecommendIn,
     RecommendItem,
     RecommendOut,
+    ScansRemainingOut,
+    StarsInvoiceIn,
+    StarsInvoiceOut,
+    SubscriptionStatusOut,
     SupplementIn,
     SupplementListOut,
     SupplementOut,
@@ -293,8 +305,19 @@ def update_profile(
 async def food_analyze(
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> AnalyzeOut:
-    """Принять фото, проанализировать его ИИ и вернуть КБЖУ блюда."""
+    """Принять фото, проанализировать его ИИ и вернуть КБЖУ блюда.
+
+    Для бесплатных пользователей действует дневной лимит сканирований:
+    ПЕРЕД обращением к ИИ проверяем доступность скана (assert_scan_available
+    бросит 402, если лимит исчерпан), а ПОСЛЕ успешного результата фиксируем
+    использование (record_scan). Для премиум-пользователей лимита нет.
+    """
+    # Проверяем лимит ДО любой тяжёлой работы: не читаем файл впустую и не
+    # дёргаем ИИ, если бесплатный лимит на сегодня уже исчерпан (бросит 402).
+    subscription.assert_scan_available(db, user)
+
     # Читаем не больше лимита + 1 байт, чтобы поймать превышение размера.
     image_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
     if not image_bytes:
@@ -325,6 +348,9 @@ async def food_analyze(
         if DEBUG_AI:
             detail = str(exc)
         raise HTTPException(status_code=502, detail=detail)
+
+    # Скан успешно выполнен — фиксируем использование (для премиум ничего не делает).
+    subscription.record_scan(db, user)
 
     return AnalyzeOut(
         dish_name=result["dish_name"],
@@ -491,7 +517,7 @@ def history(
 @app.post("/workout/add", response_model=WorkoutOut)
 def workout_add(
     data: WorkoutIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> Workout:
     """Добавить тренировку текущего пользователя."""
@@ -511,7 +537,7 @@ def workout_add(
 @app.get("/workout/{date}", response_model=WorkoutDayOut)
 def workout_day(
     date: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> WorkoutDayOut:
     """Вернуть тренировки за дату и суммарный расход калорий."""
@@ -529,7 +555,7 @@ def workout_day(
 @app.delete("/workout/{workout_id}")
 def workout_delete(
     workout_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> dict:
     """Удалить тренировку, если она принадлежит текущему пользователю."""
@@ -546,7 +572,7 @@ def workout_delete(
 @app.post("/workout/estimate", response_model=WorkoutEstimateOut)
 def workout_estimate(
     data: WorkoutEstimateIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
 ) -> WorkoutEstimateOut:
     """Оценить расход калорий за тренировку по типу и длительности.
 
@@ -640,7 +666,7 @@ def food_recent(
 @app.post("/food/recommend", response_model=RecommendOut)
 def food_recommend(
     data: RecommendIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
 ) -> RecommendOut:
     """Подобрать 2-3 блюда под оставшиеся на день КБЖУ с помощью ИИ."""
     # Если цель диеты не передана явно — берём из профиля пользователя.
@@ -691,7 +717,7 @@ def food_recommend(
 @app.post("/supplement/add", response_model=SupplementOut)
 def supplement_add(
     data: SupplementIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> Supplement:
     """Добавить запись о приёме спортивного питания / добавки."""
@@ -711,7 +737,7 @@ def supplement_add(
 
 @app.get("/supplement/list", response_model=SupplementListOut)
 def supplement_list(
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> SupplementListOut:
     """Вернуть список добавок пользователя."""
@@ -728,7 +754,7 @@ def supplement_list(
 @app.delete("/supplement/{supplement_id}")
 def supplement_delete(
     supplement_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> dict:
     """Удалить добавку, если она принадлежит текущему пользователю."""
@@ -744,7 +770,7 @@ def supplement_delete(
 
 @app.get("/supplement/suggest", response_model=SupplementSuggestOut)
 def supplement_suggest(
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
 ) -> SupplementSuggestOut:
     """Подсказать базовые добавки под цель пользователя с помощью ИИ.
 
@@ -903,7 +929,7 @@ def notifications_update(
 # --------------------------------------------------------------------------- #
 @app.get("/reminders/training", response_model=TrainingRemindersOut)
 def training_reminders_list(
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> TrainingRemindersOut:
     """Вернуть список напоминаний о тренировках текущего пользователя.
@@ -931,7 +957,7 @@ def training_reminders_list(
 @app.post("/reminders/training", response_model=TrainingReminderOut)
 def training_reminder_add(
     data: TrainingReminderIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> TrainingReminderOut:
     """Создать напоминание о тренировке.
@@ -962,7 +988,7 @@ def training_reminder_add(
 @app.delete("/reminders/training/{reminder_id}")
 def training_reminder_delete(
     reminder_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> dict:
     """Удалить напоминание о тренировке, если оно принадлежит пользователю."""
@@ -1022,7 +1048,7 @@ def _build_supplement_reminder_out(
 
 @app.get("/reminders/supplement", response_model=SupplementRemindersOut)
 def supplement_reminders_list(
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> SupplementRemindersOut:
     """Вернуть напоминания о приёме спортпита с названиями привязанных добавок."""
@@ -1041,7 +1067,7 @@ def supplement_reminders_list(
 @app.post("/reminders/supplement", response_model=SupplementReminderOut)
 def supplement_reminder_add(
     data: SupplementReminderIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> SupplementReminderOut:
     """Создать напоминание о приёме спортпита.
@@ -1090,7 +1116,7 @@ def supplement_reminder_add(
 @app.delete("/reminders/supplement/{reminder_id}")
 def supplement_reminder_delete(
     reminder_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> dict:
     """Удалить напоминание о спортпите вместе со связанными элементами."""
@@ -1118,7 +1144,7 @@ def supplement_reminder_delete(
 @app.post("/supplement/recommend", response_model=SupplementRecommendOut)
 def supplement_recommend(
     data: SupplementRecommendIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(subscription.require_premium),
     db: Session = Depends(get_db),
 ) -> SupplementRecommendOut:
     """Персональные рекомендации по спортпиту от ИИ.
@@ -1191,6 +1217,173 @@ def supplement_recommend(
         training_count=training_count,
         improvement_goal=data.improvement_goal,
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Подписка и доступ (Этап 1): статус, лимит сканов, оплата Stars, вебхуки
+# --------------------------------------------------------------------------- #
+@app.get("/subscription/status", response_model=SubscriptionStatusOut)
+def subscription_status(
+    user: User = Depends(get_current_user),
+) -> SubscriptionStatusOut:
+    """Вернуть статус подписки текущего пользователя и доступные тарифы.
+
+    is_premium вычисляется ТОЛЬКО на бэкенде (owner / lifetime / активная дата).
+    Эндпоинт бесплатный — нужен в т.ч. для показа экрана оформления подписки.
+    """
+    return SubscriptionStatusOut(
+        subscription_type=user.subscription_type or "free",
+        subscription_until=(
+            user.subscription_until.isoformat() if user.subscription_until else None
+        ),
+        is_premium=subscription.is_premium(user),
+        is_owner=bool(user.is_owner),
+        tariffs=config.TARIFFS,
+        tribute_url=config.TRIBUTE_URL or None,
+    )
+
+
+@app.get("/scans/remaining", response_model=ScansRemainingOut)
+def scans_remaining(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ScansRemainingOut:
+    """Вернуть остаток бесплатных сканирований еды на сегодня.
+
+    Для премиум-пользователей remaining = -1 (безлимит). Эндпоинт бесплатный —
+    фронт показывает счётчик «осталось сканов» как для free, так и для premium.
+    """
+    info = subscription.scans_info(db, user)
+    return ScansRemainingOut(
+        used=info["used"],
+        limit=info["limit"],
+        remaining=info["remaining"],
+        is_premium=info["is_premium"],
+    )
+
+
+@app.post("/payment/stars/invoice", response_model=StarsInvoiceOut)
+def payment_stars_invoice(
+    data: StarsInvoiceIn,
+    user: User = Depends(get_current_user),
+) -> StarsInvoiceOut:
+    """Создать счёт Telegram Stars для выбранного тарифа.
+
+    Тариф проверяем по config.TARIFFS (неизвестный -> 400). Ссылку-счёт создаёт
+    Bot API через telegram_bot.create_stars_invoice_link; при сбое связи с
+    Telegram (RuntimeError) отвечаем 502, чтобы фронт показал «попробуйте позже».
+    """
+    # Валидируем тариф строго по конфигу — произвольные значения не пропускаем.
+    if data.tariff not in config.TARIFFS:
+        raise HTTPException(status_code=400, detail="Неизвестный тариф")
+
+    try:
+        link = telegram_bot.create_stars_invoice_link(data.tariff, user.telegram_id)
+    except RuntimeError as exc:
+        # Не удалось создать счёт через Bot API (нет токена/недоступность Telegram).
+        logger.warning("payment/stars/invoice: %s", exc)
+        raise HTTPException(status_code=502, detail="Не удалось создать счёт. Попробуйте позже.")
+
+    return StarsInvoiceOut(invoice_link=link)
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Приём апдейтов бота от Telegram (webhook).
+
+    Без авторизации пользователя: запросы приходят напрямую от Telegram.
+    Если задан секрет вебхука, сверяем заголовок X-Telegram-Bot-Api-Secret-Token
+    и при несовпадении отвечаем 403. Любые ошибки разбора апдейта глушим и всегда
+    отвечаем {"ok": True}, чтобы Telegram не ретраил доставку бесконечно.
+    """
+    # Проверка секрета вебхука (если он сконфигурирован в env).
+    if config.TELEGRAM_WEBHOOK_SECRET:
+        header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if header_secret != config.TELEGRAM_WEBHOOK_SECRET:
+            raise HTTPException(status_code=403, detail="Неверный секрет вебхука")
+
+    try:
+        update = await request.json()
+        telegram_bot.handle_update(db, update)
+    except Exception as exc:  # noqa: BLE001 — вебхук не должен падать наружу
+        logger.warning("telegram/webhook: ошибка обработки апдейта: %s", exc)
+
+    # Telegram ждёт 200 OK; детали обработки наружу не раскрываем.
+    return {"ok": True}
+
+
+@app.post("/payment/tribute/webhook")
+async def payment_tribute_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Приём вебхука об оплате от Tribute (альтернативный провайдер подписки).
+
+    ВНИМАНИЕ: точный формат payload Tribute уточняется при подключении провайдера —
+    ниже сделан гибкий разбор (telegram_id и сумма ищутся в нескольких возможных
+    местах). Секрет проверяем по config.TRIBUTE_WEBHOOK_SECRET (заголовок или поле
+    тела); если секрет не задан — в dev-режиме пропускаем. Любые ошибки глушим и
+    ВСЕГДА отвечаем 200 {"ok": True}, не раскрывая детали наружу.
+    """
+    try:
+        # Пытаемся прочитать тело как JSON; при сбое — пустой словарь.
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001 — тело может быть не-JSON
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        # Проверка секрета (если сконфигурирован): сверяем заголовок или поле тела.
+        if config.TRIBUTE_WEBHOOK_SECRET:
+            header_secret = (
+                request.headers.get("X-Tribute-Signature")
+                or request.headers.get("X-Webhook-Secret")
+                or request.headers.get("Authorization")
+            )
+            body_secret = payload.get("secret") or payload.get("signature")
+            if config.TRIBUTE_WEBHOOK_SECRET not in (header_secret, body_secret):
+                # Неверный секрет — молча игнорируем, но отвечаем 200.
+                logger.warning("payment/tribute/webhook: неверный секрет, апдейт пропущен")
+                return {"ok": True}
+
+        # Гибко извлекаем telegram_id из payload/metadata (формат уточняется).
+        meta = payload.get("metadata") or payload.get("data") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        raw_tid = (
+            payload.get("telegram_id")
+            or payload.get("user_id")
+            or meta.get("telegram_id")
+            or meta.get("user_id")
+        )
+        telegram_id = int(raw_tid) if raw_tid is not None else None
+
+        if telegram_id:
+            # Сумма/валюта и тариф: маппинг продукта/суммы -> тариф, по умолчанию monthly.
+            amount = payload.get("amount") or meta.get("amount")
+            currency = payload.get("currency") or meta.get("currency") or "RUB"
+            tariff = (
+                payload.get("tariff")
+                or payload.get("product")
+                or meta.get("tariff")
+                or "monthly"
+            )
+            # Если пришёл неизвестный тариф — откатываемся на monthly.
+            if tariff not in config.TARIFFS:
+                tariff = "monthly"
+
+            payment_providers.activate_premium(
+                db, telegram_id, tariff, "tribute", amount, currency
+            )
+    except Exception as exc:  # noqa: BLE001 — вебхук всегда отвечает 200
+        logger.warning("payment/tribute/webhook: ошибка обработки: %s", exc)
+
+    # Всегда 200, чтобы провайдер не ретраил и мы не палили детали.
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------- #

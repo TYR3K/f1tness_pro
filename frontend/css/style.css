@@ -3732,3 +3732,603 @@ select.field__input {
     flex-basis: calc(25% - 6px);
   }
 }
+
+/* ============================================================
+   ============================================================
+   ЭТАП 1: ПОДПИСКА — ЕДИНЫЙ PAYWALL, ЭКРАН ПОДПИСКИ, СЧЁТЧИК
+   СКАНОВ, КАРТОЧКА ПОДПИСКИ В АККАУНТЕ.
+
+   Всё ниже — ДОПОЛНЕНИЕ к стилям выше; существующие правила НЕ
+   менялись. Та же пастельная палитра (--bg / --card / --accent /
+   --cta / --text / --muted / --danger), радиусы (--radius /
+   --radius-sm), тень (--shadow). Кнопки наследуют .btn
+   (min-height 52px). Контроль доступа — на бэкенде; здесь только
+   визуальная подача. Все комментарии — на русском.
+   ============================================================
+   ============================================================ */
+
+/* ============================================================
+   ЕДИНЫЙ PAYWALL (App.paywall) — заглушка заблокированной фичи.
+   Рендерится в #view (на всю страницу) или в панель (диалог
+   рекомендаций рациона). Карточка-превью ценности + мягкая, но
+   заметная плашка-замок + CTA «Оформить подписку».
+   ============================================================ */
+
+/* Корневая обёртка paywall. Плавное появление. */
+.paywall {
+  display: block;
+  animation: fadeIn .28s ease;
+}
+
+/* Карточка-превью фичи: крупная иконка, заголовок, описание, буллеты. */
+.paywall-card {
+  text-align: center;
+  /* Чуть больше внутреннего воздуха, чем у обычной .card. */
+  padding: 24px 18px;
+}
+
+/* Крупная иконка фичи в кружке-подложке. */
+.paywall-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 40px;
+  line-height: 1;
+  box-shadow: inset 0 0 0 1px rgba(58, 53, 47, .06);
+}
+
+.paywall-title {
+  font-size: 21px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.paywall-desc {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+/* Список буллетов ценности — выровнен по левому краю внутри карточки. */
+.paywall-bullets {
+  list-style: none;
+  text-align: left;
+  max-width: 320px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Один буллет: галочка + текст. */
+.paywall-bullet {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* Маркер-галочка в зелёном кружке. */
+.paywall-bullet-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: rgba(125, 155, 118, .16);
+  color: var(--cta);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.paywall-bullet-text {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+/* Плашка-замок «🔒 Недоступно — нужна подписка»: мягкий персиковый фон,
+   заметная, но не агрессивная. */
+.paywall-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(194, 102, 77, .25);
+  background: rgba(194, 102, 77, .1);
+}
+
+.paywall-lock-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.paywall-lock-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+/* CTA «Оформить подписку» — наследует .btn .btn-cta .btn-block (52px). */
+.paywall-cta {
+  margin-top: 0;
+}
+
+/* ============================================================
+   ЭКРАН «ПОДПИСКА» (page-subscription, классы sub-*)
+   ============================================================ */
+
+.sub-page {
+  display: block;
+}
+
+/* Шапка: кнопка «Назад», заголовок, подзаголовок. */
+.sub-head {
+  margin-bottom: 18px;
+}
+
+/* Кнопка «← Назад» — компактная текстовая, тактильная зона ≥44px. */
+.sub-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-bottom: 8px;
+  padding: 0 12px 0 4px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, transform .08s ease;
+}
+
+.sub-back:active {
+  background: rgba(201, 184, 168, .25);
+  color: var(--text);
+  transform: scale(.98);
+}
+
+/* Стрелка «←» внутри кнопки «Назад». */
+.sub-back__arrow {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Заголовок «💎 Подписка» (наследует .page-title). */
+.sub-title {
+  margin-bottom: 8px;
+}
+
+/* Подзаголовок (наследует .page-subtitle). */
+.sub-subtitle {
+  margin-bottom: 0;
+}
+
+/* --- Карточка текущего статуса подписки --- */
+.sub-status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Премиум-статус: зелёная акцентная подложка слева. */
+.sub-status--premium {
+  background: var(--white);
+  border-left: 4px solid var(--cta);
+}
+
+/* Бесплатный статус: нейтральная карточка. */
+.sub-status--free {
+  background: var(--white);
+  border-left: 4px solid var(--accent);
+}
+
+/* Иконка статуса (✅ / 🔓) в кружке. */
+.sub-status__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.sub-status__body {
+  min-width: 0;
+}
+
+.sub-status__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Строка «до <дата>» / «Навсегда» / пояснение для free. */
+.sub-status__until {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* У премиум-статуса срок действия подсвечиваем акцентом. */
+.sub-status--premium .sub-status__until {
+  color: var(--cta);
+  font-weight: 600;
+}
+
+/* --- Карточка «Что входит в подписку» --- */
+.sub-benefits {
+  display: block;
+}
+
+/* Заголовок секции (общий для преимуществ и тарифов). */
+.sub-section-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 14px;
+}
+
+.sub-benefits__list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Один пункт преимуществ: галочка + текст. */
+.sub-benefit {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+/* Галочка в зелёном кружке. */
+.sub-benefit__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: rgba(125, 155, 118, .16);
+  color: var(--cta);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.sub-benefit__text {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+/* --- Тарифы --- */
+.sub-tariffs {
+  display: block;
+}
+
+/* Пустое состояние тарифов (не загрузились) — карточка с кнопкой «Повторить». */
+.sub-tariffs__empty {
+  background: var(--white);
+  text-align: center;
+  padding: 22px 16px;
+}
+
+.sub-tariffs__empty p {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.sub-tariffs__empty .btn {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* Карточка одного тарифа. */
+.sub-tariff {
+  background: var(--white);
+}
+
+/* Рекомендованный тариф (есть бейдж) — выделяем зелёной рамкой и подложкой. */
+.sub-tariff[data-tariff="yearly"] {
+  border: 1.5px solid var(--cta);
+  box-shadow: 0 6px 18px rgba(125, 155, 118, .2);
+}
+
+/* Шапка тарифа: иконка | название+примечание | цена. */
+.sub-tariff__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+/* Иконка тарифа (📅 / 🗓️ / ♾️) в кружке-подложке. */
+.sub-tariff__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.sub-tariff__info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Название тарифа + (опционально) бейдж в одну строку. */
+.sub-tariff__title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Бейдж «Выгодно» / «Навсегда» — таблетка-акцент. */
+.sub-tariff__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--white);
+  background: var(--cta);
+  border-radius: 999px;
+  padding: 2px 9px;
+  white-space: nowrap;
+  letter-spacing: .2px;
+}
+
+/* Примечание под названием тарифа. */
+.sub-tariff__note {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* Цена «N ⭐» — крупная, справа в шапке. */
+.sub-tariff__price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Значок звезды в цене. */
+.sub-tariff__star {
+  font-size: 16px;
+}
+
+/* Кнопка «Оплатить N ⭐» — наследует .btn .btn--cta (52px). */
+.sub-tariff__pay {
+  margin-top: 0;
+}
+
+/* --- Оплата через Tribute --- */
+.sub-tribute {
+  margin-bottom: 16px;
+}
+
+/* Кнопка «Оплатить через Tribute» — вторичная (наследует .btn .btn--ghost). */
+.sub-tribute__btn {
+  margin-top: 0;
+}
+
+/* Подсказка под кнопкой Tribute. */
+.sub-tribute__hint {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+/* Подвал страницы подписки. */
+.sub-foot {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   СЧЁТЧИК СКАНИРОВАНИЙ (page-scan, scan-counter*)
+   Показывается под кнопкой загрузки фото на стартовом экране скана.
+   ============================================================ */
+
+.scan-counter {
+  font-size: 13px;
+  text-align: center;
+  margin-top: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  line-height: 1.4;
+}
+
+/* Премиум: безлимит — мягкий зелёный акцент. */
+.scan-counter--premium {
+  color: var(--cta);
+  font-weight: 600;
+  background: rgba(125, 155, 118, .12);
+}
+
+/* Бесплатно: остаток сканирований — нейтральный приглушённый. */
+.scan-counter--free {
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* Лимит исчерпан — предупреждающий персиковый. */
+.scan-counter--empty {
+  color: var(--danger);
+  font-weight: 600;
+  background: rgba(194, 102, 77, .1);
+}
+
+/* ============================================================
+   ДНЕВНИК: ПЛАТНАЯ КНОПКА «🤖 Что съесть?» И ЗАГЛУШКА-ПОДПИСКА
+   ============================================================ */
+
+/* Кнопка-рекомендация в панели действий (наследует .diary-actions__btn). */
+.diary-actions__btn--recommend {
+  position: relative;
+}
+
+/* Заблокированная (платная) кнопка для free-пользователя: приглушаем,
+   но оставляем кликабельной — тап ведёт к paywall/подписке. */
+.diary-actions__btn.is-locked {
+  opacity: .85;
+  border-style: dashed;
+}
+
+/* Заглушка-подписка в области панели рекомендаций (запасной вариант,
+   если единый App.paywall недоступен). */
+.diary-recommend--locked {
+  text-align: center;
+}
+
+/* Кнопка «Оформить подписку» в заглушке (наследует .btn .btn--cta .btn-block). */
+.diary-recommend__subscribe {
+  margin-top: 6px;
+}
+
+/* ============================================================
+   АККАУНТ: КАРТОЧКА-КНОПКА «💎 Подписка» (acc-sub-card*)
+   Ведёт на экран подписки, показывает краткий статус.
+   ============================================================ */
+
+/* Карточка-кнопка (наследует .card): на всю ширину, контент в строку. */
+.acc-sub-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  min-height: 64px;
+  border: none;
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.acc-sub-card:active {
+  transform: scale(.99);
+}
+
+/* Премиум: подсвечиваем зелёной полосой слева. */
+.acc-sub-card--premium {
+  border-left: 4px solid var(--cta);
+}
+
+/* Иконка 💎 в кружке-подложке. */
+.acc-sub-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.acc-sub-card__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.acc-sub-card__title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Краткий статус под заголовком (активна до <дата> / Вечная / Бесплатный). */
+.acc-sub-card__status {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+
+/* У премиум-карточки статус подсвечиваем акцентом. */
+.acc-sub-card--premium .acc-sub-card__status {
+  color: var(--cta);
+  font-weight: 600;
+}
+
+/* Стрелка «›» справа. */
+.acc-sub-card__arrow {
+  flex-shrink: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--muted);
+  line-height: 1;
+}
+
+/* ============================================================
+   АДАПТАЦИЯ РАЗДЕЛОВ ПОДПИСКИ ПОД ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 360px) {
+  /* Иконку фичи в paywall слегка ужимаем. */
+  .paywall-icon {
+    width: 66px;
+    height: 66px;
+    font-size: 34px;
+  }
+
+  .paywall-title { font-size: 19px; }
+
+  /* Цена тарифа не должна налезать на название — уменьшаем кегль. */
+  .sub-tariff__price { font-size: 20px; }
+
+  /* Иконку статуса/тарифа чуть уменьшаем. */
+  .sub-status__icon {
+    width: 44px;
+    height: 44px;
+    font-size: 22px;
+  }
+}

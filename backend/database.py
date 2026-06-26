@@ -68,6 +68,12 @@ def run_migrations():
         ("target_carbs", "REAL", None),
         # Цель улучшения для AI-советов по спортпиту (nullable, без default).
         ("supplement_goal", "TEXT", None),
+        # --- Поля подписки и доступа (Этап 1) ---
+        ("subscription_type", "TEXT", "'free'"),   # тип подписки, по умолчанию free
+        ("subscription_until", "DATETIME", None),  # дата окончания подписки (UTC)
+        ("is_owner", "INTEGER", "0"),              # владелец приложения (булево как 0/1)
+        ("daily_scans_used", "INTEGER", "0"),      # использовано сканов за сутки
+        ("daily_scans_date", "TEXT", None),        # дата счётчика сканов (ISO)
     ]
 
     try:

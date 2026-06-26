@@ -43,6 +43,49 @@
   // Значение времени по умолчанию для вечерней сводки, если сервер не вернул своё.
   var DEFAULT_SUMMARY_TIME = "21:00";
 
+  /**
+   * Преобразует ISO-дату подписки (например, "2026-12-31" или
+   * "2026-12-31T10:00:00") в короткий русский формат "ДД.ММ.ГГГГ".
+   * Возвращает пустую строку, если дату распознать не удалось.
+   */
+  function formatSubDate(value) {
+    if (!value) return "";
+    var s = String(value).trim();
+    // Берём только дату, если пришла дата-время.
+    var datePart = s.split("T")[0].split(" ")[0];
+    var parts = datePart.split("-");
+    if (parts.length === 3) {
+      return parts[2] + "." + parts[1] + "." + parts[0];
+    }
+    return datePart;
+  }
+
+  /**
+   * Формирует краткий статус подписки из App.subscription.
+   * @returns {{ text:string, premium:boolean }}
+   *   premium=true — активная подписка (для подсветки карточки).
+   */
+  function subscriptionStatus() {
+    var sub = (App && App.subscription) || {};
+    var type = sub.subscription_type || "free";
+    var premium = !!sub.is_premium;
+
+    // Владелец и вечная подписка — доступ навсегда.
+    if (sub.is_owner || type === "lifetime") {
+      return { text: "Вечная подписка", premium: true };
+    }
+
+    if (premium) {
+      var until = formatSubDate(sub.subscription_until);
+      if (until) {
+        return { text: "Премиум активен до " + until, premium: true };
+      }
+      return { text: "Премиум активен", premium: true };
+    }
+
+    return { text: "Бесплатный доступ", premium: false };
+  }
+
   // Ссылки на корневой элемент представления и элементы формы.
   // Хранятся в замыкании контроллера, чтобы переиспользовать между методами.
   var els = null;
@@ -89,6 +132,9 @@
         '">'
       : '<div class="acc-avatar acc-avatar--empty" id="accAvatar">👤</div>';
 
+    // Краткий статус подписки для карточки в начале страницы.
+    var sub = subscriptionStatus();
+
     return (
       '<section class="page page-account">' +
       // ---- Шапка профиля ----
@@ -105,6 +151,21 @@
         : "") +
       "</div>" +
       "</header>" +
+
+      // ---- Карточка-кнопка «Подписка» ----
+      // Ведёт на отдельный экран подписки. Показывает краткий текущий статус.
+      '<button type="button" class="acc-sub-card card' +
+      (sub.premium ? " acc-sub-card--premium" : "") +
+      '" id="accSubCard">' +
+      '<span class="acc-sub-card__icon">💎</span>' +
+      '<span class="acc-sub-card__body">' +
+      '<span class="acc-sub-card__title">Подписка</span>' +
+      '<span class="acc-sub-card__status" id="accSubStatus">' +
+      App.escapeHtml(sub.text) +
+      "</span>" +
+      "</span>" +
+      '<span class="acc-sub-card__arrow" aria-hidden="true">›</span>' +
+      "</button>" +
 
       // ---- Форма профиля ----
       '<form class="acc-form card" id="accForm" novalidate>' +
@@ -634,10 +695,31 @@
   }
 
   /**
+   * Обновляет текст и подсветку карточки подписки по текущему App.subscription.
+   * Безопасно к отсутствию элементов (если страница уже скрыта).
+   */
+  function refreshSubCard() {
+    if (!els) return;
+    var sub = subscriptionStatus();
+    if (els.subStatus) {
+      els.subStatus.textContent = sub.text;
+    }
+    if (els.subCard) {
+      if (sub.premium) {
+        els.subCard.classList.add("acc-sub-card--premium");
+      } else {
+        els.subCard.classList.remove("acc-sub-card--premium");
+      }
+    }
+  }
+
+  /**
    * Находит и кэширует ссылки на элементы формы внутри представления.
    */
   function bindElements(viewEl) {
     els = {
+      subCard: viewEl.querySelector("#accSubCard"),
+      subStatus: viewEl.querySelector("#accSubStatus"),
       form: viewEl.querySelector("#accForm"),
       weight: viewEl.querySelector("#accWeight"),
       height: viewEl.querySelector("#accHeight"),
@@ -671,8 +753,26 @@
       App.scrollTop();
 
       // Обработчики действий.
+      // Карточка подписки ведёт на отдельный экран подписки.
+      if (els.subCard) {
+        els.subCard.addEventListener("click", function () {
+          App.haptic("selection");
+          App.navigate("subscription");
+        });
+      }
       els.calcBtn.addEventListener("click", onCalc);
       els.form.addEventListener("submit", onSave);
+
+      // Обновляем статус подписки при показе (best-effort, без блокировок).
+      // Сначала отображаем известный статус, затем тихо подтягиваем свежий.
+      refreshSubCard();
+      if (App.refreshSubscription) {
+        App.refreshSubscription()
+          .then(refreshSubCard)
+          .catch(function () {
+            // Статус не критичен для аккаунта — оставляем как есть.
+          });
+      }
 
       // Предзаполнение формы данными профиля.
       // Сначала пробуем кэш, затем запрашиваем актуальные данные с сервера.

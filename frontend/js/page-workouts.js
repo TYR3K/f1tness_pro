@@ -989,6 +989,26 @@
      */
     onShow: function (viewEl) {
       state.viewEl = viewEl;
+
+      // Гейтинг: тренировки — премиум-функция. Если подписки нет,
+      // показываем единый paywall и выходим (доступ контролируется сервером).
+      if (
+        App &&
+        typeof App.requirePremium === "function" &&
+        !App.requirePremium(viewEl, {
+          icon: "🏋️",
+          title: "Тренировки",
+          desc: "Журнал тренировок, расход калорий и баланс дня",
+          bullets: [
+            "Учёт тренировок и сожжённых калорий",
+            "Оценка калорий по MET",
+            "Напоминания о тренировке по дням недели"
+          ]
+        })
+      ) {
+        return;
+      }
+
       state.wkLoading = false;
       state.remLoading = false;
       // Сбрасываем выбор дней недели в форме напоминания.

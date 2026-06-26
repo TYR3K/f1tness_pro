@@ -452,3 +452,46 @@ class SupplementRecommendOut(BaseModel):
     disclaimer: str                          # медицинский дисклеймер
     training_count: int = 0                  # число тренировок за 2 недели
     improvement_goal: Optional[str] = None   # применённая цель улучшения
+
+
+# --------------------------------------------------------------------------- #
+#  Подписка и доступ (Этап 1): статус подписки, лимит сканов, оплата Stars
+# --------------------------------------------------------------------------- #
+class SubscriptionStatusOut(BaseModel):
+    """Текущий статус подписки пользователя и доступные тарифы.
+
+    is_premium вычисляется ТОЛЬКО на бэкенде (owner / lifetime / активная дата),
+    фронт использует его лишь для отображения, но не для контроля доступа.
+    tariffs — словарь тарифов из конфига (цены берутся из env, не хардкодятся).
+    """
+
+    subscription_type: str                       # "free" | "monthly" | "yearly" | "lifetime"
+    subscription_until: Optional[str] = None     # ISO-дата окончания подписки (или None)
+    is_premium: bool                             # есть ли активный премиум-доступ
+    is_owner: bool                               # является ли пользователь владельцем
+    tariffs: Dict[str, Any]                      # доступные тарифы (config.TARIFFS)
+    tribute_url: Optional[str] = None            # ссылка оплаты через Tribute (или None)
+
+
+class ScansRemainingOut(BaseModel):
+    """Остаток бесплатных сканирований еды на сегодня.
+
+    Для премиум-пользователей remaining = -1 (безлимит).
+    """
+
+    used: int                                    # уже использовано сканов сегодня
+    limit: int                                   # дневной лимит бесплатных сканов
+    remaining: int                               # осталось сканов (-1 = безлимит)
+    is_premium: bool                             # активен ли премиум (безлимит)
+
+
+class StarsInvoiceIn(BaseModel):
+    """Запрос на создание счёта Telegram Stars для выбранного тарифа."""
+
+    tariff: str                                  # "monthly" | "yearly" | "lifetime"
+
+
+class StarsInvoiceOut(BaseModel):
+    """Ссылка-счёт Telegram Stars, которую фронт открывает для оплаты."""
+
+    invoice_link: str                            # invoice link от Bot API

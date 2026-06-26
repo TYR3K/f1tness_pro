@@ -1095,6 +1095,26 @@
      */
     onShow: function (viewEl) {
       state.viewEl = viewEl;
+
+      // Гейтинг: добавки — премиум-функция. Если подписки нет,
+      // показываем единый paywall и выходим (доступ контролируется сервером).
+      if (
+        App &&
+        typeof App.requirePremium === "function" &&
+        !App.requirePremium(viewEl, {
+          icon: "💊",
+          title: "Добавки",
+          desc: "Спортпит, напоминания и AI-советы",
+          bullets: [
+            "Учёт добавок и дозировок",
+            "Напоминания о приёме",
+            "AI-подсказки по добавкам под цель"
+          ]
+        })
+      ) {
+        return;
+      }
+
       state.supLoading = false;
       state.remLoading = false;
       state.supplements = [];
