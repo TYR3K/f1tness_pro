@@ -26,21 +26,27 @@
  *
  * Раздел «Спортпит» вынесен на отдельную страницу page-supplements.
  *
- * Весь пользовательский текст — на русском. Полная обработка ошибок (сеть/AI),
- * состояния загрузки (скелетоны), пустые состояния.
+ * Локализация RU/EN: все видимые пользователю строки оборачиваются в
+ * App.pick("рус","eng") НА МОМЕНТ РЕНДЕРА, чтобы смена языка давала нужный
+ * текст при перерисовке. Полная обработка ошибок (сеть/AI), состояния
+ * загрузки (скелетоны), пустые состояния.
  */
 (function () {
   "use strict";
 
-  // Типы тренировок: значение для бэкенда -> русская подпись.
-  // Порядок задаёт расположение опций в выпадающем списке.
-  var WORKOUT_TYPES = [
-    { value: "cardio", label: "Кардио" },
-    { value: "strength", label: "Силовая" },
-    { value: "walking", label: "Ходьба" },
-    { value: "yoga", label: "Йога" },
-    { value: "other", label: "Другое" }
-  ];
+  /**
+   * Локализация: возвращает строку по текущему языку App.lang.
+   * Используем безопасный фолбэк на русский, если App.pick недоступен.
+   */
+  function pick(ru, en) {
+    if (App && typeof App.pick === "function") return App.pick(ru, en);
+    return ru;
+  }
+
+  // Типы тренировок: значение для бэкенда. Подписи локализуются на момент
+  // рендера через workoutLabel()/workoutTypeLabel(), порядок задаёт расположение
+  // опций в выпадающем списке.
+  var WORKOUT_TYPES = ["cardio", "strength", "walking", "yoga", "other"];
 
   // Декоративные иконки для типов тренировок в списке.
   var WORKOUT_ICONS = {
@@ -51,28 +57,54 @@
     other: "🤸"
   };
 
-  // Соответствие value -> русская подпись (быстрый доступ для рендера списка).
-  var WORKOUT_LABELS = {};
-  WORKOUT_TYPES.forEach(function (t) {
-    WORKOUT_LABELS[t.value] = t.label;
-  });
+  /**
+   * Локализованная подпись типа тренировки (вызывается на момент рендера).
+   */
+  function workoutTypeLabel(type) {
+    switch (type) {
+      case "cardio":
+        return pick("Кардио", "Cardio");
+      case "strength":
+        return pick("Силовая", "Strength");
+      case "walking":
+        return pick("Ходьба", "Walking");
+      case "yoga":
+        return pick("Йога", "Yoga");
+      case "other":
+        return pick("Другое", "Other");
+      default:
+        return null;
+    }
+  }
 
   // Дни недели: индекс 0=Пн … 6=Вс. Используются и в чипах формы, и в списке.
-  var WEEKDAYS = [
-    { value: 0, short: "Пн" },
-    { value: 1, short: "Вт" },
-    { value: 2, short: "Ср" },
-    { value: 3, short: "Чт" },
-    { value: 4, short: "Пт" },
-    { value: 5, short: "Сб" },
-    { value: 6, short: "Вс" }
-  ];
+  // Подписи локализуются на момент рендера через weekdayShort().
+  var WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
 
-  // value -> короткая подпись (для рендера списка напоминаний).
-  var WEEKDAY_SHORT = {};
-  WEEKDAYS.forEach(function (d) {
-    WEEKDAY_SHORT[d.value] = d.short;
-  });
+  /**
+   * Локализованная короткая подпись дня недели (вызывается на момент рендера).
+   * 0=Пн … 6=Вс.
+   */
+  function weekdayShort(value) {
+    switch (value) {
+      case 0:
+        return pick("Пн", "Mon");
+      case 1:
+        return pick("Вт", "Tue");
+      case 2:
+        return pick("Ср", "Wed");
+      case 3:
+        return pick("Чт", "Thu");
+      case 4:
+        return pick("Пт", "Fri");
+      case 5:
+        return pick("Сб", "Sat");
+      case 6:
+        return pick("Вс", "Sun");
+      default:
+        return null;
+    }
+  }
 
   // Внутреннее состояние контроллера.
   var state = {
@@ -104,10 +136,10 @@
   }
 
   /**
-   * Русская подпись типа тренировки (с запасным вариантом).
+   * Локализованная подпись типа тренировки (с запасным вариантом).
    */
   function workoutLabel(type) {
-    return WORKOUT_LABELS[type] || type || "Тренировка";
+    return workoutTypeLabel(type) || type || pick("Тренировка", "Workout");
   }
 
   /**
@@ -132,18 +164,26 @@
    */
   function humanDate(isoDate) {
     var today = App.todayStr();
-    if (isoDate === today) return "Сегодня";
-    if (isoDate === shiftDate(today, -1)) return "Вчера";
-    if (isoDate === shiftDate(today, 1)) return "Завтра";
-    var months = [
-      "января", "февраля", "марта", "апреля", "мая", "июня",
-      "июля", "августа", "сентября", "октября", "ноября", "декабря"
-    ];
+    if (isoDate === today) return pick("Сегодня", "Today");
+    if (isoDate === shiftDate(today, -1)) return pick("Вчера", "Yesterday");
+    if (isoDate === shiftDate(today, 1)) return pick("Завтра", "Tomorrow");
+    var months = pick(
+      [
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря"
+      ],
+      [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+      ]
+    );
     var parts = String(isoDate).split("-");
     var y = parseInt(parts[0], 10);
     var m = parseInt(parts[1], 10) - 1;
     var d = parseInt(parts[2], 10);
     if (isNaN(y) || isNaN(m) || isNaN(d) || !months[m]) return isoDate;
+    // В английском принят порядок «June 18, 2026», в русском — «18 июня 2026».
+    if (App && App.lang === "en") return months[m] + " " + d + ", " + y;
     return d + " " + months[m] + " " + y;
   }
 
@@ -163,6 +203,7 @@
   /**
    * Превращает массив индексов дней недели в человеко-читаемую строку.
    * Например, [0,2,4] -> "Пн, Ср, Пт". Каждый день — всю неделю -> "Ежедневно".
+   * Подписи локализуются на момент вызова.
    */
   function weekdaysToText(days) {
     if (!days || !days.length) return "";
@@ -174,16 +215,16 @@
     });
     for (var i = 0; i < sorted.length; i++) {
       var v = sorted[i];
-      if (WEEKDAY_SHORT[v] != null && !seen[v]) {
+      if (weekdayShort(v) != null && !seen[v]) {
         seen[v] = true;
         clean.push(v);
       }
     }
     if (!clean.length) return "";
-    if (clean.length === 7) return "Ежедневно";
+    if (clean.length === 7) return pick("Ежедневно", "Daily");
     return clean
       .map(function (v) {
-        return WEEKDAY_SHORT[v];
+        return weekdayShort(v);
       })
       .join(", ");
   }
@@ -231,7 +272,7 @@
    */
   function workoutTypeOptionsHtml() {
     return WORKOUT_TYPES.map(function (t) {
-      return '<option value="' + esc(t.value) + '">' + esc(t.label) + "</option>";
+      return '<option value="' + esc(t) + '">' + esc(workoutTypeLabel(t)) + "</option>";
     }).join("");
   }
 
@@ -242,13 +283,13 @@
     return (
       '<div class="wk-datebar card">' +
       '<button class="wk-datebar__nav" type="button" data-nav="prev" ' +
-      'aria-label="Предыдущий день">◀</button>' +
+      'aria-label="' + esc(pick("Предыдущий день", "Previous day")) + '">◀</button>' +
       '<div class="wk-datebar__label">' +
       '<span class="wk-datebar__date">' + esc(humanDate(state.date)) + "</span>" +
       '<span class="wk-datebar__iso">' + esc(state.date) + "</span>" +
       "</div>" +
       '<button class="wk-datebar__nav" type="button" data-nav="next" ' +
-      'aria-label="Следующий день">▶</button>' +
+      'aria-label="' + esc(pick("Следующий день", "Next day")) + '">▶</button>' +
       "</div>"
     );
   }
@@ -259,10 +300,10 @@
   function workoutFormHtml() {
     return (
       '<form class="card wk-form" id="wkForm" novalidate>' +
-      '<h2 class="wk-form__title">Добавить тренировку</h2>' +
+      '<h2 class="wk-form__title">' + esc(pick("Добавить тренировку", "Add workout")) + "</h2>" +
 
       '<label class="field">' +
-      '<span class="field__label">Тип тренировки</span>' +
+      '<span class="field__label">' + esc(pick("Тип тренировки", "Workout type")) + "</span>" +
       '<select class="field__input" id="wkType">' +
       workoutTypeOptionsHtml() +
       "</select>" +
@@ -270,26 +311,30 @@
 
       '<div class="wk-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">Длительность, мин</span>' +
+      '<span class="field__label">' + esc(pick("Длительность, мин", "Duration, min")) + "</span>" +
       '<input class="field__input" id="wkDuration" type="number" ' +
       'inputmode="numeric" min="0" step="1" placeholder="30">' +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Сожжено, ккал</span>' +
+      '<span class="field__label">' + esc(pick("Сожжено, ккал", "Burned, kcal")) + "</span>" +
       '<input class="field__input" id="wkCalories" type="number" ' +
       'inputmode="numeric" min="0" step="1" placeholder="250">' +
       "</label>" +
       "</div>" +
 
       '<button type="button" class="btn btn-ghost btn-block wk-estimate" id="wkEstimateBtn">' +
-      "🔥 Оценить калории" +
+      "🔥 " + esc(pick("Оценить калории", "Estimate calories")) +
       "</button>" +
       '<button type="submit" class="btn btn-cta btn-block wk-add" id="wkAddBtn">' +
-      "Добавить тренировку" +
+      esc(pick("Добавить тренировку", "Add workout")) +
       "</button>" +
-      '<p class="wk-form__hint">Введите калории вручную или нажмите «Оценить», ' +
-      "чтобы рассчитать их по типу и длительности.</p>" +
+      '<p class="wk-form__hint">' +
+      esc(pick(
+        "Введите калории вручную или нажмите «Оценить», чтобы рассчитать их по типу и длительности.",
+        "Enter calories manually or tap “Estimate” to calculate them from type and duration."
+      )) +
+      "</p>" +
       "</form>"
     );
   }
@@ -300,13 +345,13 @@
    */
   function weekdayChipsHtml() {
     return WEEKDAYS.map(function (d) {
-      var active = state.remDays.indexOf(d.value) !== -1;
+      var active = state.remDays.indexOf(d) !== -1;
       return (
         '<button type="button" class="wk-rem-day' +
         (active ? " is-active" : "") +
-        '" data-day="' + d.value + '" ' +
+        '" data-day="' + d + '" ' +
         'aria-pressed="' + (active ? "true" : "false") + '">' +
-        esc(d.short) +
+        esc(weekdayShort(d)) +
         "</button>"
       );
     }).join("");
@@ -318,10 +363,10 @@
   function reminderFormHtml() {
     return (
       '<form class="wk-rem-form" id="wkRemForm" novalidate>' +
-      '<h3 class="wk-rem-form__title">Новое напоминание</h3>' +
+      '<h3 class="wk-rem-form__title">' + esc(pick("Новое напоминание", "New reminder")) + "</h3>" +
 
       '<div class="field">' +
-      '<span class="field__label">Дни недели</span>' +
+      '<span class="field__label">' + esc(pick("Дни недели", "Weekdays")) + "</span>" +
       '<div class="wk-rem-days" id="wkRemDays">' +
       weekdayChipsHtml() +
       "</div>" +
@@ -329,21 +374,25 @@
 
       '<div class="wk-rem-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">Время</span>' +
+      '<span class="field__label">' + esc(pick("Время", "Time")) + "</span>" +
       '<input class="field__input" id="wkRemTime" type="time" value="18:00">' +
       "</label>" +
 
       '<label class="wk-rem-form__check">' +
       '<input type="checkbox" id="wkRemEnabled" class="wk-rem-form__checkbox" checked>' +
-      '<span class="wk-rem-form__check-label">Включено</span>' +
+      '<span class="wk-rem-form__check-label">' + esc(pick("Включено", "Enabled")) + "</span>" +
       "</label>" +
       "</div>" +
 
       '<button type="submit" class="btn btn-cta btn-block wk-rem-add" id="wkRemAddBtn">' +
-      "Добавить напоминание" +
+      esc(pick("Добавить напоминание", "Add reminder")) +
       "</button>" +
-      '<p class="wk-rem-form__hint">Выберите один или несколько дней ' +
-      "(например, Пн, Ср, Пт) и время напоминания.</p>" +
+      '<p class="wk-rem-form__hint">' +
+      esc(pick(
+        "Выберите один или несколько дней (например, Пн, Ср, Пт) и время напоминания.",
+        "Pick one or more days (e.g. Mon, Wed, Fri) and a reminder time."
+      )) +
+      "</p>" +
       "</form>"
     );
   }
@@ -354,8 +403,10 @@
   function reminderCardHtml() {
     return (
       '<section class="card wk-rem-card">' +
-      '<h2 class="wk-rem-card__title">Напоминания о тренировке</h2>' +
-      '<p class="wk-rem-card__subtitle">Мы напомним вам не пропустить тренировку.</p>' +
+      '<h2 class="wk-rem-card__title">' + esc(pick("Напоминания о тренировке", "Workout reminders")) + "</h2>" +
+      '<p class="wk-rem-card__subtitle">' +
+      esc(pick("Мы напомним вам не пропустить тренировку.", "We’ll remind you not to skip your workout.")) +
+      "</p>" +
 
       // Контейнер списка напоминаний (наполняется отдельно).
       '<div id="wkRemList" class="wk-rem-list"></div>' +
@@ -373,7 +424,7 @@
   function pageTemplate() {
     return (
       '<section class="page page-workouts">' +
-      '<h1 class="page__title">Тренировки</h1>' +
+      '<h1 class="page__title">' + esc(pick("Тренировки", "Workouts")) + "</h1>" +
 
       dateBarHtml() +
 
@@ -411,10 +462,12 @@
       '<span class="wk-item__icon" aria-hidden="true">' + icon + "</span> " +
       esc(label) +
       "</span>" +
-      '<span class="wk-item__meta">' + esc(String(dur)) + " мин · " + kcal + " ккал</span>" +
+      '<span class="wk-item__meta">' + esc(String(dur)) + " " + esc(pick("мин", "min")) +
+      " · " + kcal + " " + esc(pick("ккал", "kcal")) + "</span>" +
       "</div>" +
       '<button class="wk-item__del" type="button" data-id="' + esc(w.id) + '" ' +
-      'aria-label="Удалить тренировку" title="Удалить">✕</button>' +
+      'aria-label="' + esc(pick("Удалить тренировку", "Delete workout")) + '" ' +
+      'title="' + esc(pick("Удалить", "Delete")) + '">✕</button>' +
       "</li>"
     );
   }
@@ -425,8 +478,8 @@
   function summaryHtml(totalBurned) {
     return (
       '<section class="card wk-summary__card">' +
-      '<span class="wk-summary__caption">Сожжено за день</span>' +
-      '<span class="wk-summary__value">' + fmt(totalBurned || 0) + " ккал</span>" +
+      '<span class="wk-summary__caption">' + esc(pick("Сожжено за день", "Burned today")) + "</span>" +
+      '<span class="wk-summary__value">' + fmt(totalBurned || 0) + " " + esc(pick("ккал", "kcal")) + "</span>" +
       "</section>"
     );
   }
@@ -451,8 +504,12 @@
       listBox.innerHTML =
         '<div class="wk-empty">' +
         '<div class="wk-empty__icon" aria-hidden="true">🏋️</div>' +
-        '<p class="wk-empty__title">За этот день тренировок нет</p>' +
-        '<p class="wk-empty__text">Добавьте тренировку с помощью формы выше.</p>' +
+        '<p class="wk-empty__title">' +
+        esc(pick("За этот день тренировок нет", "No workouts for this day")) +
+        "</p>" +
+        '<p class="wk-empty__text">' +
+        esc(pick("Добавьте тренировку с помощью формы выше.", "Add a workout using the form above.")) +
+        "</p>" +
         "</div>";
       return;
     }
@@ -481,9 +538,13 @@
     listBox.innerHTML =
       '<div class="card wk-error">' +
       '<div class="wk-error__icon" aria-hidden="true">⚠️</div>' +
-      '<p class="wk-error__title">Не удалось загрузить тренировки</p>' +
-      '<p class="wk-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
-      '<button class="btn btn-ghost wk-error__retry" type="button">Повторить</button>' +
+      '<p class="wk-error__title">' +
+      esc(pick("Не удалось загрузить тренировки", "Couldn’t load workouts")) +
+      "</p>" +
+      '<p class="wk-error__text">' + esc(message || pick("Неизвестная ошибка", "Unknown error")) + "</p>" +
+      '<button class="btn btn-ghost wk-error__retry" type="button">' +
+      esc(pick("Повторить", "Retry")) +
+      "</button>" +
       "</div>";
     var retry = listBox.querySelector(".wk-error__retry");
     if (retry) {
@@ -502,13 +563,13 @@
    * @param {Object} r { id, weekdays:[int], time, enabled }
    */
   function reminderRowHtml(r) {
-    var daysText = weekdaysToText(r.weekdays) || "Дни не выбраны";
+    var daysText = weekdaysToText(r.weekdays) || pick("Дни не выбраны", "No days selected");
     var time = r.time ? esc(r.time) : "";
     var meta = time ? daysText + " · " + time : daysText;
 
     var badge = r.enabled
-      ? '<span class="wk-rem-item__badge wk-rem-item__badge--on">🔔 включено</span>'
-      : '<span class="wk-rem-item__badge wk-rem-item__badge--off">🔕 выключено</span>';
+      ? '<span class="wk-rem-item__badge wk-rem-item__badge--on">🔔 ' + esc(pick("включено", "on")) + "</span>"
+      : '<span class="wk-rem-item__badge wk-rem-item__badge--off">🔕 ' + esc(pick("выключено", "off")) + "</span>";
 
     return (
       '<li class="wk-rem-item" data-id="' + esc(r.id) + '">' +
@@ -517,7 +578,8 @@
       badge +
       "</div>" +
       '<button class="wk-rem-item__del" type="button" data-id="' + esc(r.id) + '" ' +
-      'aria-label="Удалить напоминание" title="Удалить">✕</button>' +
+      'aria-label="' + esc(pick("Удалить напоминание", "Delete reminder")) + '" ' +
+      'title="' + esc(pick("Удалить", "Delete")) + '">✕</button>' +
       "</li>"
     );
   }
@@ -536,7 +598,7 @@
       box.innerHTML =
         '<div class="wk-rem-empty">' +
         '<div class="wk-rem-empty__icon" aria-hidden="true">⏰</div>' +
-        '<p class="wk-rem-empty__text">Напоминаний пока нет.</p>' +
+        '<p class="wk-rem-empty__text">' + esc(pick("Напоминаний пока нет.", "No reminders yet.")) + "</p>" +
         "</div>";
       return;
     }
@@ -562,9 +624,13 @@
     box.innerHTML =
       '<div class="wk-rem-error">' +
       '<div class="wk-rem-error__icon" aria-hidden="true">⚠️</div>' +
-      '<p class="wk-rem-error__title">Не удалось загрузить напоминания</p>' +
-      '<p class="wk-rem-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
-      '<button class="btn btn-ghost wk-rem-error__retry" type="button">Повторить</button>' +
+      '<p class="wk-rem-error__title">' +
+      esc(pick("Не удалось загрузить напоминания", "Couldn’t load reminders")) +
+      "</p>" +
+      '<p class="wk-rem-error__text">' + esc(message || pick("Неизвестная ошибка", "Unknown error")) + "</p>" +
+      '<button class="btn btn-ghost wk-rem-error__retry" type="button">' +
+      esc(pick("Повторить", "Retry")) +
+      "</button>" +
       "</div>";
     var retry = box.querySelector(".wk-rem-error__retry");
     if (retry) {
@@ -597,7 +663,7 @@
       })
       .catch(function (err) {
         renderWorkoutsError(
-          (err && err.message) || "Проблема с сетью. Проверьте соединение."
+          (err && err.message) || pick("Проблема с сетью. Проверьте соединение.", "Network problem. Check your connection.")
         );
       })
       .then(function () {
@@ -622,7 +688,7 @@
       })
       .catch(function (err) {
         renderRemindersError(
-          (err && err.message) || "Проблема с сетью. Проверьте соединение."
+          (err && err.message) || pick("Проблема с сетью. Проверьте соединение.", "Network problem. Check your connection.")
         );
       })
       .then(function () {
@@ -667,7 +733,7 @@
 
     var duration = readPositiveInt(durEl);
     if (duration == null || duration <= 0) {
-      toast("Укажите длительность тренировки в минутах");
+      toast(pick("Укажите длительность тренировки в минутах", "Enter the workout duration in minutes"));
       haptic("error");
       durEl.focus();
       return;
@@ -677,7 +743,7 @@
 
     if (btn) {
       btn.disabled = true;
-      btn.textContent = "Оцениваем…";
+      btn.textContent = pick("Оцениваем…", "Estimating…");
     }
     App.showLoading();
 
@@ -686,22 +752,22 @@
       .then(function (res) {
         var kcal = res && res.calories_burned != null ? res.calories_burned : null;
         if (kcal == null) {
-          toast("Не удалось оценить калории");
+          toast(pick("Не удалось оценить калории", "Couldn’t estimate calories"));
           haptic("warning");
           return;
         }
         calEl.value = Math.round(Number(kcal) || 0);
         haptic("success");
-        toast("Оценка: " + fmt(kcal) + " ккал");
+        toast(pick("Оценка: ", "Estimate: ") + fmt(kcal) + " " + pick("ккал", "kcal"));
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось оценить калории");
+        toast((err && err.message) || pick("Не удалось оценить калории", "Couldn’t estimate calories"));
       })
       .finally(function () {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = "🔥 Оценить калории";
+          btn.textContent = "🔥 " + pick("Оценить калории", "Estimate calories");
         }
         App.hideLoading();
       });
@@ -723,13 +789,13 @@
     var calories = readPositiveInt(calEl);
 
     if (duration == null || duration <= 0) {
-      toast("Укажите длительность тренировки в минутах");
+      toast(pick("Укажите длительность тренировки в минутах", "Enter the workout duration in minutes"));
       haptic("error");
       durEl.focus();
       return;
     }
     if (calories == null) {
-      toast("Укажите калории или нажмите «Оценить»");
+      toast(pick("Укажите калории или нажмите «Оценить»", "Enter calories or tap “Estimate”"));
       haptic("error");
       calEl.focus();
       return;
@@ -749,7 +815,7 @@
       .addWorkout(payload)
       .then(function () {
         haptic("success");
-        toast("Тренировка добавлена");
+        toast(pick("Тренировка добавлена", "Workout added"));
         // Сбрасываем числовые поля формы, тип оставляем.
         durEl.value = "";
         calEl.value = "";
@@ -761,7 +827,7 @@
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось добавить тренировку");
+        toast((err && err.message) || pick("Не удалось добавить тренировку", "Couldn’t add workout"));
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -786,7 +852,7 @@
     App.api
       .deleteWorkout(id)
       .then(function () {
-        toast("Тренировка удалена");
+        toast(pick("Тренировка удалена", "Workout deleted"));
         if (App.state && App.state.diaryByDate) {
           delete App.state.diaryByDate[state.date];
         }
@@ -796,7 +862,7 @@
         btn.disabled = false;
         btn.textContent = "✕";
         haptic("error");
-        toast((err && err.message) || "Не удалось удалить тренировку");
+        toast((err && err.message) || pick("Не удалось удалить тренировку", "Couldn’t delete workout"));
       })
       .finally(function () {
         App.hideLoading();
@@ -859,14 +925,14 @@
 
     // Нужен хотя бы один выбранный день.
     if (!state.remDays.length) {
-      toast("Выберите хотя бы один день недели");
+      toast(pick("Выберите хотя бы один день недели", "Pick at least one weekday"));
       haptic("error");
       return;
     }
 
     var time = (timeEl && timeEl.value || "").trim();
     if (!time) {
-      toast("Укажите время напоминания");
+      toast(pick("Укажите время напоминания", "Set the reminder time"));
       haptic("error");
       if (timeEl) timeEl.focus();
       return;
@@ -890,13 +956,13 @@
       .addTrainingReminder(payload)
       .then(function () {
         haptic("success");
-        toast("Напоминание добавлено");
+        toast(pick("Напоминание добавлено", "Reminder added"));
         resetReminderForm();
         loadReminders();
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось добавить напоминание");
+        toast((err && err.message) || pick("Не удалось добавить напоминание", "Couldn’t add reminder"));
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -921,14 +987,14 @@
     App.api
       .deleteTrainingReminder(id)
       .then(function () {
-        toast("Напоминание удалено");
+        toast(pick("Напоминание удалено", "Reminder deleted"));
         loadReminders();
       })
       .catch(function (err) {
         btn.disabled = false;
         btn.textContent = "✕";
         haptic("error");
-        toast((err && err.message) || "Не удалось удалить напоминание");
+        toast((err && err.message) || pick("Не удалось удалить напоминание", "Couldn’t delete reminder"));
       })
       .finally(function () {
         App.hideLoading();
@@ -997,12 +1063,15 @@
         typeof App.requirePremium === "function" &&
         !App.requirePremium(viewEl, {
           icon: "🏋️",
-          title: "Тренировки",
-          desc: "Журнал тренировок, расход калорий и баланс дня",
+          title: pick("Тренировки", "Workouts"),
+          desc: pick(
+            "Журнал тренировок, расход калорий и баланс дня",
+            "Workout log, calories burned and daily balance"
+          ),
           bullets: [
-            "Учёт тренировок и сожжённых калорий",
-            "Оценка калорий по MET",
-            "Напоминания о тренировке по дням недели"
+            pick("Учёт тренировок и сожжённых калорий", "Track workouts and calories burned"),
+            pick("Оценка калорий по MET", "MET-based calorie estimation"),
+            pick("Напоминания о тренировке по дням недели", "Workout reminders by weekday")
           ]
         })
       ) {

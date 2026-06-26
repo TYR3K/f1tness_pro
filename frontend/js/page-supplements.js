@@ -27,20 +27,55 @@
  *        -> карточки {name,dosage,note} + обязательный дисклеймер из ответа.
  *      - Предзаполнение improvement_goal из profile.supplement_goal.
  *
- * Весь пользовательский текст — на русском. Полная обработка ошибок (сеть/AI),
- * состояния загрузки (скелетоны), пустые состояния.
+ * Локализация RU/EN: все видимые пользователю строки оборачиваются в
+ * App.pick("рус","eng") НА МОМЕНТ РЕНДЕРА, чтобы смена языка давала нужный
+ * текст при перерисовке. Полная обработка ошибок (сеть/AI), состояния
+ * загрузки (скелетоны), пустые состояния.
  */
 (function () {
   "use strict";
 
-  // Пресеты цели улучшения (чипы AI-советов): эмодзи + значение для сервера.
-  var IMPROVEMENT_PRESETS = [
-    { value: "Сон", emoji: "😴", label: "Сон" },
-    { value: "Восстановление", emoji: "🔄", label: "Восстановление" },
-    { value: "Сила", emoji: "💪", label: "Сила" },
-    { value: "Энергия", emoji: "⚡", label: "Энергия" },
-    { value: "Иммунитет", emoji: "🛡️", label: "Иммунитет" }
-  ];
+  /**
+   * Локализация: возвращает строку по текущему языку App.lang.
+   * Используем безопасный фолбэк на русский, если App.pick недоступен.
+   */
+  function pick(ru, en) {
+    if (App && typeof App.pick === "function") return App.pick(ru, en);
+    return ru;
+  }
+
+  // Пресеты цели улучшения (чипы AI-советов): эмодзи + ключ для локализации.
+  // Значение, отправляемое серверу (improvement_goal), и подпись чипа берутся
+  // на момент рендера через presetValue()/presetLabel() — на текущем языке.
+  var IMPROVEMENT_PRESETS = ["sleep", "recovery", "strength", "energy", "immunity"];
+
+  var PRESET_EMOJI = {
+    sleep: "😴",
+    recovery: "🔄",
+    strength: "💪",
+    energy: "⚡",
+    immunity: "🛡️"
+  };
+
+  /**
+   * Локализованное значение пресета (улетает на сервер как improvement_goal).
+   */
+  function presetValue(key) {
+    switch (key) {
+      case "sleep":
+        return pick("Сон", "Sleep");
+      case "recovery":
+        return pick("Восстановление", "Recovery");
+      case "strength":
+        return pick("Сила", "Strength");
+      case "energy":
+        return pick("Энергия", "Energy");
+      case "immunity":
+        return pick("Иммунитет", "Immunity");
+      default:
+        return key;
+    }
+  }
 
   // Внутреннее состояние контроллера.
   var state = {
@@ -130,40 +165,40 @@
   function supplementFormHtml() {
     return (
       '<form class="sup-form" id="supForm" novalidate>' +
-      '<h3 class="sup-form__title">Добавить добавку</h3>' +
+      '<h3 class="sup-form__title">' + esc(pick("Добавить добавку", "Add supplement")) + "</h3>" +
 
       '<label class="field">' +
-      '<span class="field__label">Название</span>' +
+      '<span class="field__label">' + esc(pick("Название", "Name")) + "</span>" +
       '<input class="field__input" id="supName" type="text" ' +
-      'placeholder="Креатин" maxlength="100" autocomplete="off">' +
+      'placeholder="' + esc(pick("Креатин", "Creatine")) + '" maxlength="100" autocomplete="off">' +
       "</label>" +
 
       '<div class="sup-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">Тип</span>' +
+      '<span class="field__label">' + esc(pick("Тип", "Type")) + "</span>" +
       '<input class="field__input" id="supType" type="text" ' +
-      'placeholder="Аминокислоты" maxlength="60" autocomplete="off">' +
+      'placeholder="' + esc(pick("Аминокислоты", "Amino acids")) + '" maxlength="60" autocomplete="off">' +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Дозировка</span>' +
+      '<span class="field__label">' + esc(pick("Дозировка", "Dosage")) + "</span>" +
       '<input class="field__input" id="supDosage" type="text" ' +
-      'placeholder="5 г" maxlength="60" autocomplete="off">' +
+      'placeholder="' + esc(pick("5 г", "5 g")) + '" maxlength="60" autocomplete="off">' +
       "</label>" +
       "</div>" +
 
       '<label class="field">' +
-      '<span class="field__label">Время приёма</span>' +
+      '<span class="field__label">' + esc(pick("Время приёма", "Intake time")) + "</span>" +
       '<input class="field__input" id="supTime" type="time">' +
       "</label>" +
 
       '<label class="sup-form__check">' +
       '<input type="checkbox" id="supReminder" class="sup-form__checkbox">' +
-      '<span class="sup-form__check-label">Напоминать о приёме</span>' +
+      '<span class="sup-form__check-label">' + esc(pick("Напоминать о приёме", "Remind me to take it")) + "</span>" +
       "</label>" +
 
       '<button type="submit" class="btn btn-cta btn-block sup-add" id="supAddBtn">' +
-      "Добавить добавку" +
+      esc(pick("Добавить добавку", "Add supplement")) +
       "</button>" +
       "</form>"
     );
@@ -175,8 +210,10 @@
   function supplementCardHtml() {
     return (
       '<section class="card sup-card">' +
-      '<h2 class="sup-card__title">Мои добавки</h2>' +
-      '<p class="sup-card__subtitle">Ваши добавки и приёмы спортивного питания.</p>' +
+      '<h2 class="sup-card__title">' + esc(pick("Мои добавки", "My supplements")) + "</h2>" +
+      '<p class="sup-card__subtitle">' +
+      esc(pick("Ваши добавки и приёмы спортивного питания.", "Your supplements and sports nutrition intake.")) +
+      "</p>" +
 
       // Контейнер списка добавок (наполняется отдельно).
       '<div id="supList" class="sup-list"></div>' +
@@ -193,40 +230,40 @@
   function reminderFormHtml() {
     return (
       '<form class="sup-rem-form" id="supRemForm" novalidate>' +
-      '<h3 class="sup-rem-form__title">Новое напоминание</h3>' +
+      '<h3 class="sup-rem-form__title">' + esc(pick("Новое напоминание", "New reminder")) + "</h3>" +
 
       '<div class="sup-rem-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">Название</span>' +
+      '<span class="field__label">' + esc(pick("Название", "Name")) + "</span>" +
       '<input class="field__input" id="remLabel" type="text" ' +
-      'placeholder="Утро / Ночь" maxlength="60" autocomplete="off" list="remLabelList">' +
+      'placeholder="' + esc(pick("Утро / Ночь", "Morning / Night")) + '" maxlength="60" autocomplete="off" list="remLabelList">' +
       '<datalist id="remLabelList">' +
-      '<option value="Утро"></option>' +
-      '<option value="День"></option>' +
-      '<option value="Вечер"></option>' +
-      '<option value="Ночь"></option>' +
+      '<option value="' + esc(pick("Утро", "Morning")) + '"></option>' +
+      '<option value="' + esc(pick("День", "Afternoon")) + '"></option>' +
+      '<option value="' + esc(pick("Вечер", "Evening")) + '"></option>' +
+      '<option value="' + esc(pick("Ночь", "Night")) + '"></option>' +
       "</datalist>" +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Время</span>' +
+      '<span class="field__label">' + esc(pick("Время", "Time")) + "</span>" +
       '<input class="field__input" id="remTime" type="time">' +
       "</label>" +
       "</div>" +
 
       // Множественный выбор добавок (наполняется по списку принимаемых).
       '<div class="sup-rem-form__pick">' +
-      '<span class="field__label">Какие добавки напомнить</span>' +
+      '<span class="field__label">' + esc(pick("Какие добавки напомнить", "Which supplements to remind")) + "</span>" +
       '<div id="remPicks" class="sup-rem-picks"></div>' +
       "</div>" +
 
       '<label class="sup-rem-form__check">' +
       '<input type="checkbox" id="remEnabled" class="sup-rem-form__checkbox" checked>' +
-      '<span class="sup-rem-form__check-label">Напоминание включено</span>' +
+      '<span class="sup-rem-form__check-label">' + esc(pick("Напоминание включено", "Reminder enabled")) + "</span>" +
       "</label>" +
 
       '<button type="submit" class="btn btn-cta btn-block sup-rem-add" id="remAddBtn">' +
-      "Создать напоминание" +
+      esc(pick("Создать напоминание", "Create reminder")) +
       "</button>" +
       "</form>"
     );
@@ -238,8 +275,10 @@
   function reminderCardHtml() {
     return (
       '<section class="card sup-rem-card">' +
-      '<h2 class="sup-rem-card__title">Напоминания о приёме</h2>' +
-      '<p class="sup-rem-card__subtitle">Telegram напомнит вовремя принять добавки.</p>' +
+      '<h2 class="sup-rem-card__title">' + esc(pick("Напоминания о приёме", "Intake reminders")) + "</h2>" +
+      '<p class="sup-rem-card__subtitle">' +
+      esc(pick("Telegram напомнит вовремя принять добавки.", "Telegram will remind you to take your supplements on time.")) +
+      "</p>" +
 
       // Контейнер списка напоминаний (наполняется отдельно).
       '<div id="remList" class="sup-rem-list"></div>' +
@@ -254,12 +293,13 @@
    * Чипы пресетов цели улучшения для AI-советов.
    */
   function presetChipsHtml() {
-    return IMPROVEMENT_PRESETS.map(function (p) {
+    return IMPROVEMENT_PRESETS.map(function (key) {
+      var value = presetValue(key);
       return (
         '<button type="button" class="chip sup-ai-chip" ' +
-        'data-goal="' + esc(p.value) + '">' +
-        '<span class="sup-ai-chip__emoji" aria-hidden="true">' + p.emoji + "</span>" +
-        '<span class="sup-ai-chip__label">' + esc(p.label) + "</span>" +
+        'data-goal="' + esc(value) + '">' +
+        '<span class="sup-ai-chip__emoji" aria-hidden="true">' + (PRESET_EMOJI[key] || "") + "</span>" +
+        '<span class="sup-ai-chip__label">' + esc(value) + "</span>" +
         "</button>"
       );
     }).join("");
@@ -271,22 +311,26 @@
   function aiCardHtml() {
     return (
       '<section class="card sup-ai-card">' +
-      '<h2 class="sup-ai-card__title">AI-советы по добавкам</h2>' +
-      '<p class="sup-ai-card__subtitle">Выберите, что хотите улучшить, ' +
-      "или опишите цель своими словами.</p>" +
+      '<h2 class="sup-ai-card__title">' + esc(pick("AI-советы по добавкам", "AI supplement advice")) + "</h2>" +
+      '<p class="sup-ai-card__subtitle">' +
+      esc(pick(
+        "Выберите, что хотите улучшить, или опишите цель своими словами.",
+        "Pick what you want to improve, or describe your goal in your own words."
+      )) +
+      "</p>" +
 
       '<div class="sup-ai-chips" id="supAiChips">' +
       presetChipsHtml() +
       "</div>" +
 
       '<label class="field sup-ai-field">' +
-      '<span class="field__label">Цель улучшения</span>' +
+      '<span class="field__label">' + esc(pick("Цель улучшения", "Improvement goal")) + "</span>" +
       '<input class="field__input" id="supAiGoal" type="text" ' +
-      'placeholder="Например: меньше усталости" maxlength="80" autocomplete="off">' +
+      'placeholder="' + esc(pick("Например: меньше усталости", "E.g. less fatigue")) + '" maxlength="80" autocomplete="off">' +
       "</label>" +
 
       '<button type="button" class="btn btn-cta btn-block sup-ai-btn" id="supAiBtn">' +
-      "🤖 Получить совет" +
+      "🤖 " + esc(pick("Получить совет", "Get advice")) +
       "</button>" +
 
       '<div id="supAiBox" class="sup-ai-box"></div>' +
@@ -301,7 +345,7 @@
   function pageTemplate() {
     return (
       '<section class="page page-supplements">' +
-      '<h1 class="page__title">Добавки</h1>' +
+      '<h1 class="page__title">' + esc(pick("Добавки", "Supplements")) + "</h1>" +
 
       // Раздел «Мои добавки».
       supplementCardHtml() +
@@ -331,18 +375,19 @@
     var meta = parts.join(" · ");
 
     var reminder = s.reminder_enabled
-      ? '<span class="sup-item__badge">🔔 напоминание</span>'
+      ? '<span class="sup-item__badge">🔔 ' + esc(pick("напоминание", "reminder")) + "</span>"
       : "";
 
     return (
       '<li class="sup-item" data-id="' + esc(s.id) + '">' +
       '<div class="sup-item__main">' +
-      '<span class="sup-item__name">' + esc(s.name || "Без названия") + "</span>" +
+      '<span class="sup-item__name">' + esc(s.name || pick("Без названия", "Untitled")) + "</span>" +
       (meta ? '<span class="sup-item__meta">' + meta + "</span>" : "") +
       reminder +
       "</div>" +
       '<button class="sup-item__del" type="button" data-id="' + esc(s.id) + '" ' +
-      'aria-label="Удалить добавку" title="Удалить">✕</button>' +
+      'aria-label="' + esc(pick("Удалить добавку", "Delete supplement")) + '" ' +
+      'title="' + esc(pick("Удалить", "Delete")) + '">✕</button>' +
       "</li>"
     );
   }
@@ -367,7 +412,7 @@
       box.innerHTML =
         '<div class="sup-empty">' +
         '<div class="sup-empty__icon" aria-hidden="true">💊</div>' +
-        '<p class="sup-empty__text">Добавки пока не добавлены.</p>' +
+        '<p class="sup-empty__text">' + esc(pick("Добавки пока не добавлены.", "No supplements added yet.")) + "</p>" +
         "</div>";
       return;
     }
@@ -393,9 +438,9 @@
     box.innerHTML =
       '<div class="sup-error">' +
       '<div class="sup-error__icon" aria-hidden="true">⚠️</div>' +
-      '<p class="sup-error__title">Не удалось загрузить добавки</p>' +
-      '<p class="sup-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
-      '<button class="btn btn-ghost sup-error__retry" type="button">Повторить</button>' +
+      '<p class="sup-error__title">' + esc(pick("Не удалось загрузить добавки", "Couldn’t load supplements")) + "</p>" +
+      '<p class="sup-error__text">' + esc(message || pick("Неизвестная ошибка", "Unknown error")) + "</p>" +
+      '<button class="btn btn-ghost sup-error__retry" type="button">' + esc(pick("Повторить", "Retry")) + "</button>" +
       "</div>";
     var retry = box.querySelector(".sup-error__retry");
     if (retry) {
@@ -420,14 +465,18 @@
     var items = state.supplements || [];
     if (!items.length) {
       box.innerHTML =
-        '<p class="sup-rem-picks__empty">Сначала добавьте добавки выше — ' +
-        "тогда их можно будет выбрать для напоминания.</p>";
+        '<p class="sup-rem-picks__empty">' +
+        esc(pick(
+          "Сначала добавьте добавки выше — тогда их можно будет выбрать для напоминания.",
+          "Add supplements above first — then you can pick them for a reminder."
+        )) +
+        "</p>";
       return;
     }
 
     var html = items
       .map(function (s) {
-        var label = s.name || "Без названия";
+        var label = s.name || pick("Без названия", "Untitled");
         return (
           '<label class="sup-rem-pick">' +
           '<input type="checkbox" class="sup-rem-pick__input" ' +
@@ -446,7 +495,7 @@
    * Показывает состав («Ночь, 22:00 — магний, ZMA»).
    */
   function reminderRowHtml(r) {
-    var label = r.label || "Напоминание";
+    var label = r.label || pick("Напоминание", "Reminder");
     var time = timeValue(r.time);
     var sups = (r.supplements || [])
       .map(function (s) {
@@ -464,11 +513,12 @@
     // Состав через тире: «— магний, ZMA».
     var composition = sups.length
       ? '<span class="sup-rem-item__sups"> — ' + sups.join(", ") + "</span>"
-      : '<span class="sup-rem-item__sups sup-rem-item__sups--empty"> — добавки не выбраны</span>';
+      : '<span class="sup-rem-item__sups sup-rem-item__sups--empty"> — ' +
+        esc(pick("добавки не выбраны", "no supplements selected")) + "</span>";
 
     var stateBadge = r.enabled
-      ? '<span class="sup-rem-item__badge sup-rem-item__badge--on">🔔 вкл</span>'
-      : '<span class="sup-rem-item__badge sup-rem-item__badge--off">выкл</span>';
+      ? '<span class="sup-rem-item__badge sup-rem-item__badge--on">🔔 ' + esc(pick("вкл", "on")) + "</span>"
+      : '<span class="sup-rem-item__badge sup-rem-item__badge--off">' + esc(pick("выкл", "off")) + "</span>";
 
     return (
       '<li class="sup-rem-item" data-id="' + esc(r.id) + '">' +
@@ -477,7 +527,8 @@
       stateBadge +
       "</div>" +
       '<button class="sup-rem-item__del" type="button" data-id="' + esc(r.id) + '" ' +
-      'aria-label="Удалить напоминание" title="Удалить">✕</button>' +
+      'aria-label="' + esc(pick("Удалить напоминание", "Delete reminder")) + '" ' +
+      'title="' + esc(pick("Удалить", "Delete")) + '">✕</button>' +
       "</li>"
     );
   }
@@ -496,8 +547,12 @@
       box.innerHTML =
         '<div class="sup-rem-empty">' +
         '<div class="sup-rem-empty__icon" aria-hidden="true">🔔</div>' +
-        '<p class="sup-rem-empty__text">Напоминаний пока нет. ' +
-        "Создайте первое с помощью формы ниже.</p>" +
+        '<p class="sup-rem-empty__text">' +
+        esc(pick(
+          "Напоминаний пока нет. Создайте первое с помощью формы ниже.",
+          "No reminders yet. Create your first one with the form below."
+        )) +
+        "</p>" +
         "</div>";
       return;
     }
@@ -523,9 +578,9 @@
     box.innerHTML =
       '<div class="sup-rem-error">' +
       '<div class="sup-rem-error__icon" aria-hidden="true">⚠️</div>' +
-      '<p class="sup-rem-error__title">Не удалось загрузить напоминания</p>' +
-      '<p class="sup-rem-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
-      '<button class="btn btn-ghost sup-rem-error__retry" type="button">Повторить</button>' +
+      '<p class="sup-rem-error__title">' + esc(pick("Не удалось загрузить напоминания", "Couldn’t load reminders")) + "</p>" +
+      '<p class="sup-rem-error__text">' + esc(message || pick("Неизвестная ошибка", "Unknown error")) + "</p>" +
+      '<button class="btn btn-ghost sup-rem-error__retry" type="button">' + esc(pick("Повторить", "Retry")) + "</button>" +
       "</div>";
     var retry = box.querySelector(".sup-rem-error__retry");
     if (retry) {
@@ -560,7 +615,10 @@
       box.innerHTML =
         '<div class="sup-ai-box__inner">' +
         '<div class="sup-ai-box__empty">' +
-        "Подходящих рекомендаций не нашлось. Попробуйте уточнить цель." +
+        esc(pick(
+          "Подходящих рекомендаций не нашлось. Попробуйте уточнить цель.",
+          "No suitable recommendations found. Try refining your goal."
+        )) +
         "</div>" +
         emptyDisclaimer +
         "</div>";
@@ -578,13 +636,13 @@
         return (
           '<div class="sup-ai-suggest">' +
           '<div class="sup-ai-suggest__head">' +
-          '<span class="sup-ai-suggest__name">' + esc(s.name || "Добавка") + "</span>" +
+          '<span class="sup-ai-suggest__name">' + esc(s.name || pick("Добавка", "Supplement")) + "</span>" +
           dosage +
           "</div>" +
           note +
           '<button type="button" class="btn btn-ghost sup-ai-suggest__use" ' +
           'data-name="' + esc(s.name || "") + '" ' +
-          'data-dosage="' + esc(s.dosage || "") + '">Заполнить форму</button>' +
+          'data-dosage="' + esc(s.dosage || "") + '">' + esc(pick("Заполнить форму", "Fill the form")) + "</button>" +
           "</div>"
         );
       })
@@ -596,12 +654,12 @@
       : "";
 
     var goalHtml = goal
-      ? '<p class="sup-ai-box__goal">Цель: ' + esc(goal) + "</p>"
+      ? '<p class="sup-ai-box__goal">' + esc(pick("Цель: ", "Goal: ")) + esc(goal) + "</p>"
       : "";
 
     box.innerHTML =
       '<div class="sup-ai-box__inner">' +
-      '<p class="sup-ai-box__heading">Рекомендации</p>' +
+      '<p class="sup-ai-box__heading">' + esc(pick("Рекомендации", "Recommendations")) + "</p>" +
       goalHtml +
       '<div class="sup-ai-suggest-list">' + cards + "</div>" +
       disclaimerHtml +
@@ -635,7 +693,7 @@
       })
       .catch(function (err) {
         renderSupplementsError(
-          (err && err.message) || "Проблема с сетью. Проверьте соединение."
+          (err && err.message) || pick("Проблема с сетью. Проверьте соединение.", "Network problem. Check your connection.")
         );
       })
       .then(function () {
@@ -660,7 +718,7 @@
       })
       .catch(function (err) {
         renderRemindersError(
-          (err && err.message) || "Проблема с сетью. Проверьте соединение."
+          (err && err.message) || pick("Проблема с сетью. Проверьте соединение.", "Network problem. Check your connection.")
         );
       })
       .then(function () {
@@ -688,7 +746,7 @@
 
     var name = (nameEl.value || "").trim();
     if (!name) {
-      toast("Укажите название добавки");
+      toast(pick("Укажите название добавки", "Enter the supplement name"));
       haptic("error");
       nameEl.focus();
       return;
@@ -714,7 +772,7 @@
       .addSupplement(payload)
       .then(function () {
         haptic("success");
-        toast("Добавка добавлена");
+        toast(pick("Добавка добавлена", "Supplement added"));
         // Очищаем форму.
         nameEl.value = "";
         if (typeEl) typeEl.value = "";
@@ -726,7 +784,7 @@
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось добавить добавку");
+        toast((err && err.message) || pick("Не удалось добавить добавку", "Couldn’t add supplement"));
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -751,14 +809,14 @@
     App.api
       .deleteSupplement(id)
       .then(function () {
-        toast("Добавка удалена");
+        toast(pick("Добавка удалена", "Supplement deleted"));
         loadSupplements();
       })
       .catch(function (err) {
         btn.disabled = false;
         btn.textContent = "✕";
         haptic("error");
-        toast((err && err.message) || "Не удалось удалить добавку");
+        toast((err && err.message) || pick("Не удалось удалить добавку", "Couldn’t delete supplement"));
       })
       .finally(function () {
         App.hideLoading();
@@ -784,7 +842,7 @@
 
     var label = (labelEl.value || "").trim();
     if (!label) {
-      toast("Укажите название напоминания");
+      toast(pick("Укажите название напоминания", "Enter the reminder name"));
       haptic("error");
       labelEl.focus();
       return;
@@ -792,7 +850,7 @@
 
     var time = (timeEl.value || "").trim();
     if (!time) {
-      toast("Укажите время напоминания");
+      toast(pick("Укажите время напоминания", "Set the reminder time"));
       haptic("error");
       timeEl.focus();
       return;
@@ -809,7 +867,7 @@
     }
 
     if (!supplementIds.length) {
-      toast("Выберите хотя бы одну добавку");
+      toast(pick("Выберите хотя бы одну добавку", "Pick at least one supplement"));
       haptic("error");
       return;
     }
@@ -828,7 +886,7 @@
       .addSupplementReminder(payload)
       .then(function () {
         haptic("success");
-        toast("Напоминание создано");
+        toast(pick("Напоминание создано", "Reminder created"));
         // Сбрасываем форму.
         labelEl.value = "";
         timeEl.value = "";
@@ -843,7 +901,7 @@
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось создать напоминание");
+        toast((err && err.message) || pick("Не удалось создать напоминание", "Couldn’t create reminder"));
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -868,14 +926,14 @@
     App.api
       .deleteSupplementReminder(id)
       .then(function () {
-        toast("Напоминание удалено");
+        toast(pick("Напоминание удалено", "Reminder deleted"));
         loadReminders();
       })
       .catch(function (err) {
         btn.disabled = false;
         btn.textContent = "✕";
         haptic("error");
-        toast((err && err.message) || "Не удалось удалить напоминание");
+        toast((err && err.message) || pick("Не удалось удалить напоминание", "Couldn’t delete reminder"));
       })
       .finally(function () {
         App.hideLoading();
@@ -933,7 +991,7 @@
 
     var goal = goalEl ? (goalEl.value || "").trim() : "";
     if (!goal) {
-      toast("Выберите цель или опишите её своими словами");
+      toast(pick("Выберите цель или опишите её своими словами", "Pick a goal or describe it in your own words"));
       haptic("error");
       if (goalEl) goalEl.focus();
       return;
@@ -943,7 +1001,7 @@
 
     if (btn) {
       btn.disabled = true;
-      btn.textContent = "Подбираем…";
+      btn.textContent = pick("Подбираем…", "Finding…");
     }
     box.innerHTML =
       '<div class="sup-ai-box__loading">' +
@@ -961,9 +1019,9 @@
         box.innerHTML =
           '<div class="sup-ai-box__error">' +
           '<p class="sup-ai-box__error-text">' +
-          esc((err && err.message) || "Не удалось получить совет") +
+          esc((err && err.message) || pick("Не удалось получить совет", "Couldn’t get advice")) +
           "</p>" +
-          '<button type="button" class="btn btn-ghost sup-ai-box__retry">Повторить</button>' +
+          '<button type="button" class="btn btn-ghost sup-ai-box__retry">' + esc(pick("Повторить", "Retry")) + "</button>" +
           "</div>";
         var retry = box.querySelector(".sup-ai-box__retry");
         if (retry) retry.addEventListener("click", onAiRequest);
@@ -972,7 +1030,7 @@
       .finally(function () {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = "🤖 Получить совет";
+          btn.textContent = "🤖 " + pick("Получить совет", "Get advice");
         }
       });
   }
@@ -992,7 +1050,7 @@
     if (dosageEl) dosageEl.value = dosage;
 
     haptic("light");
-    toast("Поля заполнены — проверьте и сохраните");
+    toast(pick("Поля заполнены — проверьте и сохраните", "Fields filled — review and save"));
 
     // Подскроллим к форме, чтобы пользователь видел заполненные поля.
     var form = byId("supForm");
@@ -1103,12 +1161,12 @@
         typeof App.requirePremium === "function" &&
         !App.requirePremium(viewEl, {
           icon: "💊",
-          title: "Добавки",
-          desc: "Спортпит, напоминания и AI-советы",
+          title: pick("Добавки", "Supplements"),
+          desc: pick("Спортпит, напоминания и AI-советы", "Sports nutrition, reminders and AI advice"),
           bullets: [
-            "Учёт добавок и дозировок",
-            "Напоминания о приёме",
-            "AI-подсказки по добавкам под цель"
+            pick("Учёт добавок и дозировок", "Track supplements and dosages"),
+            pick("Напоминания о приёме", "Intake reminders"),
+            pick("AI-подсказки по добавкам под цель", "AI supplement tips for your goal")
           ]
         })
       ) {

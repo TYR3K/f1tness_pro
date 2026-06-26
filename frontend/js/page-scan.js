@@ -19,10 +19,20 @@
  *   отвечает 402 про исчерпанный лимит — вместо экрана ошибки показываем единый
  *   App.paywall (контроль доступа серверный, фронт лишь показывает).
  *
- * Весь UI-текст на русском. Идентификаторы/ключи — на английском.
+ * Локализация (RU/EN): весь видимый пользователю текст оборачивается в
+ *   App.pick("рус","eng") В МОМЕНТ РЕНДЕРА, чтобы смена языка давала нужный
+ *   текст после перерисовки. Идентификаторы/ключи/console — НЕ переводятся.
  */
 (function () {
   "use strict";
+
+  // Безопасный выбор языка: если App.pick недоступен — отдаём русский вариант.
+  // ВАЖНО: вызывать НА МОМЕНТ РЕНДЕРА (внутри render/обработчиков), а не один раз
+  // на уровне модуля, чтобы смена языка отражалась после перерисовки.
+  function L(ru, en) {
+    if (App && typeof App.pick === "function") return App.pick(ru, en);
+    return ru;
+  }
 
   // ===== Внутреннее состояние контроллера =====
   // Хранит выбранный файл, результат анализа и выбранный приём пищи.
@@ -37,12 +47,18 @@
     scans: null,           // последний ответ getScansRemaining { used, limit, remaining, is_premium } или null
   };
 
-  // Соответствие ключей приёмов пищи и русских подписей (для кнопок-чипов).
+  // Соответствие ключей приёмов пищи и подписей (для кнопок-чипов).
   // Источник истины по подписям — App.mealLabel, но порядок задаём здесь.
   var MEAL_TYPES = ["breakfast", "lunch", "dinner", "snack"];
 
-  // Русские подписи уровней уверенности модели.
-  var CONFIDENCE_LABELS = { low: "низкая", medium: "средняя", high: "высокая" };
+  // Подписи уровней уверenности модели. Локализуются в момент рендера
+  // через confidenceLabel(), а не на уровне модуля.
+  function confidenceLabel(conf) {
+    if (conf === "low") return L("низкая", "low");
+    if (conf === "medium") return L("средняя", "medium");
+    if (conf === "high") return L("высокая", "high");
+    return "";
+  }
 
   // ===== Утилиты =====
 
@@ -101,11 +117,11 @@
     return Math.round(num(v) * 10) / 10;
   }
 
-  // Русская подпись приёма пищи.
+  // Локализованная подпись приёма пищи (через App.mealLabel, который сам
+  // выбирает язык по App.pick в момент вызова).
   function mealLabel(type) {
     if (App && typeof App.mealLabel === "function") return App.mealLabel(type);
-    var map = { breakfast: "Завтрак", lunch: "Обед", dinner: "Ужин", snack: "Перекус" };
-    return map[type] || type;
+    return type;
   }
 
   // Короткий показ уведомления.
@@ -139,7 +155,8 @@
       msg.indexOf("scan") !== -1 ||
       msg.indexOf("scan_limit") !== -1 ||
       msg.indexOf("402") !== -1 ||
-      msg.indexOf("сканир") !== -1
+      msg.indexOf("сканир") !== -1 ||
+      msg.indexOf("limit") !== -1
     );
   }
 
@@ -167,7 +184,7 @@
     if (isPremium()) {
       return (
         '<p class="scan-counter scan-counter--premium">' +
-        "Сканирование без ограничений" +
+        esc(L("Сканирование без ограничений", "Unlimited scans")) +
         "</p>"
       );
     }
@@ -177,7 +194,7 @@
       // На всякий случай дублируем premium-ветку, если статус пришёл из ответа.
       return (
         '<p class="scan-counter scan-counter--premium">' +
-        "Сканирование без ограничений" +
+        esc(L("Сканирование без ограничений", "Unlimited scans")) +
         "</p>"
       );
     }
@@ -186,14 +203,19 @@
     if (remaining <= 0) {
       return (
         '<p class="scan-counter scan-counter--free' + low + '">' +
-        "Бесплатные сканирования на сегодня закончились" +
+        esc(L(
+          "Бесплатные сканирования на сегодня закончились",
+          "No free scans left today"
+        )) +
         "</p>"
       );
     }
     return (
       '<p class="scan-counter scan-counter--free' + low + '">' +
-      "Осталось " + esc(fmt(remaining)) + " из " + esc(fmt(limit)) +
-      " бесплатных сканирований" +
+      esc(L(
+        "Осталось " + fmt(remaining) + " из " + fmt(limit) + " бесплатных сканирований",
+        fmt(remaining) + " of " + fmt(limit) + " free scans left"
+      )) +
       "</p>"
     );
   }
@@ -238,17 +260,28 @@
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
-          '<h1 class="page-title">Определение еды</h1>' +
-          '<p class="page-subtitle">Сфотографируйте блюдо или загрузите фото — ' +
-            'ИИ оценит калории и БЖУ.</p>' +
+          '<h1 class="page-title">' +
+            esc(L("Определение еды", "Food recognition")) +
+          "</h1>" +
+          '<p class="page-subtitle">' +
+            esc(L(
+              "Сфотографируйте блюдо или загрузите фото — ИИ оценит калории и БЖУ.",
+              "Take a photo of your dish or upload one — AI will estimate calories and macros."
+            )) +
+          "</p>" +
         "</header>" +
         '<div class="card scan-dropzone" id="scan-dropzone">' +
           '<div class="scan-dropzone__icon" aria-hidden="true">📷</div>' +
-          '<p class="scan-dropzone__hint">Чёткое фото одной порции даёт точный результат.</p>' +
+          '<p class="scan-dropzone__hint">' +
+            esc(L(
+              "Чёткое фото одной порции даёт точный результат.",
+              "A clear photo of a single serving gives the best accuracy."
+            )) +
+          "</p>" +
           // Скрытый input: открываем камеру/галерею кнопкой.
           '<input type="file" id="scan-file" accept="image/*" capture="environment" hidden>' +
           '<button type="button" class="btn btn-cta btn-block" id="scan-pick">' +
-            "Сфотографировать / Загрузить" +
+            esc(L("Сфотографировать / Загрузить", "Take photo / Upload")) +
           "</button>" +
           // Счётчик бесплатных сканирований (заполняется асинхронно из state.scans).
           '<div id="scan-counter-slot">' + scanCounterHtml() + "</div>" +
@@ -281,13 +314,20 @@
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
-          '<h1 class="page-title">Определение еды</h1>' +
+          '<h1 class="page-title">' +
+            esc(L("Определение еды", "Food recognition")) +
+          "</h1>" +
         "</header>" +
         '<div class="card scan-preview">' +
-          '<img class="scan-preview__img" src="' + esc(src) + '" alt="Выбранное фото">' +
-          '<p class="scan-preview__status">Анализируем фото…</p>' +
+          '<img class="scan-preview__img" src="' + esc(src) + '" alt="' +
+            esc(L("Выбранное фото", "Selected photo")) + '">' +
+          '<p class="scan-preview__status">' +
+            esc(L("Анализируем фото…", "Analyzing photo…")) +
+          "</p>" +
         "</div>" +
-        '<button type="button" class="btn btn-ghost btn-block" id="scan-cancel">Отмена</button>' +
+        '<button type="button" class="btn btn-ghost btn-block" id="scan-cancel">' +
+          esc(L("Отмена", "Cancel")) +
+        "</button>" +
       "</section>";
 
     var cancelBtn = viewEl.querySelector("#scan-cancel");
@@ -313,18 +353,21 @@
       );
     }).join("");
 
-    // Бейдж уверенности модели (low/medium/high -> низкая/средняя/высокая).
+    // Бейдж уверенности модели (low/medium/high -> низкая/средняя/высокая | low/medium/high).
     var conf = r.confidence;
     var confHtml = "";
-    if (conf && CONFIDENCE_LABELS[conf]) {
+    var confLabel = confidenceLabel(conf);
+    if (conf && confLabel) {
       confHtml =
         '<div class="scan-edit-confidence scan-edit-confidence--' + esc(conf) + '">' +
-          '<span class="scan-edit-confidence__label">Уверенность ИИ:</span> ' +
-          '<span class="scan-edit-confidence__value">' + esc(CONFIDENCE_LABELS[conf]) + "</span>" +
+          '<span class="scan-edit-confidence__label">' +
+            esc(L("Уверенность ИИ:", "AI confidence:")) +
+          "</span> " +
+          '<span class="scan-edit-confidence__value">' + esc(confLabel) + "</span>" +
         "</div>";
     }
 
-    // Комментарий от ИИ показываем только если он есть.
+    // Комментарий от ИИ показываем только если он есть (это данные API — не переводим).
     var noteHtml = r.note
       ? '<p class="result-note">' + esc(r.note) + "</p>"
       : "";
@@ -332,7 +375,9 @@
     // Отладочный блок с «сырым» ответом модели (приходит только при DEBUG_AI).
     var debugHtml = r.debug
       ? '<details class="ai-debug">' +
-          '<summary class="ai-debug__sum">Ответ модели (debug)</summary>' +
+          '<summary class="ai-debug__sum">' +
+            esc(L("Ответ модели (debug)", "Model response (debug)")) +
+          "</summary>" +
           '<pre class="ai-debug__pre">' + esc(JSON.stringify(r.debug, null, 2)) + "</pre>" +
         "</details>"
       : "";
@@ -341,31 +386,53 @@
     // пропорциональный пересчёт не делаем, разрешая ручное редактирование значений.
     var hasBaseWeight = state.base && num(state.base.weight) > 0;
     var weightHintHtml = hasBaseWeight
-      ? '<p class="scan-edit-hint">При изменении веса калории и БЖУ пересчитываются автоматически.</p>'
-      : '<p class="scan-edit-hint">Вес порции не определён — отредактируйте значения вручную.</p>';
+      ? '<p class="scan-edit-hint">' +
+          esc(L(
+            "При изменении веса калории и БЖУ пересчитываются автоматически.",
+            "Calories and macros recalculate automatically when you change the weight."
+          )) +
+        "</p>"
+      : '<p class="scan-edit-hint">' +
+          esc(L(
+            "Вес порции не определён — отредактируйте значения вручную.",
+            "Serving weight not detected — edit the values manually."
+          )) +
+        "</p>";
 
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
-          '<h1 class="page-title">Результат</h1>' +
-          '<p class="page-subtitle">Проверьте и при необходимости поправьте значения перед добавлением.</p>' +
+          '<h1 class="page-title">' +
+            esc(L("Результат", "Result")) +
+          "</h1>" +
+          '<p class="page-subtitle">' +
+            esc(L(
+              "Проверьте и при необходимости поправьте значения перед добавлением.",
+              "Review and adjust the values if needed before adding."
+            )) +
+          "</p>" +
         "</header>" +
         '<div class="card result-card scan-edit-card">' +
           (src
-            ? '<img class="result-card__img" src="' + esc(src) + '" alt="Фото блюда">'
+            ? '<img class="result-card__img" src="' + esc(src) + '" alt="' +
+                esc(L("Фото блюда", "Dish photo")) + '">'
             : "") +
           confHtml +
           '<form class="scan-edit-form" id="scan-edit-form" autocomplete="off">' +
             // Название блюда.
             '<label class="field scan-edit-field scan-edit-field--name">' +
-              '<span class="field__label">Название</span>' +
+              '<span class="field__label">' +
+                esc(L("Название", "Name")) +
+              "</span>" +
               '<input type="text" class="field__input scan-edit-input" id="scan-edit-name" ' +
                 'value="' + esc(e.dish_name == null ? "" : e.dish_name) + '" ' +
-                'placeholder="Название блюда" maxlength="120">' +
+                'placeholder="' + esc(L("Название блюда", "Dish name")) + '" maxlength="120">' +
             "</label>" +
             // Вес порции (граммы).
             '<label class="field scan-edit-field scan-edit-field--weight">' +
-              '<span class="field__label">Вес порции, г</span>' +
+              '<span class="field__label">' +
+                esc(L("Вес порции, г", "Serving weight, g")) +
+              "</span>" +
               '<input type="number" inputmode="decimal" min="0" step="1" ' +
                 'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-weight" ' +
                 'value="' + esc(e.weight == null ? "" : e.weight) + '" placeholder="0">' +
@@ -373,7 +440,9 @@
             weightHintHtml +
             // Калории.
             '<label class="field scan-edit-field scan-edit-field--calories">' +
-              '<span class="field__label">Калории, ккал</span>' +
+              '<span class="field__label">' +
+                esc(L("Калории, ккал", "Calories, kcal")) +
+              "</span>" +
               '<input type="number" inputmode="decimal" min="0" step="1" ' +
                 'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-calories" ' +
                 'value="' + esc(e.calories == null ? "" : e.calories) + '" placeholder="0">' +
@@ -381,19 +450,25 @@
             // Б/Ж/У в одну сетку.
             '<div class="scan-edit-macros">' +
               '<label class="field scan-edit-field scan-edit-field--macro">' +
-                '<span class="field__label">Белки, г</span>' +
+                '<span class="field__label">' +
+                  esc(L("Белки, г", "Protein, g")) +
+                "</span>" +
                 '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
                   'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-proteins" ' +
                   'value="' + esc(e.proteins == null ? "" : e.proteins) + '" placeholder="0">' +
               "</label>" +
               '<label class="field scan-edit-field scan-edit-field--macro">' +
-                '<span class="field__label">Жиры, г</span>' +
+                '<span class="field__label">' +
+                  esc(L("Жиры, г", "Fat, g")) +
+                "</span>" +
                 '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
                   'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-fats" ' +
                   'value="' + esc(e.fats == null ? "" : e.fats) + '" placeholder="0">' +
               "</label>" +
               '<label class="field scan-edit-field scan-edit-field--macro">' +
-                '<span class="field__label">Углеводы, г</span>' +
+                '<span class="field__label">' +
+                  esc(L("Углеводы, г", "Carbs, g")) +
+                "</span>" +
                 '<input type="number" inputmode="decimal" min="0" step="0.1" ' +
                   'class="field__input scan-edit-input scan-edit-input--num" id="scan-edit-carbs" ' +
                   'value="' + esc(e.carbs == null ? "" : e.carbs) + '" placeholder="0">' +
@@ -404,13 +479,17 @@
         "</div>" +
         debugHtml +
         '<div class="meal-picker">' +
-          '<p class="meal-picker__label">Добавить как:</p>' +
+          '<p class="meal-picker__label">' +
+            esc(L("Добавить как:", "Add as:")) +
+          "</p>" +
           '<div class="meal-chips" id="scan-meals">' + chips + "</div>" +
         "</div>" +
         '<button type="button" class="btn btn-cta btn-block" id="scan-add">' +
-          "Добавить в рацион" +
+          esc(L("Добавить в рацион", "Add to diary")) +
         "</button>" +
-        '<button type="button" class="btn btn-ghost btn-block" id="scan-reset">Отмена</button>' +
+        '<button type="button" class="btn btn-ghost btn-block" id="scan-reset">' +
+          esc(L("Отмена", "Cancel")) +
+        "</button>" +
       "</section>";
 
     bindResultInputs(hasBaseWeight);
@@ -519,17 +598,19 @@
     viewEl.innerHTML =
       '<section class="page page-scan">' +
         '<header class="page-head">' +
-          '<h1 class="page-title">Что-то пошло не так</h1>' +
+          '<h1 class="page-title">' +
+            esc(L("Что-то пошло не так", "Something went wrong")) +
+          "</h1>" +
         "</header>" +
         '<div class="card error-card">' +
           '<div class="error-card__icon" aria-hidden="true">⚠️</div>' +
           // Текст в прокручиваемом блоке: при DEBUG_AI сюда приходит и сырой ответ.
           '<div class="error-card__msg">' + esc(message) + "</div>" +
           '<button type="button" class="btn btn-cta btn-block" id="scan-retry">' +
-            "Повторить" +
+            esc(L("Повторить", "Retry")) +
           "</button>" +
           '<button type="button" class="btn btn-ghost btn-block" id="scan-back">' +
-            "Выбрать другое фото" +
+            esc(L("Выбрать другое фото", "Choose another photo")) +
           "</button>" +
         "</div>" +
       "</section>";
@@ -567,18 +648,24 @@
     if (App && typeof App.paywall === "function") {
       App.paywall(viewEl, {
         icon: "📷",
-        title: "Лимит сканирований",
-        desc: "На сегодня бесплатные сканирования закончились",
+        title: L("Лимит сканирований", "Scan limit reached"),
+        desc: L(
+          "На сегодня бесплатные сканирования закончились",
+          "You've used all free scans for today"
+        ),
         bullets: [
-          "Безлимитные сканирования по подписке",
-          "AI-распознавание еды по фото",
+          L("Безлимитные сканирования по подписке", "Unlimited scans with a subscription"),
+          L("AI-распознавание еды по фото", "AI food recognition from photos"),
         ],
       });
       return;
     }
     // Запасной вариант, если единый paywall недоступен — обычный экран ошибки.
     renderError(
-      "На сегодня бесплатные сканирования закончились. Оформите подписку для безлимита.",
+      L(
+        "На сегодня бесплатные сканирования закончились. Оформите подписку для безлимита.",
+        "You've used all free scans for today. Subscribe for unlimited access."
+      ),
       "upload"
     );
   }
@@ -589,7 +676,7 @@
   function onFileChosen(file) {
     // Проверяем, что это изображение (мягкая проверка по MIME).
     if (file.type && file.type.indexOf("image/") !== 0) {
-      toast("Пожалуйста, выберите изображение");
+      toast(L("Пожалуйста, выберите изображение", "Please choose an image"));
       return;
     }
     // Освобождаем предыдущее превью и готовим новое.
@@ -625,7 +712,10 @@
 
         var weight = res && res.weight_grams != null ? num(res.weight_grams) : 0;
         state.result = {
-          dish_name: res && res.dish_name ? res.dish_name : "Не удалось распознать еду",
+          dish_name:
+            res && res.dish_name
+              ? res.dish_name
+              : L("Не удалось распознать еду", "Could not recognize the food"),
           calories: res ? num(res.calories) : 0,
           proteins: res ? num(res.proteins) : 0,
           fats: res ? num(res.fats) : 0,
@@ -673,7 +763,10 @@
         }
         var msg =
           (err && err.message) ||
-          "Не удалось проанализировать фото. Проверьте соединение и попробуйте снова.";
+          L(
+            "Не удалось проанализировать фото. Проверьте соединение и попробуйте снова.",
+            "Could not analyze the photo. Check your connection and try again."
+          );
         renderError(msg, "analyze");
       })
       .finally(function () {
@@ -689,7 +782,7 @@
     var dishName = (e.dish_name == null ? "" : String(e.dish_name)).trim();
     if (!dishName) {
       haptic("warning");
-      toast("Укажите название блюда");
+      toast(L("Укажите название блюда", "Enter a dish name"));
       var nameEl = viewEl && viewEl.querySelector("#scan-edit-name");
       if (nameEl) nameEl.focus();
       return;
@@ -712,7 +805,9 @@
       .addDiary(entry)
       .then(function () {
         haptic("success");
-        toast("Добавлено в рацион: " + mealLabel(state.mealType));
+        toast(
+          L("Добавлено в рацион: ", "Added to diary: ") + mealLabel(state.mealType)
+        );
         // Инвалидируем кэш дневника на сегодня, чтобы вкладка «Мой рацион» обновилась.
         if (App.state && App.state.diaryByDate) {
           delete App.state.diaryByDate[entry.date];
@@ -723,7 +818,10 @@
         haptic("error");
         var msg =
           (err && err.message) ||
-          "Не удалось добавить запись. Проверьте соединение и попробуйте снова.";
+          L(
+            "Не удалось добавить запись. Проверьте соединение и попробуйте снова.",
+            "Could not add the entry. Check your connection and try again."
+          );
         toast(msg);
       })
       .finally(function () {

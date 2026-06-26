@@ -50,6 +50,12 @@ class User(Base):
     first_name = Column(String, nullable=True)
     photo_url = Column(String, nullable=True)
 
+    # Язык интерфейса/сообщений пользователя: "ru" | "en".
+    # Стартовое значение задаётся при первом входе по Telegram language_code:
+    # "ru" если код начинается с "ru", иначе "en". Пользователь может сменить
+    # язык вручную (через /profile), поэтому заданное значение не перетирается.
+    language = Column(String, nullable=True)
+
     # Физические параметры для формулы Миффлина — Сан Жеора.
     weight = Column(Float, nullable=True)   # вес, кг
     height = Column(Float, nullable=True)   # рост, см

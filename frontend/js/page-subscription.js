@@ -22,43 +22,59 @@
  * показывает варианты оплаты и текущий статус. При показе и после оплаты статус
  * обновляется через App.refreshSubscription().
  *
- * Весь UI и комментарии — на русском, с обработкой ошибок и загрузки.
+ * Локализация RU/EN: все пользовательские строки обёрнуты в App.pick(ru, en)
+ * и вычисляются НА МОМЕНТ РЕНДЕРА, чтобы смена языка давала корректный текст.
  * Классы — с префиксом sub-.
  */
 (function () {
   "use strict";
 
+  // Локализация: возвращает строку на текущем языке. Хелпер App.pick задаётся
+  // в app.js; здесь — безопасный фолбэк (русский), если он ещё не определён.
+  function pick(ru, en) {
+    if (App && typeof App.pick === "function") return App.pick(ru, en);
+    return ru;
+  }
+
   // Описание тарифов: ключ для бэкенда -> метаданные для отображения.
   // Порядок задаёт расположение карточек на странице.
+  // Тексты заданы парами [ru, en] и переводятся через pick() в момент рендера.
   var TARIFF_META = [
     {
       key: "monthly",
-      title: "Месячный",
+      title: ["Месячный", "Monthly"],
       icon: "📅",
-      note: "Доступ на 30 дней"
+      note: ["Доступ на 30 дней", "Access for 30 days"]
     },
     {
       key: "yearly",
-      title: "Годовой",
+      title: ["Годовой", "Yearly"],
       icon: "🗓️",
-      note: "Выгоднее на длинной дистанции",
-      badge: "Выгодно"
+      note: ["Выгоднее на длинной дистанции", "Better value over time"],
+      badge: ["Выгодно", "Best value"]
     },
     {
       key: "lifetime",
-      title: "Вечный",
+      title: ["Вечный", "Lifetime"],
       icon: "♾️",
-      note: "Один раз — и навсегда",
-      badge: "Навсегда"
+      note: ["Один раз — и навсегда", "Pay once — keep forever"],
+      badge: ["Навсегда", "Forever"]
     }
   ];
 
   // Преимущества подписки — общий список ценности (показываем на странице).
+  // Каждый пункт — пара [ru, en]; перевод выполняется при рендере.
   var BENEFITS = [
-    "Журнал тренировок и расход калорий",
-    "Учёт добавок, напоминания и AI-советы",
-    "Безлимитные сканирования еды по фото",
-    "AI-подсказки «Что съесть?» под вашу цель"
+    ["Журнал тренировок и расход калорий", "Workout log and calorie burn"],
+    [
+      "Учёт добавок, напоминания и AI-советы",
+      "Supplement tracking, reminders and AI tips"
+    ],
+    ["Безлимитные сканирования еды по фото", "Unlimited food photo scans"],
+    [
+      "AI-подсказки «Что съесть?» под вашу цель",
+      "AI “What to eat?” tips for your goal"
+    ]
   ];
 
   // Внутреннее состояние контроллера (живёт между методами через замыкание).
@@ -100,16 +116,29 @@
   }
 
   /**
-   * Преобразует дату от сервера в человекочитаемый русский формат
-   * «ДД.ММ.ГГГГ». Принимает ISO-строку или «YYYY-MM-DD …»; при неудаче
-   * возвращает исходную строку как есть.
+   * Преобразует дату от сервера в человекочитаемый формат. В русском —
+   * «ДД.ММ.ГГГГ», в английском — локальный формат «Mon D, YYYY».
+   * Принимает ISO-строку или «YYYY-MM-DD …»; при неудаче возвращает исходную
+   * строку как есть.
    */
   function formatUntil(raw) {
     if (!raw) return "";
     var str = String(raw);
+    var enLang = App && App.lang === "en";
     // Пытаемся распарсить как полноценную дату.
     var d = new Date(str);
     if (!isNaN(d.getTime())) {
+      if (enLang) {
+        try {
+          return d.toLocaleDateString("en-US", {
+            year: "numeric",
+            month: "short",
+            day: "numeric"
+          });
+        } catch (e) {
+          // Фолбэк ниже на ручной разбор.
+        }
+      }
       var day = d.getDate();
       var mon = d.getMonth() + 1;
       var year = d.getFullYear();
@@ -154,22 +183,37 @@
         '<li class="sub-benefit">' +
         '<span class="sub-benefit__check" aria-hidden="true">✓</span>' +
         '<span class="sub-benefit__text">' +
-        esc(b) +
+        esc(pick(b[0], b[1])) +
         "</span>" +
         "</li>"
       );
     }).join("");
 
+    var backLabel = pick("Назад", "Back");
+
     return (
       '<section class="page sub-page">' +
       // ---- Шапка с кнопкой «Назад» ----
       '<header class="sub-head">' +
-      '<button type="button" class="sub-back" id="subBack" aria-label="Назад">' +
+      '<button type="button" class="sub-back" id="subBack" aria-label="' +
+      esc(backLabel) +
+      '">' +
       '<span class="sub-back__arrow" aria-hidden="true">←</span>' +
-      "<span>Назад</span>" +
+      "<span>" +
+      esc(backLabel) +
+      "</span>" +
       "</button>" +
-      '<h1 class="page-title sub-title">💎 Подписка</h1>' +
-      '<p class="page-subtitle sub-subtitle">Премиум-доступ ко всем возможностям трекера.</p>' +
+      '<h1 class="page-title sub-title">💎 ' +
+      esc(pick("Подписка", "Subscription")) +
+      "</h1>" +
+      '<p class="page-subtitle sub-subtitle">' +
+      esc(
+        pick(
+          "Премиум-доступ ко всем возможностям трекера.",
+          "Premium access to every feature of the tracker."
+        )
+      ) +
+      "</p>" +
       "</header>" +
 
       // ---- Карточка текущего статуса (заполняется renderStatus) ----
@@ -179,7 +223,9 @@
 
       // ---- Список преимуществ ----
       '<section class="card sub-benefits">' +
-      '<h2 class="sub-section-title">Что входит в подписку</h2>' +
+      '<h2 class="sub-section-title">' +
+      esc(pick("Что входит в подписку", "What is included")) +
+      "</h2>" +
       '<ul class="sub-benefits__list">' +
       benefitsHtml +
       "</ul>" +
@@ -193,7 +239,14 @@
       // ---- Оплата через Tribute (показывается при наличии ссылки) ----
       '<div class="sub-tribute" id="subTribute" hidden></div>' +
 
-      '<p class="sub-foot">Оплата проходит через Telegram. Доступ открывается сразу после оплаты.</p>' +
+      '<p class="sub-foot">' +
+      esc(
+        pick(
+          "Оплата проходит через Telegram. Доступ открывается сразу после оплаты.",
+          "Payment goes through Telegram. Access opens right after payment."
+        )
+      ) +
+      "</p>" +
       "</section>"
     );
   }
@@ -213,10 +266,14 @@
         s.is_owner || s.subscription_type === "lifetime" || !s.subscription_until;
       var untilLine;
       if (forever) {
-        untilLine = '<div class="sub-status__until">Навсегда</div>';
+        untilLine =
+          '<div class="sub-status__until">' +
+          esc(pick("Навсегда", "Forever")) +
+          "</div>";
       } else {
         untilLine =
-          '<div class="sub-status__until">до ' +
+          '<div class="sub-status__until">' +
+          esc(pick("до ", "until ")) +
           esc(formatUntil(s.subscription_until)) +
           "</div>";
       }
@@ -224,7 +281,9 @@
       box.innerHTML =
         '<div class="sub-status__icon" aria-hidden="true">✅</div>' +
         '<div class="sub-status__body">' +
-        '<div class="sub-status__title">Подписка активна</div>' +
+        '<div class="sub-status__title">' +
+        esc(pick("Подписка активна", "Subscription active")) +
+        "</div>" +
         untilLine +
         "</div>";
     } else {
@@ -233,8 +292,17 @@
       box.innerHTML =
         '<div class="sub-status__icon" aria-hidden="true">🔓</div>' +
         '<div class="sub-status__body">' +
-        '<div class="sub-status__title">Бесплатный доступ</div>' +
-        '<div class="sub-status__until">Оформите подписку, чтобы открыть все возможности</div>' +
+        '<div class="sub-status__title">' +
+        esc(pick("Бесплатный доступ", "Free access")) +
+        "</div>" +
+        '<div class="sub-status__until">' +
+        esc(
+          pick(
+            "Оформите подписку, чтобы открыть все возможности",
+            "Subscribe to unlock every feature"
+          )
+        ) +
+        "</div>" +
         "</div>";
     }
   }
@@ -256,7 +324,9 @@
       if (stars == null) return; // тариф недоступен — пропускаем
 
       var badgeHtml = meta.badge
-        ? '<span class="sub-tariff__badge">' + esc(meta.badge) + "</span>"
+        ? '<span class="sub-tariff__badge">' +
+          esc(pick(meta.badge[0], meta.badge[1])) +
+          "</span>"
         : "";
 
       cards.push(
@@ -269,11 +339,11 @@
           "</span>" +
           '<div class="sub-tariff__info">' +
           '<div class="sub-tariff__title">' +
-          esc(meta.title) +
+          esc(pick(meta.title[0], meta.title[1])) +
           badgeHtml +
           "</div>" +
           '<div class="sub-tariff__note">' +
-          esc(meta.note) +
+          esc(pick(meta.note[0], meta.note[1])) +
           "</div>" +
           "</div>" +
           '<div class="sub-tariff__price">' +
@@ -283,7 +353,8 @@
           "</div>" +
           '<button type="button" class="btn btn--cta sub-tariff__pay" data-tariff="' +
           esc(meta.key) +
-          '">Оплатить ' +
+          '">' +
+          esc(pick("Оплатить ", "Pay ")) +
           esc(String(stars)) +
           " ⭐</button>" +
           "</article>"
@@ -294,8 +365,12 @@
       // Тарифы не пришли — мягко сообщаем и предлагаем повторить.
       box.innerHTML =
         '<div class="card sub-tariffs__empty">' +
-        "<p>Не удалось загрузить тарифы.</p>" +
-        '<button type="button" class="btn btn--ghost" id="subTariffsRetry">Повторить</button>' +
+        "<p>" +
+        esc(pick("Не удалось загрузить тарифы.", "Could not load plans.")) +
+        "</p>" +
+        '<button type="button" class="btn btn--ghost" id="subTariffsRetry">' +
+        esc(pick("Повторить", "Retry")) +
+        "</button>" +
         "</div>";
       var retry = box.querySelector("#subTariffsRetry");
       if (retry) {
@@ -307,7 +382,10 @@
     }
 
     box.innerHTML =
-      '<h2 class="sub-section-title">Тарифы</h2>' + cards.join("");
+      '<h2 class="sub-section-title">' +
+      esc(pick("Тарифы", "Plans")) +
+      "</h2>" +
+      cards.join("");
 
     // Навешиваем обработчики оплаты на кнопки тарифов.
     var payBtns = box.querySelectorAll(".sub-tariff__pay");
@@ -333,9 +411,16 @@
     box.hidden = false;
     box.innerHTML =
       '<button type="button" class="btn btn--ghost sub-tribute__btn" id="subTributeBtn">' +
-      "Оплатить через Tribute" +
+      esc(pick("Оплатить через Tribute", "Pay via Tribute")) +
       "</button>" +
-      '<p class="sub-tribute__hint">Альтернативный способ оплаты во внешнем сервисе.</p>';
+      '<p class="sub-tribute__hint">' +
+      esc(
+        pick(
+          "Альтернативный способ оплаты во внешнем сервисе.",
+          "Alternative payment via an external service."
+        )
+      ) +
+      "</p>";
 
     var btn = box.querySelector("#subTributeBtn");
     if (btn) {
@@ -372,7 +457,7 @@
 
     if (!App.payStars) {
       // Контракт гарантирует наличие App.payStars; на всякий случай — фолбэк.
-      toast("Оплата временно недоступна");
+      toast(pick("Оплата временно недоступна", "Payment is temporarily unavailable"));
       return;
     }
 
@@ -388,8 +473,8 @@
       })
       .catch(function (err) {
         toast(
-          "Не удалось начать оплату: " +
-            (err && err.message ? err.message : "ошибка")
+          pick("Не удалось начать оплату: ", "Could not start payment: ") +
+            (err && err.message ? err.message : pick("ошибка", "error"))
         );
         haptic("error");
       })
@@ -412,10 +497,10 @@
       } else if (typeof window.open === "function") {
         window.open(url, "_blank");
       } else {
-        toast("Ссылка для оплаты недоступна");
+        toast(pick("Ссылка для оплаты недоступна", "Payment link is unavailable"));
       }
     } catch (err) {
-      toast("Не удалось открыть оплату");
+      toast(pick("Не удалось открыть оплату", "Could not open payment"));
     }
   }
 

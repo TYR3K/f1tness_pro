@@ -4335,3 +4335,39 @@ select.field__input {
     font-size: 22px;
   }
 }
+
+/* ============================================================
+   ПЕРЕКЛЮЧАТЕЛЬ ЯЗЫКА (page-account) — сегмент RU / EN
+   ============================================================ */
+.acc-lang__switch {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  background: rgba(201, 184, 168, .18);
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.acc-lang__btn {
+  flex: 1 1 0;
+  min-height: 44px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+.acc-lang__btn:active {
+  transform: scale(.98);
+}
+
+/* Активный язык — заметная «пилюля» в зелёном CTA-цвете. */
+.acc-lang__btn--active {
+  background: var(--cta);
+  color: var(--white);
+  box-shadow: 0 4px 12px rgba(125, 155, 118, .28);
+}

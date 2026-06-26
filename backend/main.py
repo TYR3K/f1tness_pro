@@ -262,7 +262,8 @@ def update_profile(
     payload = data.model_dump(exclude_unset=True)
 
     # Применяем только реально переданные поля профиля.
-    # Помимо базовых параметров теперь поддерживаем цель диеты и целевые БЖУ.
+    # Помимо базовых параметров теперь поддерживаем цель диеты, целевые БЖУ
+    # и язык интерфейса/ИИ (language: "ru"|"en") — пользователь может сменить язык.
     for field in (
         "weight",
         "height",
@@ -274,6 +275,7 @@ def update_profile(
         "target_proteins",
         "target_fats",
         "target_carbs",
+        "language",
     ):
         if field in payload:
             setattr(user, field, payload[field])
@@ -328,8 +330,10 @@ async def food_analyze(
         raise HTTPException(status_code=413, detail="Файл слишком большой (макс. 8 МБ)")
 
     mime = file.content_type or "image/jpeg"
+    # Язык распознавания берём из профиля пользователя ("ru" по умолчанию).
+    lang = user.language or "ru"
     try:
-        result = analyze_food_image(image_bytes, mime=mime)
+        result = analyze_food_image(image_bytes, mime=mime, lang=lang)
     except AIError as exc:
         # Сырой ответ модели всегда пишем в лог сервера (виден в логах Railway).
         logger.warning(
@@ -680,6 +684,8 @@ def food_recommend(
             remaining_carbs=data.remaining_carbs,
             diet_goal=diet_goal,
             time_of_day=data.time_of_day,
+            # Язык рекомендаций берём из профиля пользователя ("ru" по умолчанию).
+            lang=user.language or "ru",
         )
     except AIError as exc:
         logger.warning(
@@ -778,7 +784,8 @@ def supplement_suggest(
     """
     diet_goal = getattr(user, "diet_goal", None)
     try:
-        result = suggest_supplements(diet_goal)
+        # Язык подсказок берём из профиля пользователя ("ru" по умолчанию).
+        result = suggest_supplements(diet_goal, lang=user.language or "ru")
     except AIError as exc:
         logger.warning(
             "supplement/suggest: %s | finish=%s raw=%s",
@@ -1186,6 +1193,8 @@ def supplement_recommend(
             training_count=training_count,
             workout_types=workout_types,
             diet_goal=diet_goal,
+            # Язык рекомендаций берём из профиля пользователя ("ru" по умолчанию).
+            lang=user.language or "ru",
         )
     except AIError as exc:
         logger.warning(

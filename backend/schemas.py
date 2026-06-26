@@ -36,6 +36,7 @@ class ProfileOut(BaseModel):
     target_fats: Optional[float] = None      # целевой жир, г
     target_carbs: Optional[float] = None     # целевые углеводы, г
     supplement_goal: Optional[str] = None    # цель улучшения для AI-советов по спортпиту
+    language: Optional[str] = None           # язык пользователя: "ru" | "en"
 
 
 class ProfileIn(BaseModel):
@@ -53,6 +54,7 @@ class ProfileIn(BaseModel):
     target_fats: Optional[float] = None
     target_carbs: Optional[float] = None
     supplement_goal: Optional[str] = None
+    language: Optional[str] = None           # язык пользователя: "ru" | "en"
 
 
 # --------------------------------------------------------------------------- #

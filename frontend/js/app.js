@@ -6,7 +6,9 @@
  * ВАЖНО: этот файл НЕ вызывает App.init() — инициализация запускается
  * отдельным inline-скриптом в конце index.html (после регистрации страниц).
  *
- * Все комментарии и тексты для пользователя — на русском языке.
+ * Локализация: App.lang ("ru"|"en"), App.pick(ru, en), App.setLang(lang).
+ * Все пользовательские строки оборачиваются в App.pick("рус","eng") НА МОМЕНТ
+ * рендера, чтобы смена языка с перерисовкой давала нужный текст.
  */
 (function () {
   "use strict";
@@ -21,6 +23,10 @@
 
     // Telegram-пользователь из initDataUnsafe (или null).
     user: (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null,
+
+    // Текущий язык интерфейса: "ru" | "en". Определяется в App.init
+    // (профиль с сервера > язык Telegram > "ru") ДО первой навигации.
+    lang: "ru",
 
     // Простой кэш состояния приложения.
     state: {
@@ -45,6 +51,90 @@
 
     // Имя текущей активной страницы (или null до первой навигации).
     _current: null
+  };
+
+  /* =====================================================================
+   *  ЛОКАЛИЗАЦИЯ
+   *  App.lang — текущий язык. App.pick(ru, en) выбирает строку по языку.
+   *  ВСЕ пользовательские строки оборачиваются в App.pick НА МОМЕНТ рендера.
+   * ===================================================================== */
+
+  /**
+   * Возвращает английскую строку, если App.lang === "en", иначе русскую.
+   * @param {string} ru русский вариант
+   * @param {string} en английский вариант
+   * @returns {string}
+   */
+  App.pick = function (ru, en) {
+    return App.lang === "en" ? en : ru;
+  };
+
+  /**
+   * Переустанавливает подписи вкладок нижней навигации по текущему языку.
+   * Подписи в index.html заданы по-русски — здесь они заменяются по App.pick.
+   * Центральная кнопка-камера подписи не имеет (пропускаем).
+   * Вызывается в init и в setLang.
+   */
+  function applyTabLabels() {
+    // Локализуем заголовок документа и атрибут lang (видны в части клиентов).
+    try {
+      document.title = App.pick("Трекер калорий", "Calorie Tracker");
+      document.documentElement.lang = App.lang;
+    } catch (e) {
+      /* не критично */
+    }
+
+    var map = {
+      workouts: App.pick("Тренировки", "Workouts"),
+      supplements: App.pick("Добавки", "Supplements"),
+      diary: App.pick("Рацион", "Diary"),
+      account: App.pick("Аккаунт", "Account")
+    };
+    var tabs = document.querySelectorAll("#tabbar .tab");
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      var page = tab.getAttribute("data-page");
+      if (!page || !map.hasOwnProperty(page)) {
+        continue; // например, центральная кнопка-камера (scan) — без подписи
+      }
+      var labelEl = tab.querySelector(".tab-label");
+      if (labelEl) {
+        labelEl.textContent = map[page];
+      }
+    }
+  }
+
+  // Публикуем applyTabLabels для возможного использования страницами.
+  App.applyTabLabels = applyTabLabels;
+
+  /**
+   * Меняет язык интерфейса: ставит App.lang, сохраняет на сервер,
+   * переустанавливает подписи вкладок и перерисовывает текущую страницу.
+   * @param {string} lang "ru" | "en"
+   */
+  App.setLang = function (lang) {
+    var next = lang === "en" ? "en" : "ru";
+    App.lang = next;
+
+    // Синхронизируем язык в кэше профиля (best-effort).
+    if (App.state.profile && typeof App.state.profile === "object") {
+      App.state.profile.language = next;
+    }
+
+    // Сохраняем выбор на сервере (не блокируем UI, ошибки гасим).
+    try {
+      App.api.saveProfile({ language: next }).catch(function (err) {
+        console.warn("Не удалось сохранить язык: " + (err && err.message));
+      });
+    } catch (e) {
+      console.warn("Не удалось сохранить язык", e);
+    }
+
+    // Обновляем подписи вкладок и перерисовываем текущий экран.
+    applyTabLabels();
+    if (App._current) {
+      App.navigate(App._current);
+    }
   };
 
   /* =====================================================================
@@ -134,7 +224,7 @@
               }
             }
             if (!detail) {
-              detail = raw || "Ошибка " + res.status;
+              detail = raw || App.pick("Ошибка ", "Error ") + res.status;
             }
             var err = new Error(detail);
             // Прокидываем HTTP-статус и машиночитаемый код ошибки наверх,
@@ -152,7 +242,12 @@
     }).catch(function (err) {
       // Отдельно обрабатываем сетевые сбои (бэкенд недоступен, нет интернета).
       if (err instanceof TypeError) {
-        throw new Error("Нет соединения с сервером. Проверьте интернет.");
+        throw new Error(
+          App.pick(
+            "Нет соединения с сервером. Проверьте интернет.",
+            "No connection to the server. Check your internet."
+          )
+        );
       }
       throw err;
     });
@@ -523,6 +618,9 @@
 
   /**
    * Рендерит экран-заглушку (paywall) заблокированной фичи в контейнер.
+   * Тексты, передаваемые страницами (icon/title/desc/bullets), уже должны
+   * идти через App.pick на стороне страниц. Собственные подписи paywall
+   * («Недоступно — нужна подписка», «Оформить подписку») локализуются здесь.
    * @param {HTMLElement} viewEl  контейнер для вставки
    * @param {object} [opts] { icon, title, desc, bullets:[...] }
    */
@@ -532,8 +630,13 @@
     }
     opts = opts || {};
     var icon = opts.icon || "🔒";
-    var title = opts.title || "Премиум-функция";
-    var desc = opts.desc || "Эта возможность доступна по подписке";
+    var title = opts.title || App.pick("Премиум-функция", "Premium feature");
+    var desc =
+      opts.desc ||
+      App.pick(
+        "Эта возможность доступна по подписке",
+        "This feature is available with a subscription"
+      );
     var bullets = Array.isArray(opts.bullets) ? opts.bullets : [];
 
     var bulletsHtml = "";
@@ -567,10 +670,14 @@
       "</div>" +
       '<div class="paywall-lock">' +
       '<span class="paywall-lock-icon" aria-hidden="true">🔒</span>' +
-      '<span class="paywall-lock-text">Недоступно — нужна подписка</span>' +
+      '<span class="paywall-lock-text">' +
+      App.escapeHtml(
+        App.pick("Недоступно — нужна подписка", "Unavailable — subscription required")
+      ) +
+      "</span>" +
       "</div>" +
       '<button type="button" class="btn btn-cta btn-block paywall-cta" id="paywall-subscribe">' +
-      "Оформить подписку" +
+      App.escapeHtml(App.pick("Оформить подписку", "Get subscription")) +
       "</button>" +
       "</section>";
 
@@ -615,31 +722,40 @@
       .then(function (res) {
         var link = res && res.invoice_link;
         if (!link) {
-          App.toast("Не удалось создать счёт на оплату");
+          App.toast(
+            App.pick(
+              "Не удалось создать счёт на оплату",
+              "Failed to create payment invoice"
+            )
+          );
           return;
         }
         if (App.tg && typeof App.tg.openInvoice === "function") {
           App.tg.openInvoice(link, function (status) {
             if (status === "paid") {
               App.refreshSubscription().then(function () {
-                App.toast("Подписка активна!");
+                App.toast(App.pick("Подписка активна!", "Subscription is active!"));
                 // Переоткрываем текущий экран, чтобы UI отразил новый статус.
                 if (App._current) {
                   App.navigate(App._current);
                 }
               });
             } else if (status === "failed") {
-              App.toast("Оплата не прошла");
+              App.toast(App.pick("Оплата не прошла", "Payment failed"));
             }
             // status === "cancelled" / "pending" — молча игнорируем.
           });
         } else {
           // Вне Telegram оплата недоступна.
-          App.toast("Оплата доступна в Telegram");
+          App.toast(
+            App.pick("Оплата доступна в Telegram", "Payment is available in Telegram")
+          );
         }
       })
       .catch(function (err) {
-        App.toast(err && err.message ? err.message : "Ошибка оплаты");
+        App.toast(
+          err && err.message ? err.message : App.pick("Ошибка оплаты", "Payment error")
+        );
       });
   };
 
@@ -711,6 +827,40 @@
   }
 
   /**
+   * Определяет стартовый язык интерфейса по приоритету:
+   *   1) язык из профиля (сервер) — App.state.profile.language;
+   *   2) язык Telegram-пользователя (language_code: "ru*" -> ru, иначе en);
+   *   3) "ru" по умолчанию.
+   * Результат сохраняется в App.lang.
+   */
+  function detectLang() {
+    // 1) Приоритет — язык из профиля на сервере.
+    var profileLang =
+      App.state.profile &&
+      typeof App.state.profile.language === "string" &&
+      App.state.profile.language;
+    if (profileLang === "ru" || profileLang === "en") {
+      App.lang = profileLang;
+      return;
+    }
+
+    // 2) Язык Telegram-пользователя.
+    var code =
+      (App.tg &&
+        App.tg.initDataUnsafe &&
+        App.tg.initDataUnsafe.user &&
+        App.tg.initDataUnsafe.user.language_code) ||
+      "";
+    if (typeof code === "string" && code) {
+      App.lang = code.toLowerCase().indexOf("ru") === 0 ? "ru" : "en";
+      return;
+    }
+
+    // 3) По умолчанию — русский.
+    App.lang = "ru";
+  }
+
+  /**
    * Инициализация приложения. Вызывается ОДИН раз из index.html
    * после регистрации всех страниц.
    */
@@ -741,6 +891,11 @@
     // Применяем тему/вьюпорт.
     applyTheme();
 
+    // Предварительное определение языка по Telegram (профиля ещё нет).
+    // Чтобы UI до загрузки профиля уже был на правильном языке.
+    detectLang();
+    applyTabLabels();
+
     // Навешиваем обработчики на кнопки нижней навигации.
     var tabs = document.querySelectorAll("#tabbar .tab");
     for (var i = 0; i < tabs.length; i++) {
@@ -769,6 +924,10 @@
         console.warn("Авторизация не выполнена: " + err.message);
       })
       .then(function () {
+        // Профиль загружен — определяем язык окончательно (профиль > telegram > ru)
+        // и обновляем подписи вкладок ДО первой навигации.
+        detectLang();
+        applyTabLabels();
         // refreshSubscription сам гасит свои ошибки, статус остаётся дефолтным.
         return App.refreshSubscription();
       })
@@ -868,21 +1027,25 @@
     return String(Math.round(num));
   };
 
-  // Соответствие типов приёма пищи и русских подписей.
-  var MEAL_LABELS = {
-    breakfast: "Завтрак",
-    lunch: "Обед",
-    dinner: "Ужин",
-    snack: "Перекус"
-  };
-
   /**
-   * Возвращает русскую подпись для типа приёма пищи.
+   * Возвращает локализованную подпись для типа приёма пищи.
+   * Локализуется НА МОМЕНТ вызова через App.pick (а не один раз при загрузке).
    * @param {string} type breakfast|lunch|dinner|snack
    * @returns {string}
    */
   App.mealLabel = function (type) {
-    return MEAL_LABELS[type] || type || "";
+    switch (type) {
+      case "breakfast":
+        return App.pick("Завтрак", "Breakfast");
+      case "lunch":
+        return App.pick("Обед", "Lunch");
+      case "dinner":
+        return App.pick("Ужин", "Dinner");
+      case "snack":
+        return App.pick("Перекус", "Snack");
+      default:
+        return type || "";
+    }
   };
 
   /**

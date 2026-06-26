@@ -109,13 +109,26 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
     return pairs
 
 
-def _upsert_user(db: Session, *, telegram_id: int, username, first_name, photo_url) -> User:
+def _upsert_user(
+    db: Session,
+    *,
+    telegram_id: int,
+    username,
+    first_name,
+    photo_url,
+    language_code=None,
+) -> User:
     """
     Создать пользователя, если его ещё нет, либо обновить изменяемые поля
     профиля Telegram (username/first_name/photo_url) у существующего.
 
     Поля weight/height/age/gender/goal не трогаем — это данные, которые
     пользователь задаёт сам в разделе «Мой аккаунт».
+
+    Язык (user.language) инициализируется только при СОЗДАНИИ нового
+    пользователя или если он ещё не задан: "ru", если Telegram language_code
+    начинается с "ru", иначе "en". Уже заданный язык НЕ перетираем —
+    пользователь мог сменить его вручную (через /profile).
     """
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if user is None:
@@ -132,6 +145,13 @@ def _upsert_user(db: Session, *, telegram_id: int, username, first_name, photo_u
         user.username = username
         user.first_name = first_name
         user.photo_url = photo_url
+
+    # Инициализация языка при создании или если он ещё пуст. Заданный ранее
+    # язык не трогаем, чтобы не сбросить ручной выбор пользователя.
+    if not user.language:
+        user.language = (
+            "ru" if str(language_code or "").lower().startswith("ru") else "en"
+        )
 
     db.commit()
     db.refresh(user)
@@ -182,6 +202,7 @@ def get_current_user(
             username=tg_user.get("username"),
             first_name=tg_user.get("first_name"),
             photo_url=tg_user.get("photo_url"),
+            language_code=tg_user.get("language_code"),
         )
 
     # Проверка не прошла. Разрешён ли небезопасный режим для разработки?

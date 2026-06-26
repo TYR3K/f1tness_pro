@@ -74,6 +74,8 @@ def run_migrations():
         ("is_owner", "INTEGER", "0"),              # владелец приложения (булево как 0/1)
         ("daily_scans_used", "INTEGER", "0"),      # использовано сканов за сутки
         ("daily_scans_date", "TEXT", None),        # дата счётчика сканов (ISO)
+        # Язык интерфейса/сообщений пользователя ("ru" | "en"), nullable.
+        ("language", "TEXT", None),
     ]
 
     try:

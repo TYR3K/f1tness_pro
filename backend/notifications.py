@@ -17,6 +17,13 @@ Telegram Bot API (метод sendMessage по httpx).
   * вечерняя сводка дня (summary) — берётся из NotificationSettings:
     съедено / цель / осталось.
 
+Язык уведомлений:
+  Тексты выдаются на языке пользователя (User.language = "ru"|"en", по умолчанию
+  "ru"). Для приёмов пищи и сводки язык берётся напрямую из User (он уже
+  выбирается в check_notifications). Для тренировок и спортпита язык подтягивается
+  по telegram_id отдельным запросом (с фолбэком "ru" при любой ошибке/отсутствии).
+  Маленький хелпер _msg() выбирает русский/английский текст по виду уведомления.
+
 Важно: NotificationSettings теперь используется ТОЛЬКО для приёмов пищи (meal_*)
 и вечерней сводки (daily_summary_*). Напоминания о тренировках и спортпите
 переехали в отдельные таблицы TrainingReminder / SupplementReminder, поэтому
@@ -100,6 +107,155 @@ def _resolve_tz():
 
 # Часовой пояс приложения, вычисляется один раз при импорте.
 APP_TZ = _resolve_tz()
+
+
+# --------------------------------------------------------------------------- #
+#  Локализация текстов уведомлений (RU / EN)
+# --------------------------------------------------------------------------- #
+def _norm_lang(lang) -> str:
+    """Нормализовать язык пользователя к "ru" или "en" (по умолчанию "ru").
+
+    Любое значение, начинающееся на "en" (без учёта регистра), трактуем как
+    английский; всё остальное (включая None/пусто/"ru") — как русский. Это
+    устойчиво к мусорным/устаревшим значениям в БД.
+    """
+    try:
+        if str(lang or "").strip().lower().startswith("en"):
+            return "en"
+    except Exception:
+        pass
+    return "ru"
+
+
+def _user_language(db, tid: int) -> str:
+    """Подтянуть язык пользователя по telegram_id (фолбэк "ru").
+
+    Используется там, где у нас на руках нет объекта User (напоминания о
+    тренировках/спортпите идут по своим таблицам). При любой ошибке/отсутствии
+    пользователя возвращаем "ru", чтобы не ломать отправку.
+    """
+    try:
+        user = db.query(User).filter(User.telegram_id == tid).first()
+        if user is not None:
+            return _norm_lang(getattr(user, "language", None))
+    except Exception as exc:
+        logger.warning("_user_language: ошибка получения языка tid=%s: %s", tid, exc)
+    return "ru"
+
+
+# Словарь шаблонов текстов уведомлений: ключ -> {"ru": ..., "en": ...}.
+# Для приёмов пищи метки приёма (label) тоже хранятся локализованными.
+_TEXTS = {
+    # Метки приёмов пищи (используются внутри текста напоминания о приёме).
+    "meal_label_breakfast": {"ru": "завтрак", "en": "breakfast"},
+    "meal_label_lunch": {"ru": "обед", "en": "lunch"},
+    "meal_label_dinner": {"ru": "ужин", "en": "dinner"},
+    # Заголовок напоминания о приёме пищи (подставляется emoji и метка).
+    # {emoji} — иконка приёма, {label} — локализованная метка приёма пищи.
+    "meal_reminder": {
+        "ru": (
+            "{emoji} <b>Напоминание: {label}</b>\n"
+            "Не забудьте поесть и записать приём пищи в дневник 🍽️"
+        ),
+        "en": (
+            "{emoji} <b>Reminder: {label}</b>\n"
+            "Don't forget to eat and log your meal in the diary 🍽️"
+        ),
+    },
+    # Напоминание о тренировке.
+    "training_reminder": {
+        "ru": (
+            "💪 <b>Напоминание о тренировке!</b>\n"
+            "Пора размяться. После — не забудьте записать тренировку 🏋️"
+        ),
+        "en": (
+            "💪 <b>Workout reminder!</b>\n"
+            "Time to move. Afterwards — don't forget to log your workout 🏋️"
+        ),
+    },
+    # Метка по умолчанию для напоминания о спортпите (если у строки нет своей).
+    "supplement_default_label": {"ru": "Приём добавок", "en": "Supplements"},
+    # Напоминание о приёме спортпита с перечислением названий.
+    # {label} — метка напоминания, {names} — список названий добавок.
+    "supplement_reminder_named": {
+        "ru": (
+            "💊 <b>Приём добавок</b>\n"
+            "{label}: <b>{names}</b>"
+        ),
+        "en": (
+            "💊 <b>Supplements</b>\n"
+            "{label}: <b>{names}</b>"
+        ),
+    },
+    # Напоминание о приёме спортпита без списка (только метка).
+    "supplement_reminder_plain": {
+        "ru": (
+            "💊 <b>Приём добавок</b>\n"
+            "{label}"
+        ),
+        "en": (
+            "💊 <b>Supplements</b>\n"
+            "{label}"
+        ),
+    },
+    # Хвост вечерней сводки: осталось калорий / превышение.
+    # {value} — число калорий.
+    "summary_remaining": {
+        "ru": "Осталось: <b>{value}</b> ккал ✅",
+        "en": "Remaining: <b>{value}</b> kcal ✅",
+    },
+    "summary_exceeded": {
+        "ru": "Превышение: <b>{value}</b> ккал ⚠️",
+        "en": "Exceeded by: <b>{value}</b> kcal ⚠️",
+    },
+    # Вечерняя сводка дня, когда цель задана. {eaten}/{goal}/{tail}.
+    "summary_with_goal": {
+        "ru": (
+            "📊 <b>Итоги дня</b>\n"
+            "Съедено: <b>{eaten}</b> ккал\n"
+            "Цель: <b>{goal}</b> ккал\n"
+            "{tail}"
+        ),
+        "en": (
+            "📊 <b>Daily summary</b>\n"
+            "Eaten: <b>{eaten}</b> kcal\n"
+            "Goal: <b>{goal}</b> kcal\n"
+            "{tail}"
+        ),
+    },
+    # Вечерняя сводка дня, когда цель НЕ задана. {eaten}.
+    "summary_no_goal": {
+        "ru": (
+            "📊 <b>Итоги дня</b>\n"
+            "Съедено: <b>{eaten}</b> ккал\n"
+            "Цель по калориям не задана — задайте её в профиле 🎯"
+        ),
+        "en": (
+            "📊 <b>Daily summary</b>\n"
+            "Eaten: <b>{eaten}</b> kcal\n"
+            "Calorie goal not set — set it in your profile 🎯"
+        ),
+    },
+}
+
+
+def _msg(key: str, lang: str, **kwargs) -> str:
+    """Вернуть локализованный текст по ключу с подстановкой параметров.
+
+    Хелпер выбирает русский/английский вариант (фолбэк на "ru", а затем на
+    «первый доступный») и форматирует его через str.format(**kwargs). Любой сбой
+    форматирования не должен ронять отправку — отдаём неформатированный шаблон.
+    """
+    variants = _TEXTS.get(key, {})
+    template = variants.get(lang)
+    if template is None:
+        # Нет нужного языка — пробуем русский, затем любой доступный вариант.
+        template = variants.get("ru") or (next(iter(variants.values()), "") if variants else "")
+    try:
+        return template.format(**kwargs) if kwargs else template
+    except Exception:
+        # Подстановка не удалась — возвращаем шаблон как есть (лучше, чем падение).
+        return template
 
 
 # --------------------------------------------------------------------------- #
@@ -257,8 +413,13 @@ def _has_diary_entry(db, tid: int, date: str, meal_type: str) -> bool:
 #  Обработка приёмов пищи и вечерней сводки (NotificationSettings)
 # --------------------------------------------------------------------------- #
 def _process_meal_reminder(db, tid: int, today: str, now: datetime,
-                           kind: str, meal_time: str | None, label: str, emoji: str) -> None:
-    """Напоминание о приёме пищи: шлём, только если запись ещё не сделана."""
+                           kind: str, meal_time: str | None,
+                           label_key: str, emoji: str, lang: str) -> None:
+    """Напоминание о приёме пищи: шлём, только если запись ещё не сделана.
+
+    Текст и метку приёма (label) берём на языке пользователя (lang). label_key —
+    ключ локализованной метки приёма ("meal_label_breakfast" и т.п.).
+    """
     if not _time_reached(now, meal_time):
         return
     if _was_sent(db, tid, kind, today):
@@ -266,23 +427,25 @@ def _process_meal_reminder(db, tid: int, today: str, now: datetime,
     # Если запись этого приёма пищи за сегодня уже есть — напоминать не нужно.
     if _has_diary_entry(db, tid, today, kind):
         return
-    text = (
-        f"{emoji} <b>Напоминание: {label}</b>\n"
-        f"Не забудьте поесть и записать приём пищи в дневник 🍽️"
-    )
+    # Локализованная метка приёма пищи (завтрак/обед/ужин -> breakfast/lunch/dinner).
+    label = _msg(label_key, lang)
+    text = _msg("meal_reminder", lang, emoji=emoji, label=label)
     if send_telegram(tid, text):
         _mark_sent(db, tid, kind, today)
 
 
 def _process_daily_summary(db, tid: int, today: str, now: datetime,
                            user: "User", settings: "NotificationSettings") -> None:
-    """Вечерняя сводка по дню: съедено / цель / осталось."""
+    """Вечерняя сводка по дню: съедено / цель / осталось (на языке пользователя)."""
     if not getattr(settings, "daily_summary_enabled", False):
         return
     if not _time_reached(now, getattr(settings, "summary_time", None)):
         return
     if _was_sent(db, tid, "summary", today):
         return
+
+    # Язык пользователя для текста сводки (объект User у нас уже на руках).
+    lang = _norm_lang(getattr(user, "language", None))
 
     # Считаем съеденные за день калории.
     try:
@@ -301,22 +464,13 @@ def _process_daily_summary(db, tid: int, today: str, now: datetime,
     if goal:
         remaining = goal - eaten
         if remaining >= 0:
-            tail = f"Осталось: <b>{remaining}</b> ккал ✅"
+            tail = _msg("summary_remaining", lang, value=remaining)
         else:
-            tail = f"Превышение: <b>{abs(remaining)}</b> ккал ⚠️"
-        text = (
-            "📊 <b>Итоги дня</b>\n"
-            f"Съедено: <b>{eaten}</b> ккал\n"
-            f"Цель: <b>{goal}</b> ккал\n"
-            f"{tail}"
-        )
+            tail = _msg("summary_exceeded", lang, value=abs(remaining))
+        text = _msg("summary_with_goal", lang, eaten=eaten, goal=goal, tail=tail)
     else:
         # Цель не задана — отдаём только факт съеденного.
-        text = (
-            "📊 <b>Итоги дня</b>\n"
-            f"Съедено: <b>{eaten}</b> ккал\n"
-            "Цель по калориям не задана — задайте её в профиле 🎯"
-        )
+        text = _msg("summary_no_goal", lang, eaten=eaten)
 
     if send_telegram(tid, text):
         _mark_sent(db, tid, "summary", today)
@@ -331,7 +485,8 @@ def _process_training_reminder(db, reminder: "TrainingReminder",
 
     Шлём, если включено, СЕГОДНЯШНИЙ день недели (now.weekday(): Пн=0..Вс=6)
     присутствует в CSV weekdays, время "HH:MM" уже наступило и сегодня ещё не
-    отправляли (дедуп по kind="trainrem:{id}").
+    отправляли (дедуп по kind="trainrem:{id}"). Текст — на языке пользователя
+    (подтягиваем по telegram_id, фолбэк "ru").
     """
     tid = getattr(reminder, "telegram_id", None)
     rid = getattr(reminder, "id", None)
@@ -352,10 +507,10 @@ def _process_training_reminder(db, reminder: "TrainingReminder",
     if _was_sent(db, tid, kind, today):
         return
 
-    text = (
-        "💪 <b>Напоминание о тренировке!</b>\n"
-        "Пора размяться. После — не забудьте записать тренировку 🏋️"
-    )
+    # Язык пользователя подтягиваем по telegram_id (у строки TrainingReminder
+    # объекта User нет). При ошибке/отсутствии — "ru".
+    lang = _user_language(db, tid)
+    text = _msg("training_reminder", lang)
     if send_telegram(tid, text):
         _mark_sent(db, tid, kind, today)
 
@@ -370,7 +525,8 @@ def _process_supplement_reminder(db, reminder: "SupplementReminder",
     Шлём, если включено и время "HH:MM" уже наступило (дедуп по
     kind="supprem:{id}"). Названия добавок собираем через SupplementReminderItem
     -> Supplement.name, учитывая только добавки, принадлежащие тому же
-    пользователю. Если список пуст — шлём общий текст по метке (label).
+    пользователю. Если список пуст — шлём общий текст по метке (label). Текст —
+    на языке пользователя (подтягиваем по telegram_id, фолбэк "ru").
     """
     tid = getattr(reminder, "telegram_id", None)
     rid = getattr(reminder, "id", None)
@@ -385,8 +541,12 @@ def _process_supplement_reminder(db, reminder: "SupplementReminder",
     if _was_sent(db, tid, kind, today):
         return
 
-    # Метка напоминания ("Утро" / "Ночь" / своё). Подстраховка на пустое значение.
-    label = getattr(reminder, "label", None) or "Приём добавок"
+    # Язык пользователя (по telegram_id, фолбэк "ru").
+    lang = _user_language(db, tid)
+
+    # Метка напоминания ("Утро" / "Ночь" / своё). Если у строки метки нет —
+    # подставляем локализованную метку по умолчанию.
+    label = getattr(reminder, "label", None) or _msg("supplement_default_label", lang)
 
     # Собираем названия добавок: items -> Supplement (только этого пользователя).
     names: list[str] = []
@@ -421,16 +581,10 @@ def _process_supplement_reminder(db, reminder: "SupplementReminder",
         names = []
 
     if names:
-        text = (
-            "💊 <b>Приём добавок</b>\n"
-            f"{label}: <b>{', '.join(names)}</b>"
-        )
+        text = _msg("supplement_reminder_named", lang, label=label, names=", ".join(names))
     else:
         # Список пуст (или не удалось получить) — общий текст по метке.
-        text = (
-            "💊 <b>Приём добавок</b>\n"
-            f"{label}"
-        )
+        text = _msg("supplement_reminder_plain", lang, label=label)
 
     if send_telegram(tid, text):
         _mark_sent(db, tid, kind, today)
@@ -471,7 +625,8 @@ def check_notifications() -> None:
             if tid is None:
                 continue
             try:
-                # Профиль пользователя нужен для вечерней сводки (цель калорий).
+                # Профиль пользователя нужен для вечерней сводки (цель калорий)
+                # и для выбора языка уведомлений о приёмах пищи / сводки.
                 user = (
                     db.query(User)
                     .filter(User.telegram_id == tid)
@@ -481,28 +636,31 @@ def check_notifications() -> None:
                     # Настройки без пользователя — пропускаем (целостность данных).
                     continue
 
+                # Язык пользователя для приёмов пищи (фолбэк "ru").
+                lang = _norm_lang(getattr(user, "language", None))
+
                 # Напоминания о приёмах пищи (только если не записаны).
                 if getattr(settings, "meal_reminder_enabled", False):
                     _process_meal_reminder(
                         db, tid, today, now,
                         kind="breakfast",
                         meal_time=getattr(settings, "breakfast_time", None),
-                        label="завтрак", emoji="🍳",
+                        label_key="meal_label_breakfast", emoji="🍳", lang=lang,
                     )
                     _process_meal_reminder(
                         db, tid, today, now,
                         kind="lunch",
                         meal_time=getattr(settings, "lunch_time", None),
-                        label="обед", emoji="🍲",
+                        label_key="meal_label_lunch", emoji="🍲", lang=lang,
                     )
                     _process_meal_reminder(
                         db, tid, today, now,
                         kind="dinner",
                         meal_time=getattr(settings, "dinner_time", None),
-                        label="ужин", emoji="🍽️",
+                        label_key="meal_label_dinner", emoji="🍽️", lang=lang,
                     )
 
-                # Вечерняя сводка дня.
+                # Вечерняя сводка дня (язык берётся из user внутри функции).
                 _process_daily_summary(db, tid, today, now, user, settings)
 
             except Exception as exc:

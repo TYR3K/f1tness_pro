@@ -10,6 +10,14 @@
         - /givepro | /revokepro  -> ручная выдача/отзыв доступа ВЛАДЕЛЬЦЕМ;
         - /start                 -> приветственное сообщение.
 
+Язык сообщений:
+  Пользовательские сообщения выдаются на двух языках (RU/EN):
+    * /start — язык определяется по message["from"]["language_code"]
+      (начинается на "ru" -> русский, иначе английский);
+    * подтверждение оплаты (successful_payment) — по User.language активированного
+      пользователя (фолбэк "ru").
+  Ответы ВЛАДЕЛЬЦУ на /givepro и /revokepro оставлены на русском (владелец один).
+
 Безопасность (критично):
   * Команды /givepro и /revokepro доступны ТОЛЬКО владельцу. Владелец
     определяется СТРОГО по telegram_id == config.OWNER_ID, НИКОГДА по username.
@@ -40,6 +48,77 @@ logger = logging.getLogger("telegram_bot")
 
 # Токен Telegram-бота (без него вызовы Bot API невозможны).
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+
+
+# --------------------------------------------------------------------------- #
+#  Локализация пользовательских сообщений (RU / EN)
+# --------------------------------------------------------------------------- #
+def _norm_lang(lang) -> str:
+    """Нормализовать язык к "ru" или "en" (по умолчанию "ru").
+
+    Значение, начинающееся на "en" (без учёта регистра), трактуем как
+    английский; всё остальное (None/пусто/"ru"/"ru-RU"/мусор) — как русский.
+    Подходит и для Telegram language_code ("en", "en-US", "ru", "ru-RU"...),
+    и для сохранённого в БД User.language.
+    """
+    try:
+        if str(lang or "").strip().lower().startswith("en"):
+            return "en"
+    except Exception:
+        pass
+    return "ru"
+
+
+def _user_language(db, tid: int) -> str:
+    """Подтянуть язык пользователя по telegram_id (фолбэк "ru").
+
+    При любой ошибке/отсутствии пользователя возвращаем "ru".
+    """
+    try:
+        user = db.query(User).filter(User.telegram_id == tid).first()
+        if user is not None:
+            return _norm_lang(getattr(user, "language", None))
+    except Exception as exc:
+        logger.warning("_user_language: ошибка получения языка tid=%s: %s", tid, exc)
+    return "ru"
+
+
+def _greeting_text(lang: str, name: str) -> str:
+    """Собрать приветственное сообщение /start на нужном языке.
+
+    name — имя пользователя (может быть пустым). HTML не используется, поэтому
+    спецсимволы в имени безопасны для отправки как обычный текст.
+    """
+    if lang == "en":
+        return (
+            (f"Hi, {name}! " if name else "Hi! ")
+            + "This is the «Calories» app bot 🥗\n\n"
+            "Open the mini app to count calories from photos, keep a food diary, "
+            "track workouts and supplements.\n"
+            "You can subscribe right inside the app."
+        )
+    # Русский вариант (по умолчанию) — без изменений относительно прежнего текста.
+    return (
+        (f"Привет, {name}! " if name else "Привет! ")
+        + "Это бот приложения «Калории» 🥗\n\n"
+        "Открывайте мини-приложение, чтобы считать калории по фото, "
+        "вести дневник питания, тренировки и спортпит.\n"
+        "Оформить подписку можно прямо в приложении."
+    )
+
+
+def _payment_success_text(lang: str) -> str:
+    """Текст подтверждения успешной оплаты на нужном языке."""
+    if lang == "en":
+        return (
+            "✅ Payment received! Premium access is now active.\n"
+            "Thank you for your support — enjoy the «Calories» app."
+        )
+    # Русский вариант (по умолчанию) — без изменений относительно прежнего текста.
+    return (
+        "✅ Оплата получена! Премиум-доступ активирован.\n"
+        "Спасибо за поддержку — приятного пользования приложением «Калории»."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -183,6 +262,9 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
     Цель команды задаётся через @username: ищем пользователя по User.username.
     Если такого пользователя нет в БД — просим владельца, чтобы цель сначала
     открыла приложение (так у нас появится её telegram_id).
+
+    Примечание по языку: ответы адресованы ВЛАДЕЛЬЦУ (он один), поэтому
+    оставлены на русском — локализация здесь не требуется.
     """
     from_id = None
     try:
@@ -338,14 +420,16 @@ def handle_update(db, update: dict) -> None:
                     successful_payment.get("currency", "XTR"),
                 )
 
+                # Подтверждение оплаты — на языке активированного пользователя
+                # (User.language, фолбэк "ru"). Берём язык по tid из payload —
+                # он точно указывает на того, кому активировали подписку.
+                lang = _user_language(db, tid)
+
                 # Подтверждаем пользователю активацию подписки.
                 chat_id = message.get("chat", {}).get("id", tid)
                 _bot_api("sendMessage", {
                     "chat_id": chat_id,
-                    "text": (
-                        "✅ Оплата получена! Премиум-доступ активирован.\n"
-                        "Спасибо за поддержку — приятного пользования приложением «Калории»."
-                    ),
+                    "text": _payment_success_text(lang),
                 })
             except Exception as exc:
                 logger.warning("handle_update: сбой активации после оплаты: %s", exc)
@@ -374,13 +458,16 @@ def handle_update(db, update: dict) -> None:
                         name = message.get("from", {}).get("first_name", "") or ""
                     except Exception:
                         name = ""
-                    greeting = (
-                        (f"Привет, {name}! " if name else "Привет! ")
-                        + "Это бот приложения «Калории» 🥗\n\n"
-                        "Открывайте мини-приложение, чтобы считать калории по фото, "
-                        "вести дневник питания, тренировки и спортпит.\n"
-                        "Оформить подписку можно прямо в приложении."
-                    )
+                    # Язык приветствия — по language_code из апдейта
+                    # (ru* -> русский, иначе английский). В БД пользователя ещё
+                    # может не быть, поэтому опираемся именно на апдейт.
+                    lang_code = ""
+                    try:
+                        lang_code = message.get("from", {}).get("language_code", "") or ""
+                    except Exception:
+                        lang_code = ""
+                    lang = _norm_lang(lang_code)
+                    greeting = _greeting_text(lang, name)
                     _bot_api("sendMessage", {"chat_id": chat_id, "text": greeting})
                 return
 

@@ -11,6 +11,7 @@
  *     норму в поле цели и показывает блок целевых БЖУ.
  *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile
  *     (включая diet_goal).
+ *   - Карточка «Язык / Language»: переключатель RU/EN -> App.setLang(...).
  *   - Карточка «Вечерняя сводка»: ТОЛЬКО тумблер daily_summary_enabled и время
  *     summary_time (App.api.getNotificationSettings / saveNotificationSettings).
  *     Остальные напоминания вынесены в свои разделы (Тренировки, Добавки, Рацион).
@@ -18,26 +19,84 @@
  *     в виде простого столбчатого графика (дата + ккал).
  *
  * Предзаполнение формы выполняется через App.api.getProfile.
- * Весь UI и комментарии — на русском, с обработкой ошибок и состояний загрузки.
+ * Весь видимый пользователю текст локализован через App.pick(ru, en) и
+ * вычисляется НА МОМЕНТ РЕНДЕРА, чтобы смена языка давала корректный текст.
  */
 (function () {
   "use strict";
 
   // Варианты уровня активности для выпадающего списка.
-  // value — коэффициент TDEE, label — понятное описание на русском.
+  // value — коэффициент TDEE, label() — локализованное описание (RU/EN),
+  // вычисляется на момент рендера через App.pick.
   var ACTIVITY_OPTIONS = [
-    { value: 1.2, label: "Минимальная (сидячий образ жизни)" },
-    { value: 1.375, label: "Лёгкая (1-3 тренировки в неделю)" },
-    { value: 1.55, label: "Средняя (3-5 тренировок в неделю)" },
-    { value: 1.725, label: "Высокая (6-7 тренировок в неделю)" },
-    { value: 1.9, label: "Очень высокая (тяжёлый физический труд)" }
+    {
+      value: 1.2,
+      label: function () {
+        return App.pick(
+          "Минимальная (сидячий образ жизни)",
+          "Minimal (sedentary lifestyle)"
+        );
+      }
+    },
+    {
+      value: 1.375,
+      label: function () {
+        return App.pick(
+          "Лёгкая (1-3 тренировки в неделю)",
+          "Light (1-3 workouts per week)"
+        );
+      }
+    },
+    {
+      value: 1.55,
+      label: function () {
+        return App.pick(
+          "Средняя (3-5 тренировок в неделю)",
+          "Moderate (3-5 workouts per week)"
+        );
+      }
+    },
+    {
+      value: 1.725,
+      label: function () {
+        return App.pick(
+          "Высокая (6-7 тренировок в неделю)",
+          "High (6-7 workouts per week)"
+        );
+      }
+    },
+    {
+      value: 1.9,
+      label: function () {
+        return App.pick(
+          "Очень высокая (тяжёлый физический труд)",
+          "Very high (hard physical labor)"
+        );
+      }
+    }
   ];
 
   // Варианты цели питания (diet_goal). value — то, что уходит на сервер.
+  // label() локализуется на момент рендера.
   var DIET_GOAL_OPTIONS = [
-    { value: "loss", label: "Похудение" },
-    { value: "maintain", label: "Поддержание" },
-    { value: "gain", label: "Набор массы" }
+    {
+      value: "loss",
+      label: function () {
+        return App.pick("Похудение", "Weight loss");
+      }
+    },
+    {
+      value: "maintain",
+      label: function () {
+        return App.pick("Поддержание", "Maintenance");
+      }
+    },
+    {
+      value: "gain",
+      label: function () {
+        return App.pick("Набор массы", "Muscle gain");
+      }
+    }
   ];
 
   // Значение времени по умолчанию для вечерней сводки, если сервер не вернул своё.
@@ -45,7 +104,7 @@
 
   /**
    * Преобразует ISO-дату подписки (например, "2026-12-31" или
-   * "2026-12-31T10:00:00") в короткий русский формат "ДД.ММ.ГГГГ".
+   * "2026-12-31T10:00:00") в короткий формат "ДД.ММ.ГГГГ".
    * Возвращает пустую строку, если дату распознать не удалось.
    */
   function formatSubDate(value) {
@@ -62,6 +121,7 @@
 
   /**
    * Формирует краткий статус подписки из App.subscription.
+   * Текст локализуется на момент вызова (RU/EN).
    * @returns {{ text:string, premium:boolean }}
    *   premium=true — активная подписка (для подсветки карточки).
    */
@@ -72,18 +132,33 @@
 
     // Владелец и вечная подписка — доступ навсегда.
     if (sub.is_owner || type === "lifetime") {
-      return { text: "Вечная подписка", premium: true };
+      return {
+        text: App.pick("Вечная подписка", "Lifetime subscription"),
+        premium: true
+      };
     }
 
     if (premium) {
       var until = formatSubDate(sub.subscription_until);
       if (until) {
-        return { text: "Премиум активен до " + until, premium: true };
+        return {
+          text: App.pick(
+            "Премиум активен до " + until,
+            "Premium active until " + until
+          ),
+          premium: true
+        };
       }
-      return { text: "Премиум активен", premium: true };
+      return {
+        text: App.pick("Премиум активен", "Premium active"),
+        premium: true
+      };
     }
 
-    return { text: "Бесплатный доступ", premium: false };
+    return {
+      text: App.pick("Бесплатный доступ", "Free access"),
+      premium: false
+    };
   }
 
   // Ссылки на корневой элемент представления и элементы формы.
@@ -92,6 +167,7 @@
 
   /**
    * Возвращает HTML-разметку всей страницы аккаунта.
+   * Все видимые строки локализуются здесь через App.pick на момент рендера.
    */
   function template() {
     // Имя пользователя для шапки (берём из Telegram-объекта, если есть).
@@ -100,40 +176,47 @@
       (u.first_name ? u.first_name : "") +
       (u.last_name ? " " + u.last_name : "");
     if (!displayName.trim()) {
-      displayName = u.username ? "@" + u.username : "Пользователь";
+      displayName = u.username
+        ? "@" + u.username
+        : App.pick("Пользователь", "User");
     }
 
-    // Опции уровня активности.
+    // Опции уровня активности (локализованные подписи).
     var activityOptionsHtml = ACTIVITY_OPTIONS.map(function (o) {
       return (
         '<option value="' +
         o.value +
         '">' +
-        App.escapeHtml(o.label) +
+        App.escapeHtml(o.label()) +
         "</option>"
       );
     }).join("");
 
-    // Опции цели питания.
+    // Опции цели питания (локализованные подписи).
     var dietGoalOptionsHtml = DIET_GOAL_OPTIONS.map(function (o) {
       return (
         '<option value="' +
         App.escapeHtml(o.value) +
         '">' +
-        App.escapeHtml(o.label) +
+        App.escapeHtml(o.label()) +
         "</option>"
       );
     }).join("");
 
     // Аватар: либо картинка из Telegram, либо заглушка с эмодзи.
     var avatarHtml = u.photo_url
-      ? '<img class="acc-avatar" id="accAvatar" alt="Аватар" src="' +
+      ? '<img class="acc-avatar" id="accAvatar" alt="' +
+        App.escapeHtml(App.pick("Аватар", "Avatar")) +
+        '" src="' +
         App.escapeHtml(u.photo_url) +
         '">'
       : '<div class="acc-avatar acc-avatar--empty" id="accAvatar">👤</div>';
 
     // Краткий статус подписки для карточки в начале страницы.
     var sub = subscriptionStatus();
+
+    // Текущий язык — для подсветки активной кнопки переключателя.
+    var curLang = App.lang === "en" ? "en" : "ru";
 
     return (
       '<section class="page page-account">' +
@@ -159,7 +242,9 @@
       '" id="accSubCard">' +
       '<span class="acc-sub-card__icon">💎</span>' +
       '<span class="acc-sub-card__body">' +
-      '<span class="acc-sub-card__title">Подписка</span>' +
+      '<span class="acc-sub-card__title">' +
+      App.escapeHtml(App.pick("Подписка", "Subscription")) +
+      "</span>" +
       '<span class="acc-sub-card__status" id="accSubStatus">' +
       App.escapeHtml(sub.text) +
       "</span>" +
@@ -167,37 +252,76 @@
       '<span class="acc-sub-card__arrow" aria-hidden="true">›</span>' +
       "</button>" +
 
+      // ---- Карточка «Язык / Language» ----
+      // Сегментированный переключатель: Русский / English.
+      // Активная кнопка соответствует текущему App.lang.
+      '<section class="acc-lang card" id="accLang">' +
+      '<h2 class="acc-title">' +
+      App.escapeHtml(App.pick("Язык", "Language")) +
+      "</h2>" +
+      '<div class="acc-lang__switch" role="group" aria-label="' +
+      App.escapeHtml(App.pick("Выбор языка", "Language selection")) +
+      '">' +
+      '<button type="button" class="acc-lang__btn' +
+      (curLang === "ru" ? " acc-lang__btn--active" : "") +
+      '" id="accLangRu" data-lang="ru"' +
+      (curLang === "ru" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
+      ">Русский</button>" +
+      '<button type="button" class="acc-lang__btn' +
+      (curLang === "en" ? " acc-lang__btn--active" : "") +
+      '" id="accLangEn" data-lang="en"' +
+      (curLang === "en" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
+      ">English</button>" +
+      "</div>" +
+      "</section>" +
+
       // ---- Форма профиля ----
       '<form class="acc-form card" id="accForm" novalidate>' +
-      '<h2 class="acc-title">Мои параметры</h2>' +
+      '<h2 class="acc-title">' +
+      App.escapeHtml(App.pick("Мои параметры", "My parameters")) +
+      "</h2>" +
 
       '<div class="acc-grid">' +
       '<label class="field">' +
-      '<span class="field__label">Вес, кг</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Вес, кг", "Weight, kg")) +
+      "</span>" +
       '<input class="field__input" id="accWeight" type="number" inputmode="decimal" min="0" step="0.1" placeholder="70">' +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Рост, см</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Рост, см", "Height, cm")) +
+      "</span>" +
       '<input class="field__input" id="accHeight" type="number" inputmode="decimal" min="0" step="0.1" placeholder="175">' +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Возраст, лет</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Возраст, лет", "Age, years")) +
+      "</span>" +
       '<input class="field__input" id="accAge" type="number" inputmode="numeric" min="0" step="1" placeholder="30">' +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Пол</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Пол", "Gender")) +
+      "</span>" +
       '<select class="field__input" id="accGender">' +
-      '<option value="male">Мужской</option>' +
-      '<option value="female">Женский</option>' +
+      '<option value="male">' +
+      App.escapeHtml(App.pick("Мужской", "Male")) +
+      "</option>" +
+      '<option value="female">' +
+      App.escapeHtml(App.pick("Женский", "Female")) +
+      "</option>" +
       "</select>" +
       "</label>" +
       "</div>" +
 
       '<label class="field">' +
-      '<span class="field__label">Уровень активности</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Уровень активности", "Activity level")) +
+      "</span>" +
       '<select class="field__input" id="accActivity">' +
       activityOptionsHtml +
       "</select>" +
@@ -205,48 +329,84 @@
 
       // ---- Цель питания (diet_goal) ----
       '<label class="field goal-field">' +
-      '<span class="field__label">Цель питания</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Цель питания", "Nutrition goal")) +
+      "</span>" +
       '<select class="field__input" id="accDietGoal">' +
       dietGoalOptionsHtml +
       "</select>" +
       "</label>" +
 
       '<label class="field">' +
-      '<span class="field__label">Цель по калориям, ккал/день</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(
+        App.pick("Цель по калориям, ккал/день", "Calorie goal, kcal/day")
+      ) +
+      "</span>" +
       '<input class="field__input" id="accGoal" type="number" inputmode="numeric" min="0" step="1" placeholder="2000">' +
       "</label>" +
 
       // ---- Блок целевых БЖУ (скрыт, пока нет данных) ----
       '<div class="goal-macros" id="accGoalMacros" hidden>' +
-      '<div class="goal-macros__title">Целевые БЖУ в день</div>' +
+      '<div class="goal-macros__title">' +
+      App.escapeHtml(App.pick("Целевые БЖУ в день", "Daily target P/F/C")) +
+      "</div>" +
       '<div class="goal-macros__grid">' +
       '<div class="goal-macro goal-macro--prot">' +
       '<span class="goal-macro__value" id="accTargetProt">—</span>' +
-      '<span class="goal-macro__label">Белки, г</span>' +
+      '<span class="goal-macro__label">' +
+      App.escapeHtml(App.pick("Белки, г", "Protein, g")) +
+      "</span>" +
       "</div>" +
       '<div class="goal-macro goal-macro--fat">' +
       '<span class="goal-macro__value" id="accTargetFat">—</span>' +
-      '<span class="goal-macro__label">Жиры, г</span>' +
+      '<span class="goal-macro__label">' +
+      App.escapeHtml(App.pick("Жиры, г", "Fat, g")) +
+      "</span>" +
       "</div>" +
       '<div class="goal-macro goal-macro--carb">' +
       '<span class="goal-macro__value" id="accTargetCarb">—</span>' +
-      '<span class="goal-macro__label">Углеводы, г</span>' +
+      '<span class="goal-macro__label">' +
+      App.escapeHtml(App.pick("Углеводы, г", "Carbs, g")) +
+      "</span>" +
       "</div>" +
       "</div>" +
       "</div>" +
 
-      '<button type="button" class="btn btn--ghost" id="accCalcBtn">⚙️ Рассчитать автоматически</button>' +
-      '<button type="submit" class="btn btn--cta" id="accSaveBtn">Сохранить</button>' +
+      '<button type="button" class="btn btn--ghost" id="accCalcBtn">⚙️ ' +
+      App.escapeHtml(
+        App.pick("Рассчитать автоматически", "Calculate automatically")
+      ) +
+      "</button>" +
+      '<button type="submit" class="btn btn--cta" id="accSaveBtn">' +
+      App.escapeHtml(App.pick("Сохранить", "Save")) +
+      "</button>" +
 
-      '<p class="acc-hint">Автоматический расчёт учитывает ваши параметры, уровень активности и цель питания.</p>' +
+      '<p class="acc-hint">' +
+      App.escapeHtml(
+        App.pick(
+          "Автоматический расчёт учитывает ваши параметры, уровень активности и цель питания.",
+          "Automatic calculation takes into account your parameters, activity level and nutrition goal."
+        )
+      ) +
+      "</p>" +
       "</form>" +
 
       // ---- Карточка «Вечерняя сводка» ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
       '<section class="acc-summary card" id="accSummary">' +
-      '<h2 class="acc-title">Вечерняя сводка</h2>' +
-      '<p class="acc-summary-hint">Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.</p>' +
+      '<h2 class="acc-title">' +
+      App.escapeHtml(App.pick("Вечерняя сводка", "Evening summary")) +
+      "</h2>" +
+      '<p class="acc-summary-hint">' +
+      App.escapeHtml(
+        App.pick(
+          "Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.",
+          "Once a day we'll send a short recap: how many calories and macros you logged."
+        )
+      ) +
+      "</p>" +
       '<div class="acc-summary-body" id="accSummaryBody">' +
       '<div class="skeleton skeleton--block"></div>' +
       "</div>" +
@@ -254,7 +414,9 @@
 
       // ---- История за 30 дней ----
       '<section class="acc-history card">' +
-      '<h2 class="acc-title">История за 30 дней</h2>' +
+      '<h2 class="acc-title">' +
+      App.escapeHtml(App.pick("История за 30 дней", "Last 30 days")) +
+      "</h2>" +
       '<div id="accHistory" class="acc-history__body">' +
       '<div class="skeleton skeleton--block"></div>' +
       "</div>" +
@@ -352,7 +514,12 @@
     var age = readNum(els.age);
 
     if (weight == null || height == null || age == null) {
-      App.toast("Заполните вес, рост и возраст для расчёта");
+      App.toast(
+        App.pick(
+          "Заполните вес, рост и возраст для расчёта",
+          "Fill in weight, height and age to calculate"
+        )
+      );
       App.haptic("error");
       return;
     }
@@ -373,7 +540,7 @@
       .calculateGoal(payload)
       .then(function (res) {
         if (!res) {
-          throw new Error("Пустой ответ сервера");
+          throw new Error(App.pick("Пустой ответ сервера", "Empty server response"));
         }
         // Подставляем дневную норму в поле цели.
         if (res.daily_goal_kcal != null) {
@@ -399,16 +566,20 @@
         }
         App.haptic("success");
         App.toast(
-          "Норма рассчитана: " +
-            App.fmt(res.daily_goal_kcal) +
-            " ккал"
+          App.pick(
+            "Норма рассчитана: " + App.fmt(res.daily_goal_kcal) + " ккал",
+            "Goal calculated: " + App.fmt(res.daily_goal_kcal) + " kcal"
+          )
         );
       })
       .catch(function (err) {
         App.haptic("error");
+        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
         App.toast(
-          "Не удалось рассчитать: " +
-            (err && err.message ? err.message : "ошибка")
+          App.pick(
+            "Не удалось рассчитать: " + reason,
+            "Failed to calculate: " + reason
+          )
         );
       })
       .finally(function () {
@@ -448,16 +619,42 @@
         App.state.profile = profile;
         fillForm(profile);
         App.haptic("success");
-        App.toast("Профиль сохранён");
+        App.toast(App.pick("Профиль сохранён", "Profile saved"));
       })
       .catch(function (err) {
         App.haptic("error");
-        App.toast("Не удалось сохранить: " + (err && err.message ? err.message : "ошибка"));
+        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
+        App.toast(
+          App.pick("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+        );
       })
       .finally(function () {
         els.saveBtn.disabled = false;
         App.hideLoading();
       });
+  }
+
+  /* =====================================================================
+   *  ЯЗЫК / LANGUAGE
+   *  Переключатель RU/EN. По выбору вызывает App.setLang(...),
+   *  который сохраняет язык на сервере и перерисовывает текущую страницу.
+   * ===================================================================== */
+
+  /**
+   * Обработчик нажатия на кнопку выбора языка.
+   * Если выбран тот же язык — ничего не делаем (без лишней перерисовки).
+   */
+  function onPickLang(lang) {
+    var cur = App.lang === "en" ? "en" : "ru";
+    if (lang === cur) {
+      App.haptic("selection");
+      return;
+    }
+    App.haptic("selection");
+    if (App.setLang) {
+      // setLang сам перерисует страницу аккаунта — подсветка обновится в template().
+      App.setLang(lang);
+    }
   }
 
   /* =====================================================================
@@ -493,11 +690,24 @@
       .catch(function (err) {
         box.innerHTML =
           '<div class="acc-summary-error">' +
-          '<p>Не удалось загрузить настройки сводки.</p>' +
-          '<p class="acc-summary-error__msg">' +
-          App.escapeHtml(err && err.message ? err.message : "Ошибка сети") +
+          "<p>" +
+          App.escapeHtml(
+            App.pick(
+              "Не удалось загрузить настройки сводки.",
+              "Failed to load summary settings."
+            )
+          ) +
           "</p>" +
-          '<button type="button" class="btn btn--ghost" id="accSummaryRetry">Повторить</button>' +
+          '<p class="acc-summary-error__msg">' +
+          App.escapeHtml(
+            err && err.message
+              ? err.message
+              : App.pick("Ошибка сети", "Network error")
+          ) +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accSummaryRetry">' +
+          App.escapeHtml(App.pick("Повторить", "Retry")) +
+          "</button>" +
           "</div>";
         var retry = box.querySelector("#accSummaryRetry");
         if (retry) retry.addEventListener("click", loadSummary);
@@ -521,18 +731,26 @@
       '<input class="acc-summary-toggle__input" type="checkbox" id="accSummaryEnabled"' +
       (enabled ? " checked" : "") +
       ">" +
-      '<span class="acc-summary-toggle__label">Присылать вечернюю сводку</span>' +
+      '<span class="acc-summary-toggle__label">' +
+      App.escapeHtml(
+        App.pick("Присылать вечернюю сводку", "Send evening summary")
+      ) +
+      "</span>" +
       "</label>" +
       "</div>" +
       '<label class="field acc-summary-time" id="accSummaryTimeField"' +
       (enabled ? "" : " hidden") +
       ">" +
-      '<span class="field__label">Время сводки</span>' +
+      '<span class="field__label">' +
+      App.escapeHtml(App.pick("Время сводки", "Summary time")) +
+      "</span>" +
       '<input class="field__input acc-summary-time__input" type="time" id="accSummaryTime" value="' +
       App.escapeHtml(time) +
       '" placeholder="21:00">' +
       "</label>" +
-      '<button type="button" class="btn btn--cta acc-summary-save" id="accSummarySave">Сохранить</button>';
+      '<button type="button" class="btn btn--cta acc-summary-save" id="accSummarySave">' +
+      App.escapeHtml(App.pick("Сохранить", "Save")) +
+      "</button>";
 
     var toggle = box.querySelector("#accSummaryEnabled");
     var timeField = box.querySelector("#accSummaryTimeField");
@@ -581,13 +799,15 @@
         // Перерисовываем карточку актуальными данными от сервера.
         renderSummary(settings || payload);
         App.haptic("success");
-        App.toast("Настройки сводки сохранены");
+        App.toast(
+          App.pick("Настройки сводки сохранены", "Summary settings saved")
+        );
       })
       .catch(function (err) {
         App.haptic("error");
+        var reason = err && err.message ? err.message : App.pick("ошибка", "error");
         App.toast(
-          "Не удалось сохранить: " +
-            (err && err.message ? err.message : "ошибка")
+          App.pick("Не удалось сохранить: " + reason, "Failed to save: " + reason)
         );
         if (saveBtn) saveBtn.disabled = false;
       })
@@ -615,11 +835,21 @@
       .catch(function (err) {
         box.innerHTML =
           '<div class="acc-error">' +
-          '<p>Не удалось загрузить историю.</p>' +
-          '<p class="acc-error__msg">' +
-          App.escapeHtml(err && err.message ? err.message : "Ошибка сети") +
+          "<p>" +
+          App.escapeHtml(
+            App.pick("Не удалось загрузить историю.", "Failed to load history.")
+          ) +
           "</p>" +
-          '<button type="button" class="btn btn--ghost" id="accHistRetry">Повторить</button>' +
+          '<p class="acc-error__msg">' +
+          App.escapeHtml(
+            err && err.message
+              ? err.message
+              : App.pick("Ошибка сети", "Network error")
+          ) +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accHistRetry">' +
+          App.escapeHtml(App.pick("Повторить", "Retry")) +
+          "</button>" +
           "</div>";
         var retry = box.querySelector("#accHistRetry");
         if (retry) retry.addEventListener("click", loadHistory);
@@ -637,7 +867,14 @@
 
     if (!days.length) {
       box.innerHTML =
-        '<div class="acc-empty">Пока нет данных. Добавьте приёмы пищи в раздел «Мой рацион».</div>';
+        '<div class="acc-empty">' +
+        App.escapeHtml(
+          App.pick(
+            "Пока нет данных. Добавьте приёмы пищи в раздел «Мой рацион».",
+            "No data yet. Add meals in the «Diary» section."
+          )
+        ) +
+        "</div>";
       return;
     }
 
@@ -648,6 +885,8 @@
     });
     if (goal != null && goal > maxVal) maxVal = goal;
     if (maxVal <= 0) maxVal = 1; // защита от деления на ноль
+
+    var kcalUnit = App.pick("ккал", "kcal");
 
     var rows = days
       .map(function (d) {
@@ -668,7 +907,9 @@
           "</span>" +
           '<span class="hist-row__val">' +
           App.fmt(d.total_calories) +
-          " ккал</span>" +
+          " " +
+          App.escapeHtml(kcalUnit) +
+          "</span>" +
           "</div>"
         );
       })
@@ -676,14 +917,21 @@
 
     var goalLine =
       goal != null
-        ? '<div class="hist-goal">Цель: ' + App.fmt(goal) + " ккал/день</div>"
-        : '<div class="hist-goal hist-goal--muted">Цель не задана</div>';
+        ? '<div class="hist-goal">' +
+          App.escapeHtml(App.pick("Цель: ", "Goal: ")) +
+          App.fmt(goal) +
+          " " +
+          App.escapeHtml(App.pick("ккал/день", "kcal/day")) +
+          "</div>"
+        : '<div class="hist-goal hist-goal--muted">' +
+          App.escapeHtml(App.pick("Цель не задана", "Goal not set")) +
+          "</div>";
 
     box.innerHTML = goalLine + '<div class="hist-list">' + rows + "</div>";
   }
 
   /**
-   * Преобразует ISO-дату "YYYY-MM-DD" в короткий русский формат "ДД.ММ".
+   * Преобразует ISO-дату "YYYY-MM-DD" в короткий формат "ДД.ММ".
    */
   function formatDate(iso) {
     if (!iso || typeof iso !== "string") return String(iso || "");
@@ -720,6 +968,8 @@
     els = {
       subCard: viewEl.querySelector("#accSubCard"),
       subStatus: viewEl.querySelector("#accSubStatus"),
+      langRu: viewEl.querySelector("#accLangRu"),
+      langEn: viewEl.querySelector("#accLangEn"),
       form: viewEl.querySelector("#accForm"),
       weight: viewEl.querySelector("#accWeight"),
       height: viewEl.querySelector("#accHeight"),
@@ -760,6 +1010,19 @@
           App.navigate("subscription");
         });
       }
+
+      // Переключатель языка.
+      if (els.langRu) {
+        els.langRu.addEventListener("click", function () {
+          onPickLang("ru");
+        });
+      }
+      if (els.langEn) {
+        els.langEn.addEventListener("click", function () {
+          onPickLang("en");
+        });
+      }
+
       els.calcBtn.addEventListener("click", onCalc);
       els.form.addEventListener("submit", onSave);
 
@@ -787,9 +1050,13 @@
         })
         .catch(function (err) {
           // Профиль не критичен — форму можно заполнить вручную.
+          var reason =
+            err && err.message ? err.message : App.pick("ошибка", "error");
           App.toast(
-            "Не удалось загрузить профиль: " +
-              (err && err.message ? err.message : "ошибка")
+            App.pick(
+              "Не удалось загрузить профиль: " + reason,
+              "Failed to load profile: " + reason
+            )
           );
         });
 

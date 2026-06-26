@@ -5,6 +5,14 @@
 его калорийности и БЖУ. Перед отправкой изображение уменьшается с помощью
 Pillow для снижения стоимости запроса.
 
+Двуязычность (RU/EN):
+  * у всех четырёх публичных функций есть параметр lang ("ru" по умолчанию);
+  * при lang=="en" используются английские system/user-промпты, которые
+    требуют JSON с ТЕМИ ЖЕ ключами, но текстовые ЗНАЧЕНИЯ (dish_name, note,
+    reason, name, dosage) — на английском;
+  * при lang=="ru" поведение полностью прежнее (русские промпты без изменений);
+  * имена JSON-полей НИКОГДА не меняются — меняется только язык значений.
+
 Надёжность:
   * промпт настроен на «всегда дай оценку» (не отказываться от обычной еды);
   * при пустом/некорректном ответе модели делается повторная попытка;
@@ -13,15 +21,15 @@ Pillow для снижения стоимости запроса.
     чтобы его можно было посмотреть при отладке.
 
 Публичные функции:
-    analyze_food_image(image_bytes, mime="image/jpeg") -> dict
+    analyze_food_image(image_bytes, mime="image/jpeg", lang="ru") -> dict
         Распознаёт блюдо по фото (КБЖУ + примерный вес порции + уверенность).
     recommend_meals(remaining_calories, remaining_proteins, remaining_fats,
-                    remaining_carbs, diet_goal, time_of_day) -> dict
+                    remaining_carbs, diet_goal, time_of_day, lang="ru") -> dict
         Подбирает 2-3 варианта блюд под остаток КБЖУ на день.
-    suggest_supplements(diet_goal) -> dict
+    suggest_supplements(diet_goal, lang="ru") -> dict
         Подбирает спортивные добавки под цель пользователя.
     recommend_supplements(improvement_goal, training_count, workout_types,
-                          diet_goal) -> dict
+                          diet_goal, lang="ru") -> dict
         Персональный подбор добавок с учётом цели улучшения, частоты/типа
         тренировок и цели диеты.
 """
@@ -56,11 +64,33 @@ MAX_TOKENS = 700
 # Сколько всего попыток сделать при пустом/битом ответе модели.
 MAX_ATTEMPTS = 2
 
-# Текст-маркер «на фото нет еды».
+# Текст-маркер «на фото нет еды» (по языкам).
 NO_FOOD_NAME = "На фото не найдено еды"
+NO_FOOD_NAME_EN = "No food detected"
 
 # Допустимые значения уровня уверенности модели в оценке.
 CONFIDENCE_LEVELS = ("low", "medium", "high")
+
+
+def _normalize_lang(lang: str | None) -> str:
+    """
+    Приводит код языка к "ru" или "en".
+
+    По умолчанию (и для любого неизвестного/пустого значения) — "ru",
+    что сохраняет полную обратную совместимость со старыми вызовами без lang.
+    Только явное "en" (в любом регистре) переключает на английский.
+    """
+    try:
+        if str(lang or "").strip().lower().startswith("en"):
+            return "en"
+    except (TypeError, ValueError):
+        pass
+    return "ru"
+
+
+# --------------------------------------------------------------------------- #
+#  Системные промпты для анализа фото еды (RU/EN)
+# --------------------------------------------------------------------------- #
 
 # Системный промпт: заставляем модель ВСЕГДА оценивать обычную еду,
 # а не отказываться. Отказ допустим только если еды на фото реально нет.
@@ -92,6 +122,49 @@ SYSTEM_PROMPT = (
     "- НЕ отказывайся от оценки обычных блюд (картофель, мясо, каши, супы и т.п.).\n"
     "- Только если на фото СОВСЕМ нет еды (пустая тарелка, не еда), "
     'верни dish_name="' + NO_FOOD_NAME + '", confidence="high" и нули.'
+)
+
+# Английский аналог SYSTEM_PROMPT: ТЕ ЖЕ ключи JSON, значения dish_name/note — на английском.
+SYSTEM_PROMPT_EN = (
+    "You are an experienced nutritionist. The photo shows food. "
+    "Your task is to ALWAYS identify the dish and estimate its nutritional value, "
+    "even if you are not 100% sure: give the most likely estimate based on what you see.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '  "dish_name"    — string, the dish name in English '
+    '(for example: "Boiled potatoes", "Meatballs in gravy", "Boiled corn");\n'
+    '  "weight_grams" — integer, the approximate WEIGHT of the visible portion in grams '
+    "(estimate from the size of the plate/cutlery in the photo);\n"
+    '  "calories"     — integer, kcal for the portion visible in the photo;\n'
+    '  "proteins"     — number, protein in grams;\n'
+    '  "fats"         — number, fat in grams;\n'
+    '  "carbs"        — number, carbohydrates in grams;\n'
+    '  "confidence"   — string confidence level of the estimate: '
+    '"low", "medium" or "high";\n'
+    '  "note"         — string, a short comment in English '
+    "(composition, confidence level or advice).\n\n"
+    "Rules:\n"
+    "- Estimate realistically by the size of the visible portion; for real food "
+    "weight_grams, calories and macros must be GREATER than zero.\n"
+    "- If the photo shows SEVERAL dishes/products — estimate them TOGETHER "
+    "(total weight and total calories/macros) and list all dishes in dish_name separated by commas.\n"
+    "- Set confidence to \"high\" if the dish is obvious and the portion is clearly visible; "
+    "\"medium\" for ordinary uncertainty; \"low\" if the photo is blurry "
+    "or the composition is hard to determine.\n"
+    "- Do NOT refuse to estimate ordinary dishes (potatoes, meat, porridge, soups, etc.).\n"
+    "- Only if there is NO food at all in the photo (empty plate, not food), "
+    'return dish_name="' + NO_FOOD_NAME_EN + '", confidence="high" and zeros.'
+)
+
+# Пользовательский текст к vision-вызову (по языкам).
+VISION_USER_PROMPT = (
+    "Определи блюдо на этом фото, оцени примерный вес порции, "
+    "калорийность и БЖУ. "
+    "Верни результат строго в формате JSON по инструкции."
+)
+VISION_USER_PROMPT_EN = (
+    "Identify the dish in this photo, estimate the approximate portion weight, "
+    "calories and macros. "
+    "Return the result strictly in JSON format following the instructions."
 )
 
 
@@ -213,25 +286,34 @@ def _extract_json(content: str):
     return None
 
 
-def _call_model(client: "OpenAI", data_url: str):
-    """Один вызов модели. Возвращает (content, finish_reason, refusal)."""
+def _call_model(client: "OpenAI", data_url: str, lang: str = "ru"):
+    """
+    Один вызов модели (vision). Возвращает (content, finish_reason, refusal).
+
+    В зависимости от lang выбираются русские или английские system/user-промпты;
+    набор и порядок сообщений остаётся прежним.
+    """
+    # Выбор промптов по языку (по умолчанию русский — обратная совместимость).
+    if _normalize_lang(lang) == "en":
+        system_prompt = SYSTEM_PROMPT_EN
+        user_text = VISION_USER_PROMPT_EN
+    else:
+        system_prompt = SYSTEM_PROMPT
+        user_text = VISION_USER_PROMPT
+
     response = client.chat.completions.create(
         model=MODEL,
         response_format={"type": "json_object"},
         max_tokens=MAX_TOKENS,
         temperature=0.3,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            "Определи блюдо на этом фото, оцени примерный вес порции, "
-                            "калорийность и БЖУ. "
-                            "Верни результат строго в формате JSON по инструкции."
-                        ),
+                        "text": user_text,
                     },
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
@@ -244,9 +326,20 @@ def _call_model(client: "OpenAI", data_url: str):
     return content, choice.finish_reason, refusal
 
 
-def analyze_food_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
+def analyze_food_image(
+    image_bytes: bytes,
+    mime: str = "image/jpeg",
+    lang: str = "ru",
+) -> dict:
     """
     Анализирует фотографию еды и возвращает оценку калорийности и БЖУ.
+
+    Параметры:
+        image_bytes — байты изображения;
+        mime        — mime изображения (по факту перекодируется в JPEG);
+        lang        — язык ответа модели: "ru" (по умолчанию) или "en".
+                      При "en" dish_name/note возвращаются на английском,
+                      маркер «нет еды» — "No food detected".
 
     Возвращает словарь:
         {
@@ -260,6 +353,10 @@ def analyze_food_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
     При невозможности получить корректный ответ выбрасывает AIError
     (наследник RuntimeError) с «сырым» ответом модели внутри.
     """
+    # Нормализуем язык и подбираем правильный маркер «нет еды».
+    lang = _normalize_lang(lang)
+    no_food_name = NO_FOOD_NAME_EN if lang == "en" else NO_FOOD_NAME
+
     # 1. Уменьшаем изображение и формируем data URL.
     processed_bytes, processed_mime = _downscale_image(image_bytes)
     b64 = base64.b64encode(processed_bytes).decode("ascii")
@@ -276,12 +373,12 @@ def analyze_food_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
     # 3. Несколько попыток: пустой/битый ответ модели — частая транзиентная проблема.
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            content, finish_reason, refusal = _call_model(client, data_url)
+            content, finish_reason, refusal = _call_model(client, data_url, lang=lang)
             raw = content or ""
             # Всегда логируем сырой ответ — он будет виден в логах Railway/uvicorn.
             logger.info(
-                "AI попытка %d/%d: finish=%s refusal=%s raw=%s",
-                attempt, MAX_ATTEMPTS, finish_reason, refusal, raw[:600],
+                "AI попытка %d/%d (lang=%s): finish=%s refusal=%s raw=%s",
+                attempt, MAX_ATTEMPTS, lang, finish_reason, refusal, raw[:600],
             )
         except Exception as exc:  # сеть, ключ, лимиты OpenAI и т.п.
             last_error = f"ошибка обращения к OpenAI: {exc}"
@@ -303,7 +400,7 @@ def analyze_food_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
         # 4. Успех: нормализуем поля.
         dish_name = data.get("dish_name")
         if not isinstance(dish_name, str) or not dish_name.strip():
-            dish_name = NO_FOOD_NAME
+            dish_name = no_food_name
 
         note = data.get("note")
         if not isinstance(note, str):
@@ -349,6 +446,9 @@ def analyze_food_image(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
 #   * несколько попыток (MAX_ATTEMPTS) на случай пустого/битого ответа;
 #   * устойчивый разбор JSON через _extract_json;
 #   * при неудаче — AIError с «сырым» ответом для отладки.
+#
+# Двуязычность: для каждого system-промпта есть английский аналог (..._EN) с
+# ТЕМИ ЖЕ ключами JSON, но значениями на английском. Выбор делает _pick_prompt.
 
 # Системный промпт для подбора блюд под остаток КБЖУ.
 RECOMMEND_SYSTEM_PROMPT = (
@@ -374,6 +474,30 @@ RECOMMEND_SYSTEM_PROMPT = (
     "- Числа — реалистичные и положительные."
 )
 
+# Английский аналог RECOMMEND_SYSTEM_PROMPT (те же ключи, значения на английском).
+RECOMMEND_SYSTEM_PROMPT_EN = (
+    "You are an experienced nutritionist and cook. The user wants to «top up» their "
+    "daily calorie/macro goal and asks for 2-3 dish options for the remaining limit.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
+    '  "suggestions" — an array of 2-3 objects, each with the fields:\n'
+    '      "dish_name" — string, the dish name in English;\n'
+    '      "calories"  — integer, kcal of the portion;\n'
+    '      "proteins"  — number, protein in grams;\n'
+    '      "fats"      — number, fat in grams;\n'
+    '      "carbs"     — number, carbohydrates in grams;\n'
+    '      "reason"    — string, why this dish is a good fit '
+    "(short, in English).\n\n"
+    "Rules:\n"
+    "- Suggest real, easy-to-cook dishes.\n"
+    "- Overall the dish must fit within the remaining calorie limit "
+    "and help top up macros (especially protein).\n"
+    "- Consider the goal (loss — weight loss, maintain — maintenance, "
+    "gain — muscle gain) and the time of day if they are provided.\n"
+    "- If the calorie limit is small or negative — suggest light "
+    "low-calorie options (vegetables, lean protein).\n"
+    "- Numbers must be realistic and positive."
+)
+
 # Системный промпт для подбора спортивных добавок.
 SUPPLEMENT_SYSTEM_PROMPT = (
     "Ты — консультант по спортивному питанию. Пользователь просит подсказать "
@@ -391,6 +515,25 @@ SUPPLEMENT_SYSTEM_PROMPT = (
     "gain — набор массы), если она указана.\n"
     "- НЕ предлагай рецептурные препараты, гормоны и любые запрещённые вещества.\n"
     "- Формулировки — общие и осторожные, без медицинских обещаний."
+)
+
+# Английский аналог SUPPLEMENT_SYSTEM_PROMPT (те же ключи, значения на английском).
+SUPPLEMENT_SYSTEM_PROMPT_EN = (
+    "You are a sports nutrition consultant. The user asks you to suggest "
+    "basic sports supplements for their goal.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
+    '  "suggestions" — an array of 3-5 objects, each with the fields:\n'
+    '      "name"    — string, the supplement name in English '
+    '(for example: "Creatine monohydrate", "Whey protein", "Omega-3");\n'
+    '      "dosage"  — string, the typical daily dosage '
+    '(for example: "3-5 g per day");\n'
+    '      "note"    — string, briefly what it is for and how to take it.\n\n'
+    "Rules:\n"
+    "- Suggest only common, safe basic supplements.\n"
+    "- Consider the goal (loss — weight loss, maintain — maintenance, "
+    "gain — muscle gain) if it is provided.\n"
+    "- Do NOT suggest prescription drugs, hormones or any banned substances.\n"
+    "- Keep wording general and cautious, with no medical promises."
 )
 
 # Системный промпт для ПЕРСОНАЛЬНОГО подбора добавок: учитывает цель улучшения
@@ -427,6 +570,50 @@ SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT = (
     "- НЕ предлагай рецептурные препараты, гормоны и любые запрещённые вещества.\n"
     "- Формулировки — общие и осторожные, без медицинских обещаний."
 )
+
+# Английский аналог SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT (те же ключи, значения на английском).
+SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT_EN = (
+    "You are an experienced sports nutrition expert. Pick personal basic "
+    "supplements for the user, taking their data into account.\n\n"
+    "Consider when choosing:\n"
+    "- IMPROVEMENT GOAL (improvement_goal): for example, sleep, recovery, "
+    "strength, energy, immunity — or the user's free-form text;\n"
+    "- FREQUENCY and TYPE of training (training_count — number of workouts in "
+    "the last 2 weeks; workout_types — which workouts exactly);\n"
+    "- DIET GOAL (diet_goal: loss — weight loss, maintain — maintenance, "
+    "gain — muscle gain).\n\n"
+    "Examples of the logic (guideline, not a strict rule):\n"
+    "- goal «sleep» -> magnesium, glycine;\n"
+    "- goal «recovery» + frequent workouts -> protein, omega-3, magnesium;\n"
+    "- goal «strength» + frequent strength training -> creatine monohydrate, protein;\n"
+    "- goal «energy» -> caffeine/L-carnitine in moderate doses, B vitamins;\n"
+    "- goal «immunity» -> vitamin D, vitamin C, zinc.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
+    '  "suggestions" — an array of 2-4 objects, each with the fields:\n'
+    '      "name"    — string, the supplement name in English '
+    '(for example: "Creatine monohydrate", "Magnesium", "Omega-3");\n'
+    '      "dosage"  — string, the typical daily dosage '
+    '(for example: "3-5 g per day");\n'
+    '      "note"    — string, briefly why it fits the goal/training '
+    "and how to take it.\n\n"
+    "Rules:\n"
+    "- Suggest only common, safe basic supplements "
+    "(2-4 items, no padding).\n"
+    "- Tie the choice to the user's improvement goal and training.\n"
+    "- Do NOT suggest prescription drugs, hormones or any banned substances.\n"
+    "- Keep wording general and cautious, with no medical promises."
+)
+
+
+def _pick_prompt(prompt_ru: str, prompt_en: str, lang: str) -> str:
+    """
+    Хелпер выбора system-промпта по языку.
+
+    Возвращает английский вариант при lang=="en", иначе русский.
+    Используется текстовыми подсказками; имена JSON-полей одинаковы в обоих
+    промптах — меняется только язык значений.
+    """
+    return prompt_en if _normalize_lang(lang) == "en" else prompt_ru
 
 
 def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str):
@@ -524,9 +711,13 @@ def recommend_meals(
     remaining_carbs: float,
     diet_goal: str | None = None,
     time_of_day: str | None = None,
+    lang: str = "ru",
 ) -> dict:
     """
     Подбирает 2-3 варианта блюд под оставшийся на день лимит КБЖУ.
+
+    Параметр lang ("ru" по умолчанию, либо "en") управляет языком значений
+    dish_name/reason в ответе. Ключи JSON не меняются.
 
     Возвращает словарь:
         {
@@ -539,23 +730,42 @@ def recommend_meals(
 
     При неудаче обращения к ИИ выбрасывает AIError (502 на уровне роута).
     """
-    # Формируем запрос пользователя с понятными числами остатка.
-    parts = [
-        "Подбери 2-3 блюда, чтобы добрать оставшуюся за день норму КБЖУ.",
-        f"Осталось калорий: {remaining_calories} ккал.",
-        f"Осталось белков: {remaining_proteins} г.",
-        f"Осталось жиров: {remaining_fats} г.",
-        f"Осталось углеводов: {remaining_carbs} г.",
-    ]
-    if diet_goal:
-        parts.append(f"Цель пользователя: {diet_goal}.")
-    if time_of_day:
-        parts.append(f"Время суток / приём пищи: {time_of_day}.")
-    parts.append("Верни результат строго в формате JSON по инструкции.")
+    lang = _normalize_lang(lang)
+
+    # Формируем запрос пользователя с понятными числами остатка — на нужном языке.
+    if lang == "en":
+        parts = [
+            "Suggest 2-3 dishes to top up the remaining daily calorie/macro goal.",
+            f"Calories remaining: {remaining_calories} kcal.",
+            f"Protein remaining: {remaining_proteins} g.",
+            f"Fat remaining: {remaining_fats} g.",
+            f"Carbs remaining: {remaining_carbs} g.",
+        ]
+        if diet_goal:
+            parts.append(f"User goal: {diet_goal}.")
+        if time_of_day:
+            parts.append(f"Time of day / meal: {time_of_day}.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = [
+            "Подбери 2-3 блюда, чтобы добрать оставшуюся за день норму КБЖУ.",
+            f"Осталось калорий: {remaining_calories} ккал.",
+            f"Осталось белков: {remaining_proteins} г.",
+            f"Осталось жиров: {remaining_fats} г.",
+            f"Осталось углеводов: {remaining_carbs} г.",
+        ]
+        if diet_goal:
+            parts.append(f"Цель пользователя: {diet_goal}.")
+        if time_of_day:
+            parts.append(f"Время суток / приём пищи: {time_of_day}.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
     user_prompt = "\n".join(parts)
 
+    system_prompt = _pick_prompt(
+        RECOMMEND_SYSTEM_PROMPT, RECOMMEND_SYSTEM_PROMPT_EN, lang
+    )
     data, _debug = _run_text_completion(
-        RECOMMEND_SYSTEM_PROMPT, user_prompt, log_tag="recommend"
+        system_prompt, user_prompt, log_tag="recommend"
     )
 
     # Нормализуем массив предложений: чистим типы и пропускаем мусор.
@@ -597,9 +807,12 @@ def recommend_meals(
     return {"suggestions": suggestions}
 
 
-def suggest_supplements(diet_goal: str | None = None) -> dict:
+def suggest_supplements(diet_goal: str | None = None, lang: str = "ru") -> dict:
     """
     Подбирает базовые спортивные добавки под цель пользователя.
+
+    Параметр lang ("ru" по умолчанию, либо "en") управляет языком значений
+    name/dosage/note в ответе. Ключи JSON не меняются.
 
     Возвращает словарь:
         {
@@ -612,15 +825,26 @@ def suggest_supplements(diet_goal: str | None = None) -> dict:
     При неудаче обращения к ИИ выбрасывает AIError (502 на уровне роута).
     Дисклеймер добавляется на уровне роута, чтобы держать его в одном месте.
     """
-    # Запрос пользователя; цель добавляем, если она известна.
-    parts = ["Подскажи базовые спортивные добавки."]
-    if diet_goal:
-        parts.append(f"Моя цель: {diet_goal}.")
-    parts.append("Верни результат строго в формате JSON по инструкции.")
+    lang = _normalize_lang(lang)
+
+    # Запрос пользователя; цель добавляем, если она известна — на нужном языке.
+    if lang == "en":
+        parts = ["Suggest basic sports supplements."]
+        if diet_goal:
+            parts.append(f"My goal: {diet_goal}.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = ["Подскажи базовые спортивные добавки."]
+        if diet_goal:
+            parts.append(f"Моя цель: {diet_goal}.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
     user_prompt = "\n".join(parts)
 
+    system_prompt = _pick_prompt(
+        SUPPLEMENT_SYSTEM_PROMPT, SUPPLEMENT_SYSTEM_PROMPT_EN, lang
+    )
     data, _debug = _run_text_completion(
-        SUPPLEMENT_SYSTEM_PROMPT, user_prompt, log_tag="supplements"
+        system_prompt, user_prompt, log_tag="supplements"
     )
 
     # Нормализуем массив рекомендаций.
@@ -665,6 +889,7 @@ def recommend_supplements(
     training_count: int = 0,
     workout_types: list[str] | None = None,
     diet_goal: str | None = None,
+    lang: str = "ru",
 ) -> dict:
     """
     Персональный подбор спортивных добавок (2-4 шт.) с учётом:
@@ -673,6 +898,9 @@ def recommend_supplements(
       * training_count   — числа тренировок за последние 2 недели;
       * workout_types    — типов этих тренировок;
       * diet_goal        — цели диеты (loss/maintain/gain).
+
+    Параметр lang ("ru" по умолчанию, либо "en") управляет языком значений
+    name/dosage/note в ответе. Ключи JSON не меняются.
 
     Возвращает словарь:
         {
@@ -686,33 +914,64 @@ def recommend_supplements(
     ретрай, устойчивый разбор JSON). При неудаче обращения к ИИ выбрасывает
     AIError (502 на уровне роута). Дисклеймер добавляется на уровне роута.
     """
-    # Формируем запрос пользователя из тех данных, что известны.
-    parts = ["Подбери мне персональные спортивные добавки (2-4 штуки)."]
+    lang = _normalize_lang(lang)
 
-    if improvement_goal and str(improvement_goal).strip():
-        parts.append(f"Цель улучшения: {str(improvement_goal).strip()}.")
+    # Формируем запрос пользователя из тех данных, что известны — на нужном языке.
+    if lang == "en":
+        parts = ["Pick personal sports supplements for me (2-4 items)."]
+
+        if improvement_goal and str(improvement_goal).strip():
+            parts.append(f"Improvement goal: {str(improvement_goal).strip()}.")
+        else:
+            parts.append("Improvement goal not specified — pick a basic set.")
+
+        # Частота тренировок за последние 2 недели.
+        parts.append(f"Workouts in the last 2 weeks: {_coerce_int(training_count)}.")
+
+        # Типы тренировок (если есть) — перечисляем их через запятую.
+        if workout_types:
+            types_clean = [
+                str(t).strip() for t in workout_types if t and str(t).strip()
+            ]
+            if types_clean:
+                parts.append("Training types: " + ", ".join(types_clean) + ".")
+
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Diet goal: {str(diet_goal).strip()}.")
+
+        parts.append("Return the result strictly in JSON format following the instructions.")
     else:
-        parts.append("Цель улучшения не указана — подбери базовый набор.")
+        parts = ["Подбери мне персональные спортивные добавки (2-4 штуки)."]
 
-    # Частота тренировок за последние 2 недели.
-    parts.append(f"Тренировок за последние 2 недели: {_coerce_int(training_count)}.")
+        if improvement_goal and str(improvement_goal).strip():
+            parts.append(f"Цель улучшения: {str(improvement_goal).strip()}.")
+        else:
+            parts.append("Цель улучшения не указана — подбери базовый набор.")
 
-    # Типы тренировок (если есть) — перечисляем их через запятую.
-    if workout_types:
-        types_clean = [
-            str(t).strip() for t in workout_types if t and str(t).strip()
-        ]
-        if types_clean:
-            parts.append("Типы тренировок: " + ", ".join(types_clean) + ".")
+        # Частота тренировок за последние 2 недели.
+        parts.append(f"Тренировок за последние 2 недели: {_coerce_int(training_count)}.")
 
-    if diet_goal and str(diet_goal).strip():
-        parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+        # Типы тренировок (если есть) — перечисляем их через запятую.
+        if workout_types:
+            types_clean = [
+                str(t).strip() for t in workout_types if t and str(t).strip()
+            ]
+            if types_clean:
+                parts.append("Типы тренировок: " + ", ".join(types_clean) + ".")
 
-    parts.append("Верни результат строго в формате JSON по инструкции.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+
+        parts.append("Верни результат строго в формате JSON по инструкции.")
     user_prompt = "\n".join(parts)
 
+    system_prompt = _pick_prompt(
+        SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT,
+        SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT_EN,
+        lang,
+    )
     data, _debug = _run_text_completion(
-        SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT, user_prompt, log_tag="supplement_recommend"
+        system_prompt, user_prompt, log_tag="supplement_recommend"
     )
 
     # Нормализуем массив рекомендаций (та же чистка типов, что в suggest_supplements).
