@@ -295,6 +295,70 @@
         method: "POST",
         body: payload
       });
+    },
+
+    /* -------------------------------------------------------------------
+     *  НАПОМИНАНИЯ О ТРЕНИРОВКАХ
+     *  weekdays: массив int (0=Пн,1=Вт,2=Ср,3=Чт,4=Пт,5=Сб,6=Вс).
+     * ------------------------------------------------------------------- */
+
+    // Список напоминаний о тренировке.
+    // Ответ: {items:[{id, weekdays:[int], time, enabled}]}.
+    getTrainingReminders: function () {
+      return request("/reminders/training");
+    },
+
+    // Добавление напоминания о тренировке.
+    // Тело: {weekdays:[int], time, enabled}.
+    // Ответ: {id, weekdays, time, enabled}.
+    addTrainingReminder: function (r) {
+      return request("/reminders/training", { method: "POST", body: r });
+    },
+
+    // Удаление напоминания о тренировке по id. Ответ: {ok}.
+    deleteTrainingReminder: function (id) {
+      return request("/reminders/training/" + encodeURIComponent(id), {
+        method: "DELETE"
+      });
+    },
+
+    /* -------------------------------------------------------------------
+     *  НАПОМИНАНИЯ О ПРИЁМЕ ДОБАВОК
+     * ------------------------------------------------------------------- */
+
+    // Список напоминаний о приёме добавок.
+    // Ответ: {items:[{id, label, time, enabled, supplements:[{id, name}]}]}.
+    getSupplementReminders: function () {
+      return request("/reminders/supplement");
+    },
+
+    // Добавление напоминания о приёме добавок.
+    // Тело: {label, time, enabled, supplement_ids:[int]}.
+    // Ответ: {id, label, time, enabled, supplements:[{id, name}]}.
+    addSupplementReminder: function (r) {
+      return request("/reminders/supplement", { method: "POST", body: r });
+    },
+
+    // Удаление напоминания о приёме добавок по id. Ответ: {ok}.
+    deleteSupplementReminder: function (id) {
+      return request("/reminders/supplement/" + encodeURIComponent(id), {
+        method: "DELETE"
+      });
+    },
+
+    /* -------------------------------------------------------------------
+     *  AI-РЕКОМЕНДАЦИИ ДОБАВОК ПО ЦЕЛИ УЛУЧШЕНИЯ
+     * ------------------------------------------------------------------- */
+
+    // Подбор добавок под цель улучшения.
+    // Тело: {improvement_goal}.
+    // Ответ: {suggestions:[{name, dosage, note}], disclaimer,
+    //   training_count, improvement_goal}.
+    recommendSupplements: function (payload) {
+      return request("/supplement/recommend", {
+        method: "POST",
+        body: payload
+      });
     }
   };
 

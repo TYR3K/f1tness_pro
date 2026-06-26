@@ -35,6 +35,7 @@ class ProfileOut(BaseModel):
     target_proteins: Optional[float] = None  # целевой белок, г
     target_fats: Optional[float] = None      # целевой жир, г
     target_carbs: Optional[float] = None     # целевые углеводы, г
+    supplement_goal: Optional[str] = None    # цель улучшения для AI-советов по спортпиту
 
 
 class ProfileIn(BaseModel):
@@ -51,6 +52,7 @@ class ProfileIn(BaseModel):
     target_proteins: Optional[float] = None
     target_fats: Optional[float] = None
     target_carbs: Optional[float] = None
+    supplement_goal: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -357,3 +359,96 @@ class NotificationSettingsOut(BaseModel):
     supplement_reminder_enabled: bool = False
     daily_summary_enabled: bool = False
     summary_time: str = "21:00"
+
+
+# --------------------------------------------------------------------------- #
+#  Напоминания о тренировках (TrainingReminder)
+# --------------------------------------------------------------------------- #
+class TrainingReminderIn(BaseModel):
+    """Входные данные для создания напоминания о тренировке.
+
+    weekdays — список дней недели по Python (Пн=0 .. Вс=6).
+    time — время напоминания в формате "HH:MM".
+    """
+
+    weekdays: List[int]              # дни недели: 0=Пн .. 6=Вс
+    time: str                        # время "HH:MM"
+    enabled: bool = True             # включено ли напоминание
+
+
+class TrainingReminderOut(BaseModel):
+    """Напоминание о тренировке, отдаваемое клиенту (с идентификатором)."""
+
+    id: int
+    weekdays: List[int]              # дни недели: 0=Пн .. 6=Вс
+    time: str                        # время "HH:MM"
+    enabled: bool = True
+
+
+class TrainingRemindersOut(BaseModel):
+    """Список напоминаний о тренировках пользователя."""
+
+    items: List[TrainingReminderOut] = []
+
+
+# --------------------------------------------------------------------------- #
+#  Напоминания о приёме спортпита (SupplementReminder)
+# --------------------------------------------------------------------------- #
+class SupplementReminderIn(BaseModel):
+    """Входные данные для создания напоминания о приёме добавок.
+
+    supplement_ids — id добавок пользователя, которые входят в это напоминание.
+    """
+
+    label: str                       # метка: "Утро" | "Ночь" | своё
+    time: str                        # время "HH:MM"
+    enabled: bool = True             # включено ли напоминание
+    supplement_ids: List[int] = []   # id добавок пользователя
+
+
+class SupplementReminderItemOut(BaseModel):
+    """Одна добавка внутри напоминания (id + название)."""
+
+    id: int                          # id добавки (Supplement.id)
+    name: str                        # название добавки
+
+
+class SupplementReminderOut(BaseModel):
+    """Напоминание о приёме добавок, отдаваемое клиенту."""
+
+    id: int
+    label: str                       # метка напоминания
+    time: str                        # время "HH:MM"
+    enabled: bool = True
+    supplements: List[SupplementReminderItemOut] = []  # входящие добавки
+
+
+class SupplementRemindersOut(BaseModel):
+    """Список напоминаний о приёме добавок пользователя."""
+
+    items: List[SupplementReminderOut] = []
+
+
+# --------------------------------------------------------------------------- #
+#  Рекомендации по спортпиту с учётом цели улучшения и тренировок (ИИ)
+# --------------------------------------------------------------------------- #
+class SupplementRecommendIn(BaseModel):
+    """Запрос на ИИ-рекомендацию добавок с учётом цели улучшения.
+
+    improvement_goal — выбранная цель: сон/восстановление/сила/энергия/
+    иммунитет или произвольный текст.
+    """
+
+    improvement_goal: Optional[str] = None   # цель улучшения
+
+
+class SupplementRecommendOut(BaseModel):
+    """Результат рекомендации добавок с дисклеймером и контекстом.
+
+    Использует уже существующую SupplementSuggestItem для каждого совета.
+    """
+
+    suggestions: List[SupplementSuggestItem] = []
+    disclaimer: str                          # медицинский дисклеймер
+    training_count: int = 0                  # число тренировок за 2 недели
+    improvement_goal: Optional[str] = None   # применённая цель улучшения

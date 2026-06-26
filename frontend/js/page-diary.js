@@ -14,6 +14,10 @@
  *       • Ручное добавление: форма (название, ккал, Б/Ж/У, вес — необязательно,
  *         селектор приёма пищи) + блок «Недавние» с добавлением в один тап.
  *       • «Что съесть?»: рекомендации блюд под оставшиеся КБЖУ.
+ *   - Карточка «Напоминания о еде»: тумблер + три поля времени (завтрак/обед/
+ *     ужин). Хранится через App.api.getNotificationSettings /
+ *     saveNotificationSettings (поля meal_reminder_enabled, breakfast_time,
+ *     lunch_time, dinner_time).
  *   - Пустые состояния, скелетон загрузки, экран ошибки с кнопкой «Повторить».
  *
  * Весь пользовательский текст — на русском.
@@ -366,7 +370,9 @@
     }
 
     content.innerHTML =
-      totalsHtml(day) + actionsHtml() + emptyDayHint + sections;
+      totalsHtml(day) + actionsHtml() + emptyDayHint + sections +
+      // Контейнер карточки «Напоминания о еде» (рисуется отдельно).
+      '<div id="diary-notif" class="diary-notif"></div>';
 
     // Навешиваем обработчики удаления на кнопки ✕.
     var delButtons = content.querySelectorAll(".diary-entry__del");
@@ -386,6 +392,9 @@
     } else if (state.panel === "recommend") {
       openRecommendPanel();
     }
+
+    // Карточка напоминаний о еде (загружается асинхронно, со своим состоянием).
+    loadMealReminders();
   }
 
   /**
@@ -1042,6 +1051,205 @@
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Карточка «Напоминания о еде».
+  //
+  // Хранится через общие настройки уведомлений (NotificationSettings):
+  //   meal_reminder_enabled — тумблер включения напоминаний;
+  //   breakfast_time / lunch_time / dinner_time — время для завтрака/обеда/ужина.
+  // На сохранение отправляем только эти поля (остальные настройки уведомлений
+  // живут в своих разделах: тренировки, добавки, аккаунт).
+  // ---------------------------------------------------------------------------
+
+  // Поля времени карточки напоминаний (ключ настроек -> подпись).
+  var MEAL_REMINDER_TIMES = [
+    { key: "breakfast_time", label: "Завтрак" },
+    { key: "lunch_time", label: "Обед" },
+    { key: "dinner_time", label: "Ужин" }
+  ];
+
+  /**
+   * Безопасно приводит значение времени к строке "HH:MM" для поля type=time.
+   * Сервер может вернуть "HH:MM:SS" — оставляем первые 5 символов.
+   * @param {*} v
+   * @returns {string}
+   */
+  function timeValue(v) {
+    if (v == null) return "";
+    var s = String(v).trim();
+    if (s.length >= 5) return s.slice(0, 5);
+    return s;
+  }
+
+  /**
+   * Загружает настройки уведомлений и рисует карточку «Напоминания о еде».
+   * Карточка вспомогательная: при ошибке показываем кнопку «Повторить».
+   */
+  function loadMealReminders() {
+    var box = document.getElementById("diary-notif");
+    if (!box) return;
+
+    box.innerHTML =
+      '<section class="card diary-notif-card">' +
+      '<h2 class="diary-notif-title">Напоминания о еде</h2>' +
+      '<div class="diary-notif-body">' +
+      '<div class="skeleton skeleton-block diary-notif-skeleton"></div>' +
+      "</div>" +
+      "</section>";
+
+    App.api
+      .getNotificationSettings()
+      .then(function (settings) {
+        renderMealReminders(settings || {});
+      })
+      .catch(function (err) {
+        renderMealRemindersError(
+          (err && err.message) ? err.message : "Ошибка сети"
+        );
+      });
+  }
+
+  /**
+   * Рисует тело карточки «Напоминания о еде»: тумблер + три поля времени
+   * и кнопку «Сохранить».
+   * @param {Object} s NotificationSettingsOut
+   */
+  function renderMealReminders(s) {
+    var box = document.getElementById("diary-notif");
+    if (!box) return;
+
+    var enabled = !!s.meal_reminder_enabled;
+
+    var timesHtml = MEAL_REMINDER_TIMES.map(function (t) {
+      return (
+        '<label class="diary-notif-time">' +
+        '<span class="diary-notif-time__label">' +
+        App.escapeHtml(t.label) +
+        "</span>" +
+        '<input class="field__input diary-notif-time__input" type="time" ' +
+        'data-diary-notif-time="' +
+        App.escapeHtml(t.key) +
+        '" value="' +
+        App.escapeHtml(timeValue(s[t.key])) +
+        '" placeholder="08:00">' +
+        "</label>"
+      );
+    }).join("");
+
+    box.innerHTML =
+      '<section class="card diary-notif-card">' +
+      '<h2 class="diary-notif-title">Напоминания о еде</h2>' +
+      '<p class="diary-notif-sub">Будем напоминать залогировать приёмы пищи в выбранное время.</p>' +
+      '<label class="diary-notif-toggle">' +
+      '<input class="diary-notif-toggle__input" type="checkbox" ' +
+      'id="diary-notif-enabled"' +
+      (enabled ? " checked" : "") +
+      ">" +
+      '<span class="diary-notif-toggle__label">Включить напоминания о еде</span>' +
+      "</label>" +
+      '<div class="diary-notif-times" id="diary-notif-times"' +
+      (enabled ? "" : " hidden") +
+      ">" +
+      timesHtml +
+      "</div>" +
+      '<button type="button" class="btn btn--cta diary-notif-save" id="diary-notif-save">' +
+      "Сохранить</button>" +
+      "</section>";
+
+    // Тумблер показывает/скрывает поля времени.
+    var toggle = box.querySelector("#diary-notif-enabled");
+    var timesBox = box.querySelector("#diary-notif-times");
+    if (toggle && timesBox) {
+      toggle.addEventListener("change", function () {
+        timesBox.hidden = !toggle.checked;
+        App.haptic && App.haptic("selection");
+      });
+    }
+
+    var saveBtn = box.querySelector("#diary-notif-save");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", onSaveMealReminders);
+    }
+  }
+
+  /**
+   * Состояние ошибки карточки напоминаний с кнопкой «Повторить».
+   * @param {string} message
+   */
+  function renderMealRemindersError(message) {
+    var box = document.getElementById("diary-notif");
+    if (!box) return;
+    box.innerHTML =
+      '<section class="card diary-notif-card">' +
+      '<h2 class="diary-notif-title">Напоминания о еде</h2>' +
+      '<div class="diary-notif-error">' +
+      '<p class="diary-notif-error__text">Не удалось загрузить настройки напоминаний.</p>' +
+      '<p class="diary-notif-error__msg">' + App.escapeHtml(message) + "</p>" +
+      '<button type="button" class="btn btn--ghost diary-notif-retry" id="diary-notif-retry">Повторить</button>' +
+      "</div>" +
+      "</section>";
+
+    var retry = box.querySelector("#diary-notif-retry");
+    if (retry) {
+      retry.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        loadMealReminders();
+      });
+    }
+  }
+
+  /**
+   * Собирает значения карточки «Напоминания о еде» и сохраняет на сервере.
+   * Отправляем только относящиеся к еде поля, чтобы не затрагивать остальные
+   * настройки уведомлений.
+   */
+  function onSaveMealReminders() {
+    var box = document.getElementById("diary-notif");
+    if (!box) return;
+
+    var toggle = box.querySelector("#diary-notif-enabled");
+    var enabled = !!(toggle && toggle.checked);
+
+    var payload = { meal_reminder_enabled: enabled };
+
+    // Поля времени: пустые значения не отправляем.
+    var times = box.querySelectorAll("[data-diary-notif-time]");
+    for (var i = 0; i < times.length; i++) {
+      var key = times[i].getAttribute("data-diary-notif-time");
+      var val = (times[i].value || "").trim();
+      if (key && val) {
+        payload[key] = val;
+      }
+    }
+
+    var saveBtn = box.querySelector("#diary-notif-save");
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Сохраняем…";
+    }
+    App.showLoading();
+
+    App.api
+      .saveNotificationSettings(payload)
+      .then(function (settings) {
+        // Перерисовываем актуальными данными от сервера (или нашим payload).
+        renderMealReminders(settings || payload);
+        App.haptic && App.haptic("success");
+        App.toast("Напоминания о еде сохранены");
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || "Не удалось сохранить напоминания");
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Сохранить";
+        }
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
   /**
    * Обновляет подпись даты в шапке без полной перерисовки страницы.
    */
@@ -1081,6 +1289,9 @@
       // Панель действий при входе на страницу закрыта.
       state.panel = null;
       state.day = null;
+
+      // Прокручиваем к началу при входе на страницу.
+      App.scrollTop && App.scrollTop();
 
       // Базовая разметка: переключатель даты + контейнер для контента.
       viewEl.innerHTML =

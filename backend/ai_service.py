@@ -20,6 +20,10 @@ Pillow для снижения стоимости запроса.
         Подбирает 2-3 варианта блюд под остаток КБЖУ на день.
     suggest_supplements(diet_goal) -> dict
         Подбирает спортивные добавки под цель пользователя.
+    recommend_supplements(improvement_goal, training_count, workout_types,
+                          diet_goal) -> dict
+        Персональный подбор добавок с учётом цели улучшения, частоты/типа
+        тренировок и цели диеты.
 """
 
 import base64
@@ -389,6 +393,41 @@ SUPPLEMENT_SYSTEM_PROMPT = (
     "- Формулировки — общие и осторожные, без медицинских обещаний."
 )
 
+# Системный промпт для ПЕРСОНАЛЬНОГО подбора добавок: учитывает цель улучшения
+# (сон/восстановление/сила/энергия/иммунитет или произвольный текст),
+# частоту и тип тренировок, а также цель диеты.
+SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT = (
+    "Ты — опытный эксперт по спортивному питанию. Подбери пользователю "
+    "персональные базовые добавки, учитывая его данные.\n\n"
+    "Учитывай при подборе:\n"
+    "- ЦЕЛЬ УЛУЧШЕНИЯ (improvement_goal): например, сон, восстановление, "
+    "сила, энергия, иммунитет — или произвольный текст пользователя;\n"
+    "- ЧАСТОТУ и ТИП тренировок (training_count — число тренировок за "
+    "последние 2 недели; workout_types — какие именно тренировки);\n"
+    "- ЦЕЛЬ ДИЕТЫ (diet_goal: loss — похудение, maintain — поддержание, "
+    "gain — набор массы).\n\n"
+    "Примеры логики (ориентир, не жёсткое правило):\n"
+    "- цель «сон» -> магний, глицин;\n"
+    "- цель «восстановление» + частые тренировки -> протеин, омега-3, магний;\n"
+    "- цель «сила» + частые силовые тренировки -> креатин моногидрат, протеин;\n"
+    "- цель «энергия» -> кофеин/L-карнитин в умеренных дозах, витамины группы B;\n"
+    "- цель «иммунитет» -> витамин D, витамин C, цинк.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полем:\n"
+    '  "suggestions" — массив из 2-4 объектов, каждый с полями:\n'
+    '      "name"    — строка, название добавки на русском '
+    '(например: "Креатин моногидрат", "Магний", "Омега-3");\n'
+    '      "dosage"  — строка, типичная суточная дозировка '
+    '(например: "3-5 г в день");\n'
+    '      "note"    — строка, кратко зачем нужна именно под цель/тренировки '
+    "и как принимать.\n\n"
+    "Правила:\n"
+    "- Предлагай только распространённые, безопасные базовые добавки "
+    "(2-4 штуки, без воды).\n"
+    "- Связывай выбор с целью улучшения и тренировками пользователя.\n"
+    "- НЕ предлагай рецептурные препараты, гормоны и любые запрещённые вещества.\n"
+    "- Формулировки — общие и осторожные, без медицинских обещаний."
+)
+
 
 def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str):
     """
@@ -585,6 +624,98 @@ def suggest_supplements(diet_goal: str | None = None) -> dict:
     )
 
     # Нормализуем массив рекомендаций.
+    raw_items = data.get("suggestions")
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    suggestions: list[dict] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        dosage = item.get("dosage")
+        if not isinstance(dosage, str):
+            dosage = ""
+        note = item.get("note")
+        if not isinstance(note, str):
+            note = ""
+        suggestions.append(
+            {
+                "name": name.strip(),
+                "dosage": dosage.strip(),
+                "note": note.strip(),
+            }
+        )
+
+    if not suggestions:
+        raise AIError(
+            "AI не вернул ни одной корректной добавки",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return {"suggestions": suggestions}
+
+
+def recommend_supplements(
+    improvement_goal: str | None = None,
+    training_count: int = 0,
+    workout_types: list[str] | None = None,
+    diet_goal: str | None = None,
+) -> dict:
+    """
+    Персональный подбор спортивных добавок (2-4 шт.) с учётом:
+      * improvement_goal — цели улучшения (сон/восстановление/сила/энергия/
+        иммунитет или произвольный текст пользователя);
+      * training_count   — числа тренировок за последние 2 недели;
+      * workout_types    — типов этих тренировок;
+      * diet_goal        — цели диеты (loss/maintain/gain).
+
+    Возвращает словарь:
+        {
+            "suggestions": [
+                {"name": str, "dosage": str, "note": str},
+                ...
+            ]
+        }
+
+    Использует тот же паттерн, что suggest_supplements (OpenAI json_object,
+    ретрай, устойчивый разбор JSON). При неудаче обращения к ИИ выбрасывает
+    AIError (502 на уровне роута). Дисклеймер добавляется на уровне роута.
+    """
+    # Формируем запрос пользователя из тех данных, что известны.
+    parts = ["Подбери мне персональные спортивные добавки (2-4 штуки)."]
+
+    if improvement_goal and str(improvement_goal).strip():
+        parts.append(f"Цель улучшения: {str(improvement_goal).strip()}.")
+    else:
+        parts.append("Цель улучшения не указана — подбери базовый набор.")
+
+    # Частота тренировок за последние 2 недели.
+    parts.append(f"Тренировок за последние 2 недели: {_coerce_int(training_count)}.")
+
+    # Типы тренировок (если есть) — перечисляем их через запятую.
+    if workout_types:
+        types_clean = [
+            str(t).strip() for t in workout_types if t and str(t).strip()
+        ]
+        if types_clean:
+            parts.append("Типы тренировок: " + ", ".join(types_clean) + ".")
+
+    if diet_goal and str(diet_goal).strip():
+        parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+
+    parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    data, _debug = _run_text_completion(
+        SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT, user_prompt, log_tag="supplement_recommend"
+    )
+
+    # Нормализуем массив рекомендаций (та же чистка типов, что в suggest_supplements).
     raw_items = data.get("suggestions")
     if not isinstance(raw_items, list):
         raw_items = []

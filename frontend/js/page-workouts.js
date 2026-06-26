@@ -16,13 +16,15 @@
  *        (App.api.deleteWorkout).
  *      - Итог «Сожжено за день: N ккал».
  *
- *   2. СПОРТПИТ (карточкой)
- *      - Список добавок (App.api.getSupplements) с удалением
- *        (App.api.deleteSupplement).
- *      - Форма добавления: название, тип, дозировка, время приёма (HH:MM),
- *        чекбокс «напоминать» -> App.api.addSupplement.
- *      - Кнопка «🤖 Подсказать добавки» -> App.api.suggestSupplements,
- *        показывает варианты {name,dosage,note} + видимый дисклеймер.
+ *   2. НАПОМИНАНИЯ О ТРЕНИРОВКЕ (карточкой)
+ *      - Список напоминаний (App.api.getTrainingReminders) с удалением
+ *        (App.api.deleteTrainingReminder).
+ *      - Форма: выбор дней недели (чипы Пн…Вс -> [0..6], можно несколько),
+ *        время (input time), переключатель вкл/выкл
+ *        -> App.api.addTrainingReminder({weekdays,time,enabled}).
+ *      - Дни недели показываются словами (напр. «Пн, Ср, Пт · 18:00»).
+ *
+ * Раздел «Спортпит» вынесен на отдельную страницу page-supplements.
  *
  * Весь пользовательский текст — на русском. Полная обработка ошибок (сеть/AI),
  * состояния загрузки (скелетоны), пустые состояния.
@@ -55,12 +57,30 @@
     WORKOUT_LABELS[t.value] = t.label;
   });
 
+  // Дни недели: индекс 0=Пн … 6=Вс. Используются и в чипах формы, и в списке.
+  var WEEKDAYS = [
+    { value: 0, short: "Пн" },
+    { value: 1, short: "Вт" },
+    { value: 2, short: "Ср" },
+    { value: 3, short: "Чт" },
+    { value: 4, short: "Пт" },
+    { value: 5, short: "Сб" },
+    { value: 6, short: "Вс" }
+  ];
+
+  // value -> короткая подпись (для рендера списка напоминаний).
+  var WEEKDAY_SHORT = {};
+  WEEKDAYS.forEach(function (d) {
+    WEEKDAY_SHORT[d.value] = d.short;
+  });
+
   // Внутреннее состояние контроллера.
   var state = {
-    viewEl: null,      // корневой элемент страницы (#view)
-    date: null,        // выбранная дата "YYYY-MM-DD"
-    wkLoading: false,  // флаг загрузки списка тренировок (защита от гонок)
-    supLoading: false  // флаг загрузки списка добавок
+    viewEl: null,        // корневой элемент страницы (#view)
+    date: null,          // выбранная дата "YYYY-MM-DD"
+    wkLoading: false,    // флаг загрузки списка тренировок (защита от гонок)
+    remLoading: false,   // флаг загрузки списка напоминаний
+    remDays: []          // выбранные дни недели в форме напоминания ([0..6])
   };
 
   /* =====================================================================
@@ -140,6 +160,34 @@
     return Math.round(n);
   }
 
+  /**
+   * Превращает массив индексов дней недели в человеко-читаемую строку.
+   * Например, [0,2,4] -> "Пн, Ср, Пт". Каждый день — всю неделю -> "Ежедневно".
+   */
+  function weekdaysToText(days) {
+    if (!days || !days.length) return "";
+    // Нормализуем: только валидные индексы, по возрастанию, без повторов.
+    var clean = [];
+    var seen = {};
+    var sorted = days.slice().sort(function (a, b) {
+      return a - b;
+    });
+    for (var i = 0; i < sorted.length; i++) {
+      var v = sorted[i];
+      if (WEEKDAY_SHORT[v] != null && !seen[v]) {
+        seen[v] = true;
+        clean.push(v);
+      }
+    }
+    if (!clean.length) return "";
+    if (clean.length === 7) return "Ежедневно";
+    return clean
+      .map(function (v) {
+        return WEEKDAY_SHORT[v];
+      })
+      .join(", ");
+  }
+
   /* =====================================================================
    *  РАЗМЕТКА: СКЕЛЕТОНЫ
    * ===================================================================== */
@@ -160,18 +208,18 @@
   }
 
   /**
-   * Скелетон списка добавок.
+   * Скелетон списка напоминаний о тренировке.
    */
-  function supplementsSkeletonHtml() {
+  function remindersSkeletonHtml() {
     var rows = "";
     for (var i = 0; i < 2; i++) {
       rows +=
-        '<div class="sup-item skeleton-block">' +
+        '<div class="wk-rem-item skeleton-block">' +
         '<div class="skeleton skeleton-line skeleton-title"></div>' +
         '<div class="skeleton skeleton-line short"></div>' +
         "</div>";
     }
-    return '<div class="sup-skeleton">' + rows + "</div>";
+    return '<div class="wk-rem-skeleton">' + rows + "</div>";
   }
 
   /* =====================================================================
@@ -247,77 +295,80 @@
   }
 
   /**
-   * Форма добавления добавки (спортпит).
+   * Чипы выбора дней недели в форме напоминания.
+   * Активный чип помечается классом is-active (синхронизируется с state.remDays).
    */
-  function supplementFormHtml() {
+  function weekdayChipsHtml() {
+    return WEEKDAYS.map(function (d) {
+      var active = state.remDays.indexOf(d.value) !== -1;
+      return (
+        '<button type="button" class="wk-rem-day' +
+        (active ? " is-active" : "") +
+        '" data-day="' + d.value + '" ' +
+        'aria-pressed="' + (active ? "true" : "false") + '">' +
+        esc(d.short) +
+        "</button>"
+      );
+    }).join("");
+  }
+
+  /**
+   * Форма добавления напоминания о тренировке.
+   */
+  function reminderFormHtml() {
     return (
-      '<form class="sup-form" id="supForm" novalidate>' +
-      '<h3 class="sup-form__title">Добавить добавку</h3>' +
+      '<form class="wk-rem-form" id="wkRemForm" novalidate>' +
+      '<h3 class="wk-rem-form__title">Новое напоминание</h3>' +
 
+      '<div class="field">' +
+      '<span class="field__label">Дни недели</span>' +
+      '<div class="wk-rem-days" id="wkRemDays">' +
+      weekdayChipsHtml() +
+      "</div>" +
+      "</div>" +
+
+      '<div class="wk-rem-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">Название</span>' +
-      '<input class="field__input" id="supName" type="text" ' +
-      'placeholder="Креатин" maxlength="100" autocomplete="off">' +
+      '<span class="field__label">Время</span>' +
+      '<input class="field__input" id="wkRemTime" type="time" value="18:00">' +
       "</label>" +
 
-      '<div class="sup-form__grid">' +
-      '<label class="field">' +
-      '<span class="field__label">Тип</span>' +
-      '<input class="field__input" id="supType" type="text" ' +
-      'placeholder="Аминокислоты" maxlength="60" autocomplete="off">' +
-      "</label>" +
-
-      '<label class="field">' +
-      '<span class="field__label">Дозировка</span>' +
-      '<input class="field__input" id="supDosage" type="text" ' +
-      'placeholder="5 г" maxlength="60" autocomplete="off">' +
+      '<label class="wk-rem-form__check">' +
+      '<input type="checkbox" id="wkRemEnabled" class="wk-rem-form__checkbox" checked>' +
+      '<span class="wk-rem-form__check-label">Включено</span>' +
       "</label>" +
       "</div>" +
 
-      '<label class="field">' +
-      '<span class="field__label">Время приёма</span>' +
-      '<input class="field__input" id="supTime" type="time">' +
-      "</label>" +
-
-      '<label class="sup-form__check">' +
-      '<input type="checkbox" id="supReminder" class="sup-form__checkbox">' +
-      '<span class="sup-form__check-label">Напоминать о приёме</span>' +
-      "</label>" +
-
-      '<button type="submit" class="btn btn-cta btn-block sup-add" id="supAddBtn">' +
-      "Добавить добавку" +
+      '<button type="submit" class="btn btn-cta btn-block wk-rem-add" id="wkRemAddBtn">' +
+      "Добавить напоминание" +
       "</button>" +
+      '<p class="wk-rem-form__hint">Выберите один или несколько дней ' +
+      "(например, Пн, Ср, Пт) и время напоминания.</p>" +
       "</form>"
     );
   }
 
   /**
-   * Карточка раздела «Спортпит» целиком (список + кнопка подсказки + форма).
+   * Карточка раздела «Напоминания о тренировке» (список + форма).
    */
-  function supplementCardHtml() {
+  function reminderCardHtml() {
     return (
-      '<section class="card sup-card">' +
-      '<h2 class="sup-card__title">Спортпит</h2>' +
-      '<p class="sup-card__subtitle">Ваши добавки и приёмы спортивного питания.</p>' +
+      '<section class="card wk-rem-card">' +
+      '<h2 class="wk-rem-card__title">Напоминания о тренировке</h2>' +
+      '<p class="wk-rem-card__subtitle">Мы напомним вам не пропустить тренировку.</p>' +
 
-      // Контейнер списка добавок (наполняется отдельно).
-      '<div id="supList" class="sup-list"></div>' +
-
-      // Кнопка ИИ-подсказки и контейнер для её результата.
-      '<button type="button" class="btn btn-ghost btn-block sup-suggest" id="supSuggestBtn">' +
-      "🤖 Подсказать добавки" +
-      "</button>" +
-      '<div id="supSuggestBox" class="sup-suggest-box"></div>' +
+      // Контейнер списка напоминаний (наполняется отдельно).
+      '<div id="wkRemList" class="wk-rem-list"></div>' +
 
       // Форма добавления.
-      supplementFormHtml() +
+      reminderFormHtml() +
       "</section>"
     );
   }
 
   /**
    * Полный каркас страницы. Динамические части (список тренировок, итог,
-   * список добавок) наполняются отдельными функциями после монтирования.
+   * список напоминаний) наполняются отдельными функциями после монтирования.
    */
   function pageTemplate() {
     return (
@@ -335,8 +386,8 @@
       // Список тренировок за выбранную дату.
       '<div id="wkList" class="wk-list"></div>' +
 
-      // Раздел «Спортпит».
-      supplementCardHtml() +
+      // Раздел «Напоминания о тренировке».
+      reminderCardHtml() +
       "</section>"
     );
   }
@@ -443,147 +494,83 @@
   }
 
   /* =====================================================================
-   *  РАЗМЕТКА: ДИНАМИЧЕСКИЕ ЧАСТИ СПОРТПИТА
+   *  РАЗМЕТКА: ДИНАМИЧЕСКИЕ ЧАСТИ НАПОМИНАНИЙ
    * ===================================================================== */
 
   /**
-   * Разметка одной строки добавки.
+   * Разметка одной строки напоминания о тренировке.
+   * @param {Object} r { id, weekdays:[int], time, enabled }
    */
-  function supplementRowHtml(s) {
-    // Собираем строку с деталями (тип / дозировка / время), пропуская пустые.
-    var parts = [];
-    if (s.type) parts.push(esc(s.type));
-    if (s.dosage) parts.push(esc(s.dosage));
-    if (s.intake_time) parts.push(esc(s.intake_time));
-    var meta = parts.join(" · ");
+  function reminderRowHtml(r) {
+    var daysText = weekdaysToText(r.weekdays) || "Дни не выбраны";
+    var time = r.time ? esc(r.time) : "";
+    var meta = time ? daysText + " · " + time : daysText;
 
-    var reminder = s.reminder_enabled
-      ? '<span class="sup-item__badge">🔔 напоминание</span>'
-      : "";
+    var badge = r.enabled
+      ? '<span class="wk-rem-item__badge wk-rem-item__badge--on">🔔 включено</span>'
+      : '<span class="wk-rem-item__badge wk-rem-item__badge--off">🔕 выключено</span>';
 
     return (
-      '<li class="sup-item" data-id="' + esc(s.id) + '">' +
-      '<div class="sup-item__main">' +
-      '<span class="sup-item__name">' + esc(s.name || "Без названия") + "</span>" +
-      (meta ? '<span class="sup-item__meta">' + meta + "</span>" : "") +
-      reminder +
+      '<li class="wk-rem-item" data-id="' + esc(r.id) + '">' +
+      '<div class="wk-rem-item__main">' +
+      '<span class="wk-rem-item__meta">' + esc(meta) + "</span>" +
+      badge +
       "</div>" +
-      '<button class="sup-item__del" type="button" data-id="' + esc(s.id) + '" ' +
-      'aria-label="Удалить добавку" title="Удалить">✕</button>' +
+      '<button class="wk-rem-item__del" type="button" data-id="' + esc(r.id) + '" ' +
+      'aria-label="Удалить напоминание" title="Удалить">✕</button>' +
       "</li>"
     );
   }
 
   /**
-   * Отрисовка списка добавок.
+   * Отрисовка списка напоминаний о тренировке.
    * @param {Object} data { items:[...] }
    */
-  function renderSupplements(data) {
-    var box = byId("supList");
+  function renderReminders(data) {
+    var box = byId("wkRemList");
     if (!box) return;
 
     var items = (data && data.items) || [];
 
     if (!items.length) {
       box.innerHTML =
-        '<div class="sup-empty">' +
-        '<div class="sup-empty__icon" aria-hidden="true">💊</div>' +
-        '<p class="sup-empty__text">Добавки пока не добавлены.</p>' +
+        '<div class="wk-rem-empty">' +
+        '<div class="wk-rem-empty__icon" aria-hidden="true">⏰</div>' +
+        '<p class="wk-rem-empty__text">Напоминаний пока нет.</p>' +
         "</div>";
       return;
     }
 
     var rows = "";
     for (var i = 0; i < items.length; i++) {
-      rows += supplementRowHtml(items[i]);
+      rows += reminderRowHtml(items[i]);
     }
-    box.innerHTML = '<ul class="sup-item-list">' + rows + "</ul>";
+    box.innerHTML = '<ul class="wk-rem-item-list">' + rows + "</ul>";
 
-    var delButtons = box.querySelectorAll(".sup-item__del");
+    var delButtons = box.querySelectorAll(".wk-rem-item__del");
     for (var k = 0; k < delButtons.length; k++) {
-      delButtons[k].addEventListener("click", onSupplementDelete);
+      delButtons[k].addEventListener("click", onReminderDelete);
     }
   }
 
   /**
-   * Состояние ошибки загрузки добавок с кнопкой «Повторить».
+   * Состояние ошибки загрузки напоминаний с кнопкой «Повторить».
    */
-  function renderSupplementsError(message) {
-    var box = byId("supList");
+  function renderRemindersError(message) {
+    var box = byId("wkRemList");
     if (!box) return;
     box.innerHTML =
-      '<div class="sup-error">' +
-      '<div class="sup-error__icon" aria-hidden="true">⚠️</div>' +
-      '<p class="sup-error__title">Не удалось загрузить добавки</p>' +
-      '<p class="sup-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
-      '<button class="btn btn-ghost sup-error__retry" type="button">Повторить</button>' +
+      '<div class="wk-rem-error">' +
+      '<div class="wk-rem-error__icon" aria-hidden="true">⚠️</div>' +
+      '<p class="wk-rem-error__title">Не удалось загрузить напоминания</p>' +
+      '<p class="wk-rem-error__text">' + esc(message || "Неизвестная ошибка") + "</p>" +
+      '<button class="btn btn-ghost wk-rem-error__retry" type="button">Повторить</button>' +
       "</div>";
-    var retry = box.querySelector(".sup-error__retry");
+    var retry = box.querySelector(".wk-rem-error__retry");
     if (retry) {
       retry.addEventListener("click", function () {
-        loadSupplements();
+        loadReminders();
       });
-    }
-  }
-
-  /**
-   * Отрисовка результата ИИ-подсказки добавок.
-   * @param {Object} res { suggestions:[{name,dosage,note}], disclaimer }
-   */
-  function renderSuggestions(res) {
-    var box = byId("supSuggestBox");
-    if (!box) return;
-
-    var suggestions = (res && res.suggestions) || [];
-    var disclaimer = res && res.disclaimer ? res.disclaimer : "";
-
-    if (!suggestions.length) {
-      box.innerHTML =
-        '<div class="sup-suggest-box__empty">' +
-        "Подходящих рекомендаций не нашлось. Попробуйте позже." +
-        "</div>";
-      return;
-    }
-
-    var cards = suggestions
-      .map(function (s) {
-        var note = s.note
-          ? '<p class="sup-suggest-card__note">' + esc(s.note) + "</p>"
-          : "";
-        var dosage = s.dosage
-          ? '<span class="sup-suggest-card__dosage">' + esc(s.dosage) + "</span>"
-          : "";
-        return (
-          '<div class="sup-suggest-card">' +
-          '<div class="sup-suggest-card__head">' +
-          '<span class="sup-suggest-card__name">' + esc(s.name || "Добавка") + "</span>" +
-          dosage +
-          "</div>" +
-          note +
-          '<button type="button" class="btn btn-ghost sup-suggest-card__use" ' +
-          'data-name="' + esc(s.name || "") + '" ' +
-          'data-dosage="' + esc(s.dosage || "") + '">Заполнить форму</button>' +
-          "</div>"
-        );
-      })
-      .join("");
-
-    // Дисклеймер показываем ВСЕГДА, когда он пришёл с сервера.
-    var disclaimerHtml = disclaimer
-      ? '<p class="sup-disclaimer">⚠️ ' + esc(disclaimer) + "</p>"
-      : "";
-
-    box.innerHTML =
-      '<div class="sup-suggest-box__inner">' +
-      '<p class="sup-suggest-box__title">Рекомендации</p>' +
-      '<div class="sup-suggest-list">' + cards + "</div>" +
-      disclaimerHtml +
-      "</div>";
-
-    // Кнопки «Заполнить форму» переносят данные подсказки в поля формы.
-    var useButtons = box.querySelectorAll(".sup-suggest-card__use");
-    for (var i = 0; i < useButtons.length; i++) {
-      useButtons[i].addEventListener("click", onSuggestionUse);
     }
   }
 
@@ -619,27 +606,27 @@
   }
 
   /**
-   * Загрузка списка добавок (со скелетоном и обработкой ошибок).
+   * Загрузка списка напоминаний (со скелетоном и обработкой ошибок).
    */
-  function loadSupplements() {
-    if (state.supLoading) return;
-    state.supLoading = true;
+  function loadReminders() {
+    if (state.remLoading) return;
+    state.remLoading = true;
 
-    var box = byId("supList");
-    if (box) box.innerHTML = supplementsSkeletonHtml();
+    var box = byId("wkRemList");
+    if (box) box.innerHTML = remindersSkeletonHtml();
 
     App.api
-      .getSupplements()
+      .getTrainingReminders()
       .then(function (data) {
-        renderSupplements(data);
+        renderReminders(data);
       })
       .catch(function (err) {
-        renderSupplementsError(
+        renderRemindersError(
           (err && err.message) || "Проблема с сетью. Проверьте соединение."
         );
       })
       .then(function () {
-        state.supLoading = false;
+        state.remLoading = false;
       });
   }
 
@@ -817,63 +804,99 @@
   }
 
   /* =====================================================================
-   *  ОБРАБОТЧИКИ: СПОРТПИТ
+   *  ОБРАБОТЧИКИ: НАПОМИНАНИЯ О ТРЕНИРОВКЕ
    * ===================================================================== */
 
   /**
-   * Отправка формы добавления добавки.
+   * Переключение выбора дня недели в форме (чип).
    */
-  function onSupplementSubmit(e) {
+  function onWeekdayToggle(ev) {
+    var btn = ev.currentTarget;
+    var day = parseInt(btn.getAttribute("data-day"), 10);
+    if (isNaN(day)) return;
+
+    var idx = state.remDays.indexOf(day);
+    if (idx === -1) {
+      state.remDays.push(day);
+      btn.classList.add("is-active");
+      btn.setAttribute("aria-pressed", "true");
+    } else {
+      state.remDays.splice(idx, 1);
+      btn.classList.remove("is-active");
+      btn.setAttribute("aria-pressed", "false");
+    }
+    haptic("selection");
+  }
+
+  /**
+   * Сброс формы напоминания после успешного добавления.
+   */
+  function resetReminderForm() {
+    state.remDays = [];
+    var daysBox = byId("wkRemDays");
+    if (daysBox) {
+      var chips = daysBox.querySelectorAll(".wk-rem-day");
+      for (var i = 0; i < chips.length; i++) {
+        chips[i].classList.remove("is-active");
+        chips[i].setAttribute("aria-pressed", "false");
+      }
+    }
+    var timeEl = byId("wkRemTime");
+    if (timeEl) timeEl.value = "18:00";
+    var enabledEl = byId("wkRemEnabled");
+    if (enabledEl) enabledEl.checked = true;
+  }
+
+  /**
+   * Отправка формы добавления напоминания о тренировке.
+   */
+  function onReminderSubmit(e) {
     if (e) e.preventDefault();
 
-    var nameEl = byId("supName");
-    var typeEl = byId("supType");
-    var dosageEl = byId("supDosage");
-    var timeEl = byId("supTime");
-    var reminderEl = byId("supReminder");
-    var btn = byId("supAddBtn");
-    if (!nameEl) return;
+    var timeEl = byId("wkRemTime");
+    var enabledEl = byId("wkRemEnabled");
+    var btn = byId("wkRemAddBtn");
 
-    var name = (nameEl.value || "").trim();
-    if (!name) {
-      toast("Укажите название добавки");
+    // Нужен хотя бы один выбранный день.
+    if (!state.remDays.length) {
+      toast("Выберите хотя бы один день недели");
       haptic("error");
-      nameEl.focus();
       return;
     }
 
-    var payload = {
-      name: name,
-      type: (typeEl && typeEl.value || "").trim(),
-      dosage: (dosageEl && dosageEl.value || "").trim(),
-      reminder_enabled: !!(reminderEl && reminderEl.checked)
-    };
-
-    // Время приёма передаём только если оно задано (HH:MM).
     var time = (timeEl && timeEl.value || "").trim();
-    if (time) {
-      payload.intake_time = time;
+    if (!time) {
+      toast("Укажите время напоминания");
+      haptic("error");
+      if (timeEl) timeEl.focus();
+      return;
     }
+
+    // Отдаём дни отсортированными по возрастанию для предсказуемого порядка.
+    var weekdays = state.remDays.slice().sort(function (a, b) {
+      return a - b;
+    });
+
+    var payload = {
+      weekdays: weekdays,
+      time: time,
+      enabled: !!(enabledEl && enabledEl.checked)
+    };
 
     if (btn) btn.disabled = true;
     App.showLoading();
 
     App.api
-      .addSupplement(payload)
+      .addTrainingReminder(payload)
       .then(function () {
         haptic("success");
-        toast("Добавка добавлена");
-        // Очищаем форму.
-        nameEl.value = "";
-        if (typeEl) typeEl.value = "";
-        if (dosageEl) dosageEl.value = "";
-        if (timeEl) timeEl.value = "";
-        if (reminderEl) reminderEl.checked = false;
-        loadSupplements();
+        toast("Напоминание добавлено");
+        resetReminderForm();
+        loadReminders();
       })
       .catch(function (err) {
         haptic("error");
-        toast((err && err.message) || "Не удалось добавить добавку");
+        toast((err && err.message) || "Не удалось добавить напоминание");
       })
       .finally(function () {
         if (btn) btn.disabled = false;
@@ -882,9 +905,9 @@
   }
 
   /**
-   * Удаление добавки по кнопке ✕.
+   * Удаление напоминания по кнопке ✕.
    */
-  function onSupplementDelete(ev) {
+  function onReminderDelete(ev) {
     var btn = ev.currentTarget;
     var id = parseInt(btn.getAttribute("data-id"), 10);
     if (isNaN(id)) return;
@@ -896,92 +919,20 @@
     App.showLoading();
 
     App.api
-      .deleteSupplement(id)
+      .deleteTrainingReminder(id)
       .then(function () {
-        toast("Добавка удалена");
-        loadSupplements();
+        toast("Напоминание удалено");
+        loadReminders();
       })
       .catch(function (err) {
         btn.disabled = false;
         btn.textContent = "✕";
         haptic("error");
-        toast((err && err.message) || "Не удалось удалить добавку");
+        toast((err && err.message) || "Не удалось удалить напоминание");
       })
       .finally(function () {
         App.hideLoading();
       });
-  }
-
-  /**
-   * Кнопка «🤖 Подсказать добавки» — запрашивает рекомендации у сервера.
-   */
-  function onSuggest() {
-    var btn = byId("supSuggestBtn");
-    var box = byId("supSuggestBox");
-    if (!box) return;
-
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = "Подбираем…";
-    }
-    box.innerHTML =
-      '<div class="sup-suggest-box__loading">' +
-      '<div class="skeleton skeleton-line"></div>' +
-      '<div class="skeleton skeleton-line short"></div>' +
-      "</div>";
-
-    App.api
-      .suggestSupplements()
-      .then(function (res) {
-        renderSuggestions(res);
-        haptic("success");
-      })
-      .catch(function (err) {
-        box.innerHTML =
-          '<div class="sup-suggest-box__error">' +
-          '<p class="sup-suggest-box__error-text">' +
-          esc((err && err.message) || "Не удалось получить рекомендации") +
-          "</p>" +
-          '<button type="button" class="btn btn-ghost sup-suggest-box__retry">Повторить</button>' +
-          "</div>";
-        var retry = box.querySelector(".sup-suggest-box__retry");
-        if (retry) retry.addEventListener("click", onSuggest);
-        haptic("error");
-      })
-      .finally(function () {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = "🤖 Подсказать добавки";
-        }
-      });
-  }
-
-  /**
-   * Кнопка «Заполнить форму» в карточке рекомендации — переносит
-   * название и дозировку в поля формы добавления.
-   */
-  function onSuggestionUse(ev) {
-    var btn = ev.currentTarget;
-    var name = btn.getAttribute("data-name") || "";
-    var dosage = btn.getAttribute("data-dosage") || "";
-
-    var nameEl = byId("supName");
-    var dosageEl = byId("supDosage");
-    if (nameEl) nameEl.value = name;
-    if (dosageEl) dosageEl.value = dosage;
-
-    haptic("light");
-    toast("Поля заполнены — проверьте и сохраните");
-
-    // Подскроллим к форме, чтобы пользователь видел заполненные поля.
-    var form = byId("supForm");
-    if (form && typeof form.scrollIntoView === "function") {
-      try {
-        form.scrollIntoView({ behavior: "smooth", block: "center" });
-      } catch (e) {
-        form.scrollIntoView();
-      }
-    }
   }
 
   /* =====================================================================
@@ -1016,13 +967,15 @@
     var estimateBtn = byId("wkEstimateBtn");
     if (estimateBtn) estimateBtn.addEventListener("click", onEstimate);
 
-    // Форма добавки.
-    var supForm = byId("supForm");
-    if (supForm) supForm.addEventListener("submit", onSupplementSubmit);
+    // Чипы дней недели в форме напоминания.
+    var dayChips = state.viewEl.querySelectorAll(".wk-rem-day");
+    for (var d = 0; d < dayChips.length; d++) {
+      dayChips[d].addEventListener("click", onWeekdayToggle);
+    }
 
-    // Кнопка ИИ-подсказки.
-    var suggestBtn = byId("supSuggestBtn");
-    if (suggestBtn) suggestBtn.addEventListener("click", onSuggest);
+    // Форма напоминания о тренировке.
+    var remForm = byId("wkRemForm");
+    if (remForm) remForm.addEventListener("submit", onReminderSubmit);
   }
 
   /* =====================================================================
@@ -1032,12 +985,14 @@
   var controller = {
     /**
      * Вызывается при показе страницы: строит разметку, вешает обработчики,
-     * загружает тренировки и добавки.
+     * загружает тренировки и напоминания.
      */
     onShow: function (viewEl) {
       state.viewEl = viewEl;
       state.wkLoading = false;
-      state.supLoading = false;
+      state.remLoading = false;
+      // Сбрасываем выбор дней недели в форме напоминания.
+      state.remDays = [];
 
       // При каждом показе по умолчанию открываем сегодняшний день.
       state.date = App.todayStr();
@@ -1048,7 +1003,7 @@
 
       // Параллельно загружаем оба раздела.
       loadWorkouts();
-      loadSupplements();
+      loadReminders();
 
       // Прокрутка наверх, чтобы экран не «залип» прокрученным вниз.
       App.scrollTop();
@@ -1060,7 +1015,8 @@
     onHide: function () {
       state.viewEl = null;
       state.wkLoading = false;
-      state.supLoading = false;
+      state.remLoading = false;
+      state.remDays = [];
     }
   };
 

@@ -18,19 +18,26 @@
   <!-- Контейнер активной страницы: App очищает и наполняет его -->
   <main id="view"></main>
 
-  <!-- Нижняя панель навигации: три вкладки -->
+  <!-- Нижняя панель навигации: пять пунктов (центральная кнопка-камера приподнята) -->
   <nav id="tabbar">
-    <button class="tab" type="button" data-page="scan">
-      <span class="tab-emoji" aria-hidden="true">📷</span>
-      <span class="tab-label">Определение</span>
+    <button class="tab" type="button" data-page="workouts">
+      <span class="tab-emoji" aria-hidden="true">🏋️</span>
+      <span class="tab-label">Тренировки</span>
+    </button>
+    <button class="tab" type="button" data-page="supplements">
+      <span class="tab-emoji" aria-hidden="true">💊</span>
+      <span class="tab-label">Добавки</span>
+    </button>
+    <!-- Центральная кнопка «Определение»: только иконка камеры в кружке, без подписи -->
+    <button class="tab tab-camera" type="button" data-page="scan" aria-label="Определение">
+      <svg class="tab-camera__icon" viewBox="0 0 24 24" fill="none" stroke="#FFFDFA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+        <circle cx="12" cy="13" r="4"></circle>
+      </svg>
     </button>
     <button class="tab" type="button" data-page="diary">
       <span class="tab-emoji" aria-hidden="true">🥗</span>
       <span class="tab-label">Рацион</span>
-    </button>
-    <button class="tab" type="button" data-page="workouts">
-      <span class="tab-emoji" aria-hidden="true">🏋️</span>
-      <span class="tab-label">Тренировки</span>
     </button>
     <button class="tab" type="button" data-page="account">
       <span class="tab-emoji" aria-hidden="true">👤</span>
@@ -51,10 +58,11 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- 2) Ядро приложения: window.App, хелперы, API-клиент, роутер -->
   <script src="js/app.js"></script>
-  <!-- 3-5) Контроллеры страниц (каждый вызывает App.registerPage при загрузке) -->
+  <!-- 3-7) Контроллеры страниц (каждый вызывает App.registerPage при загрузке) -->
   <script src="js/page-scan.js"></script>
   <script src="js/page-diary.js"></script>
   <script src="js/page-workouts.js"></script>
+  <script src="js/page-supplements.js"></script>
   <script src="js/page-account.js"></script>
   <!-- 6) Запуск приложения после регистрации всех страниц -->
   <script>App.init();</script>

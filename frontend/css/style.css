@@ -94,13 +94,14 @@ a,
    ============================================================ */
 
 /* #view — контейнер, который App очищает и наполняет при навигации.
-   ~90px нижнего отступа, чтобы контент не прятался под tabbar. */
+   Нижний отступ учитывает высоту tabbar + ПРИПОДНЯТУЮ кнопку-камеру
+   (она выступает над панелью на ~18px), чтобы контент не прятался под ней. */
 #view {
   width: 100%;
   max-width: 480px;
   margin: 0 auto;
   padding: 16px 16px;
-  padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 26px);
+  padding-bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 44px);
 }
 
 /* Корневая обёртка каждой страницы (page page-scan / page-diary / page-account).
@@ -1282,15 +1283,26 @@ select.field__input {
    ============================================================ */
 
 /* ============================================================
-   ОБЩЕЕ: четыре вкладки в #tabbar
+   ОБЩЕЕ: ПЯТЬ пунктов в #tabbar + ЦЕНТРАЛЬНАЯ КНОПКА-КАМЕРА
    ------------------------------------------------------------
-   Вкладок стало четыре (📷 Определение / 🥗 Рацион /
-   🏋️ Тренировки / 👤 Аккаунт). .tab уже растягивается через flex:1,
-   поэтому ширина делится поровну автоматически. Подстраховываемся,
-   чтобы подписи помещались и эмодзи стояло НАД подписью.
+   Слева направо: 🏋️ Тренировки / 💊 Добавки / (📷 ЦЕНТР =
+   «Определение», приподнятый кружок без подписи) / 🥗 Рацион /
+   👤 Аккаунт. Четыре обычные вкладки делят ширину поровну (flex:1),
+   а центральная кнопка-камера имеет фиксированную ширину, приподнята
+   над панелью и НЕ растягивается. Паттерн Instagram/TikTok.
    ============================================================ */
+
+/* Панель должна позволять центральной кнопке выступать ВВЕРХ. */
+#tabbar {
+  overflow: visible;
+  /* Выравниваем элементы по нижнему краю, чтобы приподнятая камера
+     «вырастала» вверх, а обычные вкладки стояли на своих местах. */
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+/* Обычные вкладки (4 шт.): равная ширина, защита от распирания подписью. */
 .tab {
-  /* Равная ширина и защита от «распирания» длинными подписями. */
   flex: 1 1 0;
   min-width: 0;
   padding: 0 2px;
@@ -1304,11 +1316,68 @@ select.field__input {
   text-overflow: ellipsis;
 }
 
-/* На совсем узких экранах слегка ужимаем подпись вкладок,
-   чтобы четыре пункта не наезжали друг на друга. */
+/* --- ЦЕНТРАЛЬНАЯ КНОПКА «ОПРЕДЕЛЕНИЕ» (камера) --- */
+/* Круг ~64px, приподнят над панелью, БЕЗ подписи. Фиксированная ширина,
+   чтобы flex НЕ растягивал её на равных с обычными вкладками. */
+.tab-camera {
+  /* Сбрасываем flex:1 от .tab — кнопка фиксированного размера. */
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  min-width: 64px;
+  padding: 0;
+  border-radius: 50%;
+  /* Серый по умолчанию (когда вкладка не активна). */
+  background: #C9B8A8;
+  /* Приподнимаем кружок над панелью (паттерн Instagram/TikTok). */
+  transform: translateY(-18px);
+  box-shadow: 0 8px 20px rgba(122, 107, 90, .28);
+  border: 4px solid var(--white);
+  /* Внутри только иконка — центрируем её. */
+  justify-content: center;
+  transition: background .18s ease, transform .12s ease, box-shadow .18s ease;
+}
+
+/* Иконка камеры внутри кружка: белый SVG, крупнее обычных. */
+.tab-camera__icon {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+/* Активное состояние камеры (current == scan): КРАСНЫЙ круг.
+   Префикс #tabbar повышает специфичность (1-2-0), чтобы красный гарантированно
+   перебивал серый базовый фон при любом порядке/каскаде. */
+#tabbar .tab-camera.active {
+  background: #E07A5F;
+  /* Перебиваем .tab.active { color: var(--cta) } — у камеры нет подписи,
+     но цвет всё равно не должен зеленить иконку. */
+  color: var(--white);
+}
+
+/* Лёгкое «утопление» при нажатии (сохраняя подъём). */
+.tab-camera:active {
+  transform: translateY(-18px) scale(.94);
+}
+
+/* У активной камеры иконка не должна сдвигаться вверх как у обычных вкладок. */
+.tab-camera.active .tab-emoji {
+  transform: none;
+}
+
+/* На совсем узких экранах слегка ужимаем подписи и иконки вкладок,
+   чтобы пять пунктов не наезжали друг на друга. Камеру оставляем крупной. */
 @media (max-width: 360px) {
   .tab-label { font-size: 10px; }
-  .tab-emoji { font-size: 20px; }
+  .tab:not(.tab-camera) .tab-emoji { font-size: 20px; }
+
+  .tab-camera {
+    width: 58px;
+    height: 58px;
+    min-width: 58px;
+  }
+
+  .tab-camera__icon { width: 25px; height: 25px; }
 }
 
 /* ============================================================
@@ -2613,5 +2682,1053 @@ select.field__input {
   /* Поля времени уведомлений — на всю ширину строки. */
   .notif-time {
     flex-basis: 100%;
+  }
+}
+
+/* ============================================================
+   ============================================================
+   РАСШИРЕНИЕ 2: НОВАЯ НАВИГАЦИЯ И РАЗДЕЛЫ
+   ------------------------------------------------------------
+   Стили для новых страниц/компонентов после переезда настроек
+   уведомлений по разделам и появления страницы «Добавки»:
+     • базовый .chip (используется AI-чипами цели улучшения);
+     • напоминания о тренировке (wk-rem-*);
+     • страница «Добавки» (page-supplements), напоминания о приёме
+       добавок (sup-rem-*) и AI-советы (sup-ai-*);
+     • напоминания о еде на странице рациона (diary-notif-*);
+     • вечерняя сводка в аккаунте (acc-summary-*).
+   Та же пастельная палитра и токены, что и выше. Кнопки — .btn
+   (min-height 52px). Все комментарии — на русском.
+   ============================================================
+   ============================================================ */
+
+/* ============================================================
+   БАЗОВЫЙ ЧИП (.chip) — переиспользуемый «таблеточный» элемент
+   ------------------------------------------------------------
+   Используется AI-чипами цели улучшения (sup-ai-chip наследует .chip).
+   Совместим с уже существующим .meal-chip по духу, но компактнее
+   и с авто-шириной по содержимому.
+   ============================================================ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .18s ease, border-color .18s ease, color .18s ease,
+    transform .08s ease;
+}
+
+.chip:active {
+  transform: scale(.96);
+}
+
+/* Выбранный чип (модификатор chip--active добавляется в JS). */
+.chip--active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* ============================================================
+   НАПОМИНАНИЯ О ТРЕНИРОВКЕ (wk-rem-*) — карточкой на page-workouts
+   ============================================================ */
+
+/* Карточка раздела (наследует .card). */
+.wk-rem-card {
+  display: block;
+}
+
+.wk-rem-card__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.wk-rem-card__subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* Контейнер списка напоминаний (наполняется отдельно). */
+.wk-rem-list {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.wk-rem-skeleton {
+  display: block;
+}
+
+/* Список строк напоминаний. */
+.wk-rem-item-list {
+  list-style: none;
+}
+
+/* Одна строка напоминания о тренировке. */
+.wk-rem-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.wk-rem-item:first-child {
+  border-top: none;
+}
+
+/* Скелетон-строка напоминания (отдельная плашка). */
+.wk-rem-item.skeleton-block {
+  display: block;
+  height: auto;
+  padding: 16px;
+  border-top: none;
+  background: var(--bg);
+}
+
+.wk-rem-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+/* Текст «Пн, Ср, Пт · 18:00». */
+.wk-rem-item__meta {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Бейдж состояния (вкл/выкл). */
+.wk-rem-item__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+/* Включено — зелёный акцент. */
+.wk-rem-item__badge--on {
+  color: var(--cta);
+  background: rgba(125, 155, 118, .14);
+}
+
+/* Выключено — приглушённый бежевый. */
+.wk-rem-item__badge--off {
+  color: var(--muted);
+  background: rgba(138, 129, 120, .15);
+}
+
+/* Кнопка удаления напоминания ✕. */
+.wk-rem-item__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.wk-rem-item__del:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+.wk-rem-item__del:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* Пустое состояние списка напоминаний. */
+.wk-rem-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 22px 12px;
+}
+
+.wk-rem-empty__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.wk-rem-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Ошибка загрузки напоминаний. */
+.wk-rem-error {
+  text-align: center;
+  color: var(--text);
+  padding: 18px 8px;
+}
+
+.wk-rem-error__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.wk-rem-error__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.wk-rem-error__text {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.wk-rem-error__retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* --- Форма добавления напоминания о тренировке --- */
+.wk-rem-form {
+  display: block;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.wk-rem-form__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+/* Время + чекбокс «Включено» — в две колонки. */
+.wk-rem-form__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: end;
+}
+
+/* Строка-чекбокс «Включено». */
+.wk-rem-form__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* Выравниваем по нижнему краю соседнего поля времени. */
+  min-height: 52px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.wk-rem-form__checkbox {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.wk-rem-form__check-label {
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Подсказка под формой напоминания. */
+.wk-rem-form__hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
+/* --- Чипы выбора дней недели (Пн…Вс) --- */
+.wk-rem-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Один чип дня недели: компактный квадратик-«таблетка». */
+.wk-rem-day {
+  flex: 1 1 calc(14.285% - 7px);
+  min-width: 40px;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 1.5px solid var(--accent);
+  border-radius: 12px;
+  background: var(--white);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, color .18s ease,
+    transform .08s ease;
+}
+
+.wk-rem-day:active {
+  transform: scale(.95);
+}
+
+/* Активный (выбранный) день недели — акцентный. */
+.wk-rem-day.is-active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* Кнопка «Добавить напоминание» — отступ сверху. */
+.wk-rem-add {
+  margin-top: 4px;
+}
+
+/* ============================================================
+   СТРАНИЦА «ДОБАВКИ» (page-supplements)
+   ============================================================ */
+.page-supplements {
+  display: block;
+}
+
+/* ============================================================
+   НАПОМИНАНИЯ О ПРИЁМЕ ДОБАВОК (sup-rem-*) — карточкой
+   ============================================================ */
+.sup-rem-card {
+  display: block;
+}
+
+.sup-rem-card__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.sup-rem-card__subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* Контейнер списка напоминаний. */
+.sup-rem-list {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.sup-rem-skeleton {
+  display: block;
+}
+
+/* Список строк напоминаний. */
+.sup-rem-item-list {
+  list-style: none;
+}
+
+/* Одна строка напоминания о приёме добавок. */
+.sup-rem-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.sup-rem-item:first-child {
+  border-top: none;
+}
+
+/* Скелетон-строка напоминания (отдельная плашка). */
+.sup-rem-item.skeleton-block {
+  display: block;
+  height: auto;
+  padding: 16px;
+  border-top: none;
+  background: var(--bg);
+}
+
+.sup-rem-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+/* Заголовок строки: «Ночь, 22:00 — магний, ZMA». */
+.sup-rem-item__head {
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+}
+
+/* Состав напоминания (перечень добавок). */
+.sup-rem-item__sups {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Состав не выбран — ещё более приглушённо/курсивом. */
+.sup-rem-item__sups--empty {
+  font-style: italic;
+}
+
+/* Бейдж состояния (вкл/выкл). */
+.sup-rem-item__badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.sup-rem-item__badge--on {
+  color: var(--cta);
+  background: rgba(125, 155, 118, .14);
+}
+
+.sup-rem-item__badge--off {
+  color: var(--muted);
+  background: rgba(138, 129, 120, .15);
+}
+
+/* Кнопка удаления напоминания ✕. */
+.sup-rem-item__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.sup-rem-item__del:active {
+  background: rgba(194, 102, 77, .15);
+  transform: scale(.92);
+}
+
+.sup-rem-item__del:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+/* Пустое состояние списка напоминаний. */
+.sup-rem-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 22px 12px;
+}
+
+.sup-rem-empty__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.sup-rem-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Ошибка загрузки напоминаний. */
+.sup-rem-error {
+  text-align: center;
+  color: var(--text);
+  padding: 18px 8px;
+}
+
+.sup-rem-error__icon {
+  font-size: 36px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.sup-rem-error__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.sup-rem-error__text {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.sup-rem-error__retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* --- Форма создания напоминания о приёме --- */
+.sup-rem-form {
+  display: block;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(58, 53, 47, .08);
+}
+
+.sup-rem-form__title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+/* Название + время — в две колонки. */
+.sup-rem-form__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Блок множественного выбора добавок. */
+.sup-rem-form__pick {
+  margin-bottom: 14px;
+}
+
+.sup-rem-form__pick .field__label {
+  margin-bottom: 10px;
+}
+
+/* Строка-чекбокс «Напоминание включено». */
+.sup-rem-form__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 14px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sup-rem-form__checkbox {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.sup-rem-form__check-label {
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* Кнопка «Создать напоминание» — отступ сверху. */
+.sup-rem-add {
+  margin-top: 4px;
+}
+
+/* --- Множественный выбор добавок чекбоксами --- */
+.sup-rem-picks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Подсказка, когда добавок ещё нет. */
+.sup-rem-picks__empty {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+/* Один пункт выбора: чекбокс + название добавки (вся строка кликабельна). */
+.sup-rem-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.sup-rem-pick:active {
+  background: rgba(201, 184, 168, .2);
+}
+
+.sup-rem-pick__input {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.sup-rem-pick__label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   AI-СОВЕТЫ ПО ДОБАВКАМ (sup-ai-*) — карточкой
+   ============================================================ */
+.sup-ai-card {
+  display: block;
+}
+
+.sup-ai-card__title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.sup-ai-card__subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* Ряд чипов целей улучшения (Сон / Восстановление / …). */
+.sup-ai-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+/* Чип цели улучшения наследует .chip; добавляем эмодзи + подпись. */
+.sup-ai-chip {
+  /* База берётся из .chip; гарантируем выравнивание эмодзи и подписи. */
+  gap: 6px;
+}
+
+.sup-ai-chip__emoji {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.sup-ai-chip__label {
+  font-size: 14px;
+}
+
+/* Активный чип цели (модификатор добавляется в JS вместе с .chip--active). */
+.sup-ai-chip--active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* Поле свободного ввода цели улучшения. */
+.sup-ai-field {
+  margin-bottom: 4px;
+}
+
+/* Кнопка «🤖 Получить совет» — отступ сверху. */
+.sup-ai-btn {
+  margin-top: 4px;
+}
+
+/* Контейнер результата AI-совета (наполняется JS-ом). */
+.sup-ai-box {
+  display: block;
+}
+
+/* Внутренняя обёртка с рекомендациями. */
+.sup-ai-box__inner {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin-top: 12px;
+  animation: fadeIn .28s ease;
+}
+
+.sup-ai-box__heading {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+/* Подпись цели над списком советов. */
+.sup-ai-box__goal {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cta);
+  margin-bottom: 10px;
+}
+
+/* Пустой результат AI-совета. */
+.sup-ai-box__empty {
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  padding: 8px 4px 4px;
+  line-height: 1.5;
+}
+
+/* Состояние загрузки (скелетоны внутри). */
+.sup-ai-box__loading {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  margin-top: 12px;
+}
+
+/* Ошибка AI-совета. */
+.sup-ai-box__error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+  margin-top: 12px;
+}
+
+.sup-ai-box__error-text {
+  font-size: 13px;
+  color: var(--danger);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.sup-ai-box__retry {
+  width: auto;
+  min-width: 150px;
+  margin: 0 auto;
+}
+
+/* Список карточек-советов. */
+.sup-ai-suggest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Одна карточка-совет. */
+.sup-ai-suggest {
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  box-shadow: 0 2px 8px rgba(122, 107, 90, .08);
+}
+
+.sup-ai-suggest__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.sup-ai-suggest__name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.sup-ai-suggest__dosage {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cta);
+  white-space: nowrap;
+}
+
+.sup-ai-suggest__note {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+
+/* Кнопка «Заполнить форму» — компактная вторичная. */
+.sup-ai-suggest__use {
+  min-height: 40px;
+  font-size: 14px;
+}
+
+/* Обязательный дисклеймер по спортпиту (тёплый персиковый фон). */
+.sup-ai-disclaimer {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--danger);
+  background: rgba(194, 102, 77, .1);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   НАПОМИНАНИЯ О ЕДЕ (diary-notif-*) — карточкой на page-diary
+   ============================================================ */
+.diary-notif {
+  display: block;
+}
+
+/* Карточка раздела (наследует .card). */
+.diary-notif-card {
+  display: block;
+}
+
+.diary-notif-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.diary-notif-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.diary-notif-body {
+  display: block;
+}
+
+/* Скелетон карточки напоминаний о еде. */
+.diary-notif-skeleton {
+  height: 96px;
+  margin-bottom: 0;
+}
+
+/* Строка-тумблер «Включить напоминания о еде». */
+.diary-notif-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.diary-notif-toggle__input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.diary-notif-toggle__label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Группа полей времени (Завтрак / Обед / Ужин). */
+.diary-notif-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+  padding-left: 34px; /* выравниваем под подпись тумблера */
+}
+
+.diary-notif-times[hidden] {
+  display: none;
+}
+
+/* Одно поле времени (подпись + input[type=time]). */
+.diary-notif-time {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 calc(33.333% - 7px);
+  min-width: 90px;
+}
+
+.diary-notif-time__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Поле времени наследует .field__input; чуть компактнее по высоте. */
+.diary-notif-time__input {
+  min-height: 46px;
+}
+
+/* Кнопка «Сохранить» напоминания о еде. */
+.diary-notif-save {
+  margin-top: 16px;
+}
+
+/* Ошибка загрузки настроек напоминаний о еде. */
+.diary-notif-error {
+  text-align: center;
+  color: var(--text);
+  padding: 12px 8px;
+}
+
+.diary-notif-error__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.diary-notif-error__msg {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Повторить» в ошибке — компактная по центру. */
+.diary-notif-retry {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   ВЕЧЕРНЯЯ СВОДКА (acc-summary-*) — карточкой на page-account
+   ============================================================ */
+.acc-summary {
+  display: block;
+}
+
+/* Подсказка под заголовком карточки. */
+.acc-summary-hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.acc-summary-body {
+  display: block;
+}
+
+/* Строка с тумблером сводки. */
+.acc-summary-row {
+  display: block;
+  margin-bottom: 4px;
+}
+
+/* Тумблер «Присылать вечернюю сводку». */
+.acc-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.acc-summary-toggle__input {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  accent-color: var(--cta);
+  cursor: pointer;
+}
+
+.acc-summary-toggle__label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Поле времени сводки (наследует .field). */
+.acc-summary-time {
+  margin-top: 14px;
+  margin-bottom: 4px;
+}
+
+.acc-summary-time[hidden] {
+  display: none;
+}
+
+/* Поле ввода времени сводки (наследует .field__input). */
+.acc-summary-time__input {
+  min-height: 46px;
+}
+
+/* Кнопка «Сохранить» вечернюю сводку. */
+.acc-summary-save {
+  margin-top: 16px;
+}
+
+/* Ошибка загрузки настроек сводки. */
+.acc-summary-error {
+  text-align: center;
+  color: var(--text);
+  padding: 12px 8px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.acc-summary-error__msg {
+  font-size: 13px;
+  color: var(--danger);
+  margin: 8px 0 14px;
+  line-height: 1.5;
+}
+
+/* Кнопка «Повторить» в ошибке сводки — компактная по центру. */
+.acc-summary-error .btn {
+  width: auto;
+  min-width: 160px;
+  margin: 0 auto;
+}
+
+/* ============================================================
+   АДАПТАЦИЯ НОВЫХ РАЗДЕЛОВ ПОД ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 360px) {
+  /* Сетки форм напоминаний — ужимаем разрывы. */
+  .wk-rem-form__grid,
+  .sup-rem-form__grid {
+    gap: 8px;
+  }
+
+  /* Поля времени напоминаний о еде — на всю ширину строки. */
+  .diary-notif-time {
+    flex-basis: 100%;
+  }
+
+  /* Чипы дней недели — по два-три в ряд при нехватке места. */
+  .wk-rem-day {
+    flex-basis: calc(25% - 6px);
   }
 }

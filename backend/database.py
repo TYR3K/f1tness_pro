@@ -66,6 +66,8 @@ def run_migrations():
         ("target_proteins", "REAL", None),
         ("target_fats", "REAL", None),
         ("target_carbs", "REAL", None),
+        # Цель улучшения для AI-советов по спортпиту (nullable, без default).
+        ("supplement_goal", "TEXT", None),
     ]
 
     try:

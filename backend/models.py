@@ -8,9 +8,13 @@ ORM-модели приложения (SQLAlchemy).
 Расширенные таблицы (фитнес, спортпит, уведомления, избранное):
   - Workout              — тренировка пользователя и сожжённые калории;
   - Supplement           — спортивное питание / добавки пользователя;
-  - NotificationSettings — настройки пуш-уведомлений пользователя;
+  - NotificationSettings — настройки пуш-уведомлений пользователя
+                           (теперь только приёмы пищи и вечерняя сводка);
   - FavoriteFood         — сохранённые/недавние блюда пользователя;
-  - NotificationLog      — журнал отправленных уведомлений (для дедупликации).
+  - NotificationLog      — журнал отправленных уведомлений (для дедупликации);
+  - TrainingReminder       — гибкое напоминание о тренировке (дни недели + время);
+  - SupplementReminder     — напоминание о приёме спортпита (метка + время);
+  - SupplementReminderItem — связь напоминания спортпита с конкретной добавкой.
 """
 
 from datetime import datetime
@@ -64,6 +68,11 @@ class User(Base):
     target_proteins = Column(Float, nullable=True)  # белки, г
     target_fats = Column(Float, nullable=True)      # жиры, г
     target_carbs = Column(Float, nullable=True)     # углеводы, г
+
+    # Выбранная пользователем цель улучшения для AI-советов по спортпиту
+    # (например: "сон", "восстановление", "сила", "энергия", "иммунитет"
+    # или произвольный текст). Может отсутствовать.
+    supplement_goal = Column(String, nullable=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -163,7 +172,15 @@ class Supplement(Base):
 
 
 class NotificationSettings(Base):
-    """Настройки пуш-уведомлений пользователя (одна строка на пользователя)."""
+    """
+    Настройки пуш-уведомлений пользователя (одна строка на пользователя).
+
+    ВАЖНО: теперь эта таблица используется ТОЛЬКО для приёмов пищи (meal_*)
+    и вечерней сводки (daily_summary_*). Напоминания о тренировках и приёме
+    спортпита переехали в отдельные таблицы TrainingReminder и
+    SupplementReminder. Старые поля (training_*, supplement_reminder_enabled)
+    НЕ удаляются, чтобы не потерять существующие данные пользователей.
+    """
 
     __tablename__ = "notification_settings"
 
@@ -182,10 +199,12 @@ class NotificationSettings(Base):
     dinner_time = Column(String, default="19:00")      # время ужина "HH:MM"
 
     # Напоминание о тренировке.
+    # (Устаревшее: оставлено для совместимости, переехало в TrainingReminder.)
     training_reminder_enabled = Column(Boolean, default=False)
     training_time = Column(String, default="18:00")    # время тренировки "HH:MM"
 
     # Напоминание о приёме спортпита.
+    # (Устаревшее: оставлено для совместимости, переехало в SupplementReminder.)
     supplement_reminder_enabled = Column(Boolean, default=False)
 
     # Ежедневная сводка по питанию.
@@ -235,8 +254,8 @@ class NotificationLog(Base):
     # Кому отправлено — Telegram ID пользователя.
     telegram_id = Column(BigInteger, index=True)
 
-    # Вид уведомления: "breakfast" | "lunch" | "dinner" | "training" |
-    # "summary" | "supplement:{id}".
+    # Вид уведомления: "breakfast" | "lunch" | "dinner" | "summary" |
+    # "trainrem:{id}" | "supprem:{id}" (и устаревшие "training" / "supplement:{id}").
     kind = Column(String)
 
     # Дата отправки в формате ISO "YYYY-MM-DD".
@@ -244,3 +263,89 @@ class NotificationLog(Base):
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TrainingReminder(Base):
+    """
+    Гибкое напоминание о тренировке.
+
+    Заменяет старые поля training_* в NotificationSettings: пользователь может
+    задать несколько напоминаний, каждое со своим набором дней недели и временем.
+    """
+
+    __tablename__ = "training_reminders"
+
+    # Идентификатор напоминания (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Владелец записи — ссылка на пользователя по Telegram ID.
+    telegram_id = Column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+
+    # Дни недели в виде CSV по нумерации Python (Пн=0 .. Вс=6),
+    # например "0,2,4" — понедельник, среда, пятница.
+    weekdays = Column(String)
+
+    # Время напоминания в формате "HH:MM".
+    time = Column(String)
+
+    # Включено ли напоминание.
+    enabled = Column(Boolean, default=True)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SupplementReminder(Base):
+    """
+    Напоминание о приёме спортпита.
+
+    Заменяет supplement_reminder_enabled в NotificationSettings и поля
+    напоминаний у самих Supplement: пользователь задаёт метку (например,
+    "Утро"/"Ночь"), время и список добавок к приёму (через SupplementReminderItem).
+    """
+
+    __tablename__ = "supplement_reminders"
+
+    # Идентификатор напоминания (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Владелец записи — ссылка на пользователя по Telegram ID.
+    telegram_id = Column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+
+    # Метка напоминания ("Утро" / "Ночь" / произвольный текст).
+    label = Column(String)
+
+    # Время напоминания в формате "HH:MM".
+    time = Column(String)
+
+    # Включено ли напоминание.
+    enabled = Column(Boolean, default=True)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SupplementReminderItem(Base):
+    """
+    Связь напоминания спортпита с конкретной добавкой пользователя.
+
+    Одно напоминание (SupplementReminder) может включать несколько добавок
+    (Supplement); каждая такая связь — отдельная строка.
+    """
+
+    __tablename__ = "supplement_reminder_items"
+
+    # Идентификатор связи (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Ссылка на напоминание спортпита.
+    reminder_id = Column(
+        Integer, ForeignKey("supplement_reminders.id"), index=True
+    )
+
+    # Ссылка на конкретную добавку пользователя.
+    supplement_id = Column(Integer, ForeignKey("supplements.id"))

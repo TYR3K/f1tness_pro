@@ -11,8 +11,9 @@
  *     норму в поле цели и показывает блок целевых БЖУ.
  *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile
  *     (включая diet_goal).
- *   - Раздел «Уведомления»: загрузка/сохранение настроек напоминаний
- *     (App.api.getNotificationSettings / saveNotificationSettings).
+ *   - Карточка «Вечерняя сводка»: ТОЛЬКО тумблер daily_summary_enabled и время
+ *     summary_time (App.api.getNotificationSettings / saveNotificationSettings).
+ *     Остальные напоминания вынесены в свои разделы (Тренировки, Добавки, Рацион).
  *   - Ниже — история за последние 30 дней (App.api.getHistory(30))
  *     в виде простого столбчатого графика (дата + ккал).
  *
@@ -38,6 +39,9 @@
     { value: "maintain", label: "Поддержание" },
     { value: "gain", label: "Набор массы" }
   ];
+
+  // Значение времени по умолчанию для вечерней сводки, если сервер не вернул своё.
+  var DEFAULT_SUMMARY_TIME = "21:00";
 
   // Ссылки на корневой элемент представления и элементы формы.
   // Хранятся в замыкании контроллера, чтобы переиспользовать между методами.
@@ -176,10 +180,13 @@
       '<p class="acc-hint">Автоматический расчёт учитывает ваши параметры, уровень активности и цель питания.</p>' +
       "</form>" +
 
-      // ---- Раздел «Уведомления» ----
-      '<section class="notif-card card" id="accNotif">' +
-      '<h2 class="acc-title">Уведомления</h2>' +
-      '<div class="notif-body" id="accNotifBody">' +
+      // ---- Карточка «Вечерняя сводка» ----
+      // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
+      // пищи, тренировках и добавках перенесены в соответствующие разделы.
+      '<section class="acc-summary card" id="accSummary">' +
+      '<h2 class="acc-title">Вечерняя сводка</h2>' +
+      '<p class="acc-summary-hint">Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.</p>' +
+      '<div class="acc-summary-body" id="accSummaryBody">' +
       '<div class="skeleton skeleton--block"></div>' +
       "</div>" +
       "</section>" +
@@ -393,64 +400,10 @@
   }
 
   /* =====================================================================
-   *  РАЗДЕЛ «УВЕДОМЛЕНИЯ»
+   *  ВЕЧЕРНЯЯ СВОДКА
+   *  Только ежедневная сводка: тумблер daily_summary_enabled + время summary_time.
+   *  Остальные напоминания вынесены в разделы Тренировки / Добавки / Рацион.
    * ===================================================================== */
-
-  // Описание полей-тумблеров (чекбоксов) и связанных с ними полей времени.
-  // Каждый тумблер может управлять группой полей времени (показ/скрытие).
-  var NOTIF_ROWS = [
-    {
-      key: "meal_reminder_enabled",
-      label: "Напоминания о приёмах пищи",
-      times: [
-        { key: "breakfast_time", label: "Завтрак" },
-        { key: "lunch_time", label: "Обед" },
-        { key: "dinner_time", label: "Ужин" }
-      ]
-    },
-    {
-      key: "training_reminder_enabled",
-      label: "Напоминание о тренировке",
-      times: [{ key: "training_time", label: "Время тренировки" }]
-    },
-    {
-      key: "supplement_reminder_enabled",
-      label: "Напоминание о спортпите",
-      times: []
-    },
-    {
-      key: "daily_summary_enabled",
-      label: "Ежедневная сводка",
-      times: [{ key: "summary_time", label: "Время сводки" }]
-    }
-  ];
-
-  /**
-   * Загружает настройки уведомлений и отрисовывает форму.
-   */
-  function loadNotifications() {
-    var box = els.notifBody;
-    if (!box) return;
-    box.innerHTML = '<div class="skeleton skeleton--block"></div>';
-
-    App.api
-      .getNotificationSettings()
-      .then(function (settings) {
-        renderNotifications(settings || {});
-      })
-      .catch(function (err) {
-        box.innerHTML =
-          '<div class="notif-error">' +
-          '<p>Не удалось загрузить настройки уведомлений.</p>' +
-          '<p class="notif-error__msg">' +
-          App.escapeHtml(err && err.message ? err.message : "Ошибка сети") +
-          "</p>" +
-          '<button type="button" class="btn btn--ghost" id="accNotifRetry">Повторить</button>' +
-          "</div>";
-        var retry = box.querySelector("#accNotifRetry");
-        if (retry) retry.addEventListener("click", loadNotifications);
-      });
-  }
 
   /**
    * Безопасно приводит значение времени к строке "HH:MM" для поля ввода.
@@ -464,130 +417,110 @@
   }
 
   /**
-   * Отрисовывает блок уведомлений по полученным настройкам.
+   * Загружает настройки уведомлений и отрисовывает карточку вечерней сводки.
+   */
+  function loadSummary() {
+    var box = els.summaryBody;
+    if (!box) return;
+    box.innerHTML = '<div class="skeleton skeleton--block"></div>';
+
+    App.api
+      .getNotificationSettings()
+      .then(function (settings) {
+        renderSummary(settings || {});
+      })
+      .catch(function (err) {
+        box.innerHTML =
+          '<div class="acc-summary-error">' +
+          '<p>Не удалось загрузить настройки сводки.</p>' +
+          '<p class="acc-summary-error__msg">' +
+          App.escapeHtml(err && err.message ? err.message : "Ошибка сети") +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accSummaryRetry">Повторить</button>' +
+          "</div>";
+        var retry = box.querySelector("#accSummaryRetry");
+        if (retry) retry.addEventListener("click", loadSummary);
+      });
+  }
+
+  /**
+   * Отрисовывает карточку вечерней сводки по полученным настройкам.
    * @param {Object} s — объект NotificationSettingsOut.
    */
-  function renderNotifications(s) {
-    var box = els.notifBody;
+  function renderSummary(s) {
+    var box = els.summaryBody;
     if (!box) return;
 
-    var rowsHtml = NOTIF_ROWS.map(function (row) {
-      var checked = s[row.key] ? " checked" : "";
-      // Поля времени для этой группы.
-      var timesHtml = row.times
-        .map(function (t) {
-          return (
-            '<label class="notif-time">' +
-            '<span class="notif-time__label">' +
-            App.escapeHtml(t.label) +
-            "</span>" +
-            '<input class="field__input notif-time__input" type="time" ' +
-            'data-notif-time="' +
-            App.escapeHtml(t.key) +
-            '" value="' +
-            App.escapeHtml(timeValue(s[t.key])) +
-            '" placeholder="08:00">' +
-            "</label>"
-          );
-        })
-        .join("");
-
-      var timesBlock = row.times.length
-        ? '<div class="notif-times" data-notif-times-for="' +
-          App.escapeHtml(row.key) +
-          '"' +
-          (s[row.key] ? "" : " hidden") +
-          ">" +
-          timesHtml +
-          "</div>"
-        : "";
-
-      return (
-        '<div class="notif-row">' +
-        '<label class="notif-toggle">' +
-        '<input class="notif-toggle__input" type="checkbox" ' +
-        'data-notif-toggle="' +
-        App.escapeHtml(row.key) +
-        '"' +
-        checked +
-        ">" +
-        '<span class="notif-toggle__label">' +
-        App.escapeHtml(row.label) +
-        "</span>" +
-        "</label>" +
-        timesBlock +
-        "</div>"
-      );
-    }).join("");
+    var enabled = !!s.daily_summary_enabled;
+    var time = timeValue(s.summary_time) || DEFAULT_SUMMARY_TIME;
 
     box.innerHTML =
-      '<div class="notif-list">' +
-      rowsHtml +
+      '<div class="acc-summary-row">' +
+      '<label class="acc-summary-toggle">' +
+      '<input class="acc-summary-toggle__input" type="checkbox" id="accSummaryEnabled"' +
+      (enabled ? " checked" : "") +
+      ">" +
+      '<span class="acc-summary-toggle__label">Присылать вечернюю сводку</span>' +
+      "</label>" +
       "</div>" +
-      '<button type="button" class="btn btn--cta notif-save" id="accNotifSave">Сохранить уведомления</button>';
+      '<label class="field acc-summary-time" id="accSummaryTimeField"' +
+      (enabled ? "" : " hidden") +
+      ">" +
+      '<span class="field__label">Время сводки</span>' +
+      '<input class="field__input acc-summary-time__input" type="time" id="accSummaryTime" value="' +
+      App.escapeHtml(time) +
+      '" placeholder="21:00">' +
+      "</label>" +
+      '<button type="button" class="btn btn--cta acc-summary-save" id="accSummarySave">Сохранить</button>';
 
-    // Тумблеры показывают/скрывают связанные поля времени.
-    var toggles = box.querySelectorAll("[data-notif-toggle]");
-    for (var i = 0; i < toggles.length; i++) {
-      (function (toggle) {
-        toggle.addEventListener("change", function () {
-          var key = toggle.getAttribute("data-notif-toggle");
-          var group = box.querySelector(
-            '[data-notif-times-for="' + key + '"]'
-          );
-          if (group) {
-            group.hidden = !toggle.checked;
-          }
-          App.haptic("selection");
-        });
-      })(toggles[i]);
+    var toggle = box.querySelector("#accSummaryEnabled");
+    var timeField = box.querySelector("#accSummaryTimeField");
+    if (toggle && timeField) {
+      toggle.addEventListener("change", function () {
+        timeField.hidden = !toggle.checked;
+        App.haptic("selection");
+      });
     }
 
-    var saveBtn = box.querySelector("#accNotifSave");
+    var saveBtn = box.querySelector("#accSummarySave");
     if (saveBtn) {
-      saveBtn.addEventListener("click", onSaveNotifications);
+      saveBtn.addEventListener("click", onSaveSummary);
     }
   }
 
   /**
-   * Собирает настройки уведомлений из формы и сохраняет на сервере.
+   * Собирает настройки вечерней сводки из карточки и сохраняет на сервере.
+   * Отправляем ТОЛЬКО поля сводки, чтобы не затронуть остальные напоминания.
    */
-  function onSaveNotifications() {
-    var box = els.notifBody;
+  function onSaveSummary() {
+    var box = els.summaryBody;
     if (!box) return;
 
-    var payload = {};
+    var toggle = box.querySelector("#accSummaryEnabled");
+    var timeInput = box.querySelector("#accSummaryTime");
 
-    // Тумблеры (boolean).
-    var toggles = box.querySelectorAll("[data-notif-toggle]");
-    for (var i = 0; i < toggles.length; i++) {
-      var key = toggles[i].getAttribute("data-notif-toggle");
-      if (key) {
-        payload[key] = !!toggles[i].checked;
+    var enabled = !!(toggle && toggle.checked);
+    var payload = { daily_summary_enabled: enabled };
+
+    // Время отправляем только когда сводка включена и поле заполнено.
+    if (enabled && timeInput) {
+      var tVal = (timeInput.value || "").trim();
+      if (tVal) {
+        payload.summary_time = tVal;
       }
     }
 
-    // Поля времени (строки "HH:MM"). Пустые поля не отправляем.
-    var times = box.querySelectorAll("[data-notif-time]");
-    for (var j = 0; j < times.length; j++) {
-      var tKey = times[j].getAttribute("data-notif-time");
-      var tVal = (times[j].value || "").trim();
-      if (tKey && tVal) {
-        payload[tKey] = tVal;
-      }
-    }
-
-    var saveBtn = box.querySelector("#accNotifSave");
+    var saveBtn = box.querySelector("#accSummarySave");
     if (saveBtn) saveBtn.disabled = true;
     App.showLoading();
 
     App.api
       .saveNotificationSettings(payload)
       .then(function (settings) {
-        // Перерисовываем с актуальными данными от сервера.
-        renderNotifications(settings || payload);
+        // Перерисовываем карточку актуальными данными от сервера.
+        renderSummary(settings || payload);
         App.haptic("success");
-        App.toast("Настройки уведомлений сохранены");
+        App.toast("Настройки сводки сохранены");
       })
       .catch(function (err) {
         App.haptic("error");
@@ -719,7 +652,7 @@
       targetCarb: viewEl.querySelector("#accTargetCarb"),
       calcBtn: viewEl.querySelector("#accCalcBtn"),
       saveBtn: viewEl.querySelector("#accSaveBtn"),
-      notifBody: viewEl.querySelector("#accNotifBody"),
+      summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
   }
@@ -728,11 +661,14 @@
   var controller = {
     /**
      * Вызывается при показе страницы: строит разметку, вешает обработчики,
-     * подгружает профиль, уведомления и историю.
+     * подгружает профиль, настройки вечерней сводки и историю.
      */
     onShow: function (viewEl) {
       viewEl.innerHTML = template();
       bindElements(viewEl);
+
+      // Прокручиваем к началу при входе в раздел.
+      App.scrollTop();
 
       // Обработчики действий.
       els.calcBtn.addEventListener("click", onCalc);
@@ -757,8 +693,8 @@
           );
         });
 
-      // Загрузка настроек уведомлений.
-      loadNotifications();
+      // Загрузка настроек вечерней сводки.
+      loadSummary();
 
       // Загрузка истории за 30 дней.
       loadHistory();

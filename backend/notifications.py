@@ -3,16 +3,25 @@
 
 Модуль работает поверх существующей архитектуры (см. database.py / models.py)
 и НИЧЕГО в ней не меняет. Раз в минуту фоновый планировщик (APScheduler)
-проверяет настройки уведомлений каждого пользователя (NotificationSettings)
-и отправляет напоминания через Telegram Bot API (метод sendMessage по httpx).
+проверяет настройки уведомлений пользователей и отправляет напоминания через
+Telegram Bot API (метод sendMessage по httpx).
 
 Виды уведомлений:
-  * приёмы пищи (breakfast / lunch / dinner) — только если за сегодня нет
-    записи дневника соответствующего типа;
-  * тренировка (training);
-  * приём спортпита (supplement:{id}) — по каждой добавке с включённым
-    напоминанием и заданным временем;
-  * вечерняя сводка дня (summary) — съедено / цель / осталось.
+  * приёмы пищи (breakfast / lunch / dinner) — берутся из NotificationSettings;
+    шлются, только если за сегодня нет записи дневника соответствующего типа;
+  * тренировка (trainrem:{id}) — берётся из таблицы TrainingReminder: по дням
+    недели (CSV: Пн=0..Вс=6) и времени "HH:MM";
+  * приём спортпита (supprem:{id}) — берётся из таблицы SupplementReminder
+    (+ SupplementReminderItem -> Supplement.name): по времени "HH:MM", с
+    перечислением названий добавок;
+  * вечерняя сводка дня (summary) — берётся из NotificationSettings:
+    съедено / цель / осталось.
+
+Важно: NotificationSettings теперь используется ТОЛЬКО для приёмов пищи (meal_*)
+и вечерней сводки (daily_summary_*). Напоминания о тренировках и спортпите
+переехали в отдельные таблицы TrainingReminder / SupplementReminder, поэтому
+старые поля NotificationSettings (training_*, supplement_reminder_enabled) больше
+не читаются (но и не удаляются — чтобы не терять данные).
 
 Чтобы не слать одно и то же несколько раз за день, факт отправки фиксируется
 в таблице NotificationLog (дедупликация по паре «вид + дата»).
@@ -59,6 +68,9 @@ from backend.models import (
     NotificationLog,
     NotificationSettings,
     Supplement,
+    SupplementReminder,
+    SupplementReminderItem,
+    TrainingReminder,
     User,
 )
 
@@ -198,6 +210,30 @@ def _time_reached(now: datetime, hhmm: str | None) -> bool:
     return now_minutes >= target_minutes
 
 
+def _parse_weekdays(raw: str | None) -> set:
+    """Разобрать CSV дней недели ("0,2,4") в множество int (Пн=0..Вс=6).
+
+    Некорректные/пустые элементы тихо игнорируются. Возвращает set чисел.
+    """
+    result: set = set()
+    if not raw:
+        return result
+    try:
+        for part in str(raw).split(","):
+            part = part.strip()
+            if part == "":
+                continue
+            try:
+                day = int(part)
+            except (ValueError, TypeError):
+                continue
+            if 0 <= day <= 6:
+                result.add(day)
+    except Exception as exc:
+        logger.warning("_parse_weekdays: не удалось разобрать '%s' (%s)", raw, exc)
+    return result
+
+
 def _has_diary_entry(db, tid: int, date: str, meal_type: str) -> bool:
     """Есть ли у пользователя за дату запись дневника указанного приёма пищи."""
     try:
@@ -218,7 +254,7 @@ def _has_diary_entry(db, tid: int, date: str, meal_type: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-#  Обработка одного пользователя
+#  Обработка приёмов пищи и вечерней сводки (NotificationSettings)
 # --------------------------------------------------------------------------- #
 def _process_meal_reminder(db, tid: int, today: str, now: datetime,
                            kind: str, meal_time: str | None, label: str, emoji: str) -> None:
@@ -236,62 +272,6 @@ def _process_meal_reminder(db, tid: int, today: str, now: datetime,
     )
     if send_telegram(tid, text):
         _mark_sent(db, tid, kind, today)
-
-
-def _process_training_reminder(db, tid: int, today: str, now: datetime,
-                               settings: "NotificationSettings") -> None:
-    """Напоминание о тренировке."""
-    if not getattr(settings, "training_reminder_enabled", False):
-        return
-    if not _time_reached(now, getattr(settings, "training_time", None)):
-        return
-    if _was_sent(db, tid, "training", today):
-        return
-    text = (
-        "💪 <b>Время тренировки!</b>\n"
-        "Пора размяться. После — не забудьте записать тренировку 🏋️"
-    )
-    if send_telegram(tid, text):
-        _mark_sent(db, tid, "training", today)
-
-
-def _process_supplement_reminders(db, tid: int, today: str, now: datetime,
-                                  settings: "NotificationSettings") -> None:
-    """Напоминания о приёме спортивного питания / добавок."""
-    if not getattr(settings, "supplement_reminder_enabled", False):
-        return
-    try:
-        supplements = (
-            db.query(Supplement)
-            .filter(
-                Supplement.telegram_id == tid,
-                Supplement.reminder_enabled == True,  # noqa: E712 — нужно для SQL
-            )
-            .all()
-        )
-    except Exception as exc:
-        logger.warning("_process_supplement_reminders: ошибка выборки (%s) tid=%s", exc, tid)
-        return
-
-    for sup in supplements:
-        try:
-            intake_time = getattr(sup, "intake_time", None)
-            if not _time_reached(now, intake_time):
-                continue
-            kind = f"supplement:{sup.id}"
-            if _was_sent(db, tid, kind, today):
-                continue
-            name = sup.name or "добавка"
-            dosage = (f" — {sup.dosage}" if getattr(sup, "dosage", None) else "")
-            text = (
-                f"💊 <b>Приём добавки</b>\n"
-                f"Пора принять: <b>{name}</b>{dosage}"
-            )
-            if send_telegram(tid, text):
-                _mark_sent(db, tid, kind, today)
-        except Exception as exc:
-            # Сбой по одной добавке не должен прерывать остальные.
-            logger.warning("_process_supplement_reminders: сбой по добавке (%s) tid=%s", exc, tid)
 
 
 def _process_daily_summary(db, tid: int, today: str, now: datetime,
@@ -343,15 +323,132 @@ def _process_daily_summary(db, tid: int, today: str, now: datetime,
 
 
 # --------------------------------------------------------------------------- #
+#  Обработка напоминаний о тренировках (таблица TrainingReminder)
+# --------------------------------------------------------------------------- #
+def _process_training_reminder(db, reminder: "TrainingReminder",
+                               today: str, now: datetime) -> None:
+    """Напоминание о тренировке по строке TrainingReminder.
+
+    Шлём, если включено, СЕГОДНЯШНИЙ день недели (now.weekday(): Пн=0..Вс=6)
+    присутствует в CSV weekdays, время "HH:MM" уже наступило и сегодня ещё не
+    отправляли (дедуп по kind="trainrem:{id}").
+    """
+    tid = getattr(reminder, "telegram_id", None)
+    rid = getattr(reminder, "id", None)
+    if tid is None or rid is None:
+        return
+    if not getattr(reminder, "enabled", False):
+        return
+
+    # Проверяем день недели: сегодняшний weekday должен входить в список.
+    weekdays = _parse_weekdays(getattr(reminder, "weekdays", None))
+    if now.weekday() not in weekdays:
+        return
+
+    if not _time_reached(now, getattr(reminder, "time", None)):
+        return
+
+    kind = f"trainrem:{rid}"
+    if _was_sent(db, tid, kind, today):
+        return
+
+    text = (
+        "💪 <b>Напоминание о тренировке!</b>\n"
+        "Пора размяться. После — не забудьте записать тренировку 🏋️"
+    )
+    if send_telegram(tid, text):
+        _mark_sent(db, tid, kind, today)
+
+
+# --------------------------------------------------------------------------- #
+#  Обработка напоминаний о спортпите (таблицы SupplementReminder + items)
+# --------------------------------------------------------------------------- #
+def _process_supplement_reminder(db, reminder: "SupplementReminder",
+                                 today: str, now: datetime) -> None:
+    """Напоминание о приёме спортпита по строке SupplementReminder.
+
+    Шлём, если включено и время "HH:MM" уже наступило (дедуп по
+    kind="supprem:{id}"). Названия добавок собираем через SupplementReminderItem
+    -> Supplement.name, учитывая только добавки, принадлежащие тому же
+    пользователю. Если список пуст — шлём общий текст по метке (label).
+    """
+    tid = getattr(reminder, "telegram_id", None)
+    rid = getattr(reminder, "id", None)
+    if tid is None or rid is None:
+        return
+    if not getattr(reminder, "enabled", False):
+        return
+    if not _time_reached(now, getattr(reminder, "time", None)):
+        return
+
+    kind = f"supprem:{rid}"
+    if _was_sent(db, tid, kind, today):
+        return
+
+    # Метка напоминания ("Утро" / "Ночь" / своё). Подстраховка на пустое значение.
+    label = getattr(reminder, "label", None) or "Приём добавок"
+
+    # Собираем названия добавок: items -> Supplement (только этого пользователя).
+    names: list[str] = []
+    try:
+        items = (
+            db.query(SupplementReminderItem)
+            .filter(SupplementReminderItem.reminder_id == rid)
+            .all()
+        )
+        sup_ids = [
+            getattr(it, "supplement_id", None)
+            for it in items
+            if getattr(it, "supplement_id", None) is not None
+        ]
+        if sup_ids:
+            supplements = (
+                db.query(Supplement)
+                .filter(
+                    Supplement.id.in_(sup_ids),
+                    # Только добавки, принадлежащие этому же пользователю.
+                    Supplement.telegram_id == tid,
+                )
+                .all()
+            )
+            names = [s.name for s in supplements if getattr(s, "name", None)]
+    except Exception as exc:
+        # Не удалось подтянуть названия — отправим хотя бы общий текст по метке.
+        logger.warning(
+            "_process_supplement_reminder: ошибка сбора добавок (%s) rid=%s tid=%s",
+            exc, rid, tid,
+        )
+        names = []
+
+    if names:
+        text = (
+            "💊 <b>Приём добавок</b>\n"
+            f"{label}: <b>{', '.join(names)}</b>"
+        )
+    else:
+        # Список пуст (или не удалось получить) — общий текст по метке.
+        text = (
+            "💊 <b>Приём добавок</b>\n"
+            f"{label}"
+        )
+
+    if send_telegram(tid, text):
+        _mark_sent(db, tid, kind, today)
+
+
+# --------------------------------------------------------------------------- #
 #  Главная функция проверки (вызывается планировщиком каждую минуту)
 # --------------------------------------------------------------------------- #
 def check_notifications() -> None:
     """Проверить условия и разослать уведомления всем пользователям.
 
-    Открывает собственную сессию БД, проходит по всем NotificationSettings,
-    проверяет условия и отправляет напоминания с дедупликацией. Каждый
-    пользователь обрабатывается в своём try/except, чтобы сбой одного не
-    останавливал остальных. Сессия закрывается в finally.
+    Открывает собственную сессию БД и обрабатывает:
+      1) приёмы пищи и вечернюю сводку — по строкам NotificationSettings;
+      2) напоминания о тренировках — по строкам TrainingReminder;
+      3) напоминания о спортпите — по строкам SupplementReminder.
+
+    Каждая сущность обрабатывается в своём try/except, чтобы сбой одной не
+    останавливал остальные. Сессия закрывается в finally.
     """
     db = SessionLocal()
     try:
@@ -362,12 +459,12 @@ def check_notifications() -> None:
             now = datetime.now()
         today = now.date().isoformat()
 
-        # Все строки настроек уведомлений (по одной на пользователя).
+        # --- 1) Приёмы пищи и вечерняя сводка (NotificationSettings) ---------- #
         try:
             all_settings = db.query(NotificationSettings).all()
         except Exception as exc:
             logger.warning("check_notifications: не удалось прочитать настройки (%s)", exc)
-            return
+            all_settings = []
 
         for settings in all_settings:
             tid = getattr(settings, "telegram_id", None)
@@ -384,7 +481,7 @@ def check_notifications() -> None:
                     # Настройки без пользователя — пропускаем (целостность данных).
                     continue
 
-                # 1) Напоминания о приёмах пищи (только если не записаны).
+                # Напоминания о приёмах пищи (только если не записаны).
                 if getattr(settings, "meal_reminder_enabled", False):
                     _process_meal_reminder(
                         db, tid, today, now,
@@ -405,18 +502,62 @@ def check_notifications() -> None:
                         label="ужин", emoji="🍽️",
                     )
 
-                # 2) Напоминание о тренировке.
-                _process_training_reminder(db, tid, today, now, settings)
-
-                # 3) Напоминания о приёме добавок.
-                _process_supplement_reminders(db, tid, today, now, settings)
-
-                # 4) Вечерняя сводка дня.
+                # Вечерняя сводка дня.
                 _process_daily_summary(db, tid, today, now, user, settings)
 
             except Exception as exc:
                 # Сбой по одному пользователю не должен прерывать рассылку.
                 logger.warning("check_notifications: сбой по пользователю tid=%s: %s", tid, exc)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        # --- 2) Напоминания о тренировках (TrainingReminder) ------------------ #
+        try:
+            training_reminders = (
+                db.query(TrainingReminder)
+                .filter(TrainingReminder.enabled == True)  # noqa: E712 — нужно для SQL
+                .all()
+            )
+        except Exception as exc:
+            logger.warning("check_notifications: не удалось прочитать TrainingReminder (%s)", exc)
+            training_reminders = []
+
+        for reminder in training_reminders:
+            try:
+                _process_training_reminder(db, reminder, today, now)
+            except Exception as exc:
+                # Сбой по одному напоминанию не должен прерывать остальные.
+                rid = getattr(reminder, "id", None)
+                logger.warning(
+                    "check_notifications: сбой тренировочного напоминания id=%s: %s", rid, exc
+                )
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+
+        # --- 3) Напоминания о спортпите (SupplementReminder) ------------------ #
+        try:
+            supplement_reminders = (
+                db.query(SupplementReminder)
+                .filter(SupplementReminder.enabled == True)  # noqa: E712 — нужно для SQL
+                .all()
+            )
+        except Exception as exc:
+            logger.warning("check_notifications: не удалось прочитать SupplementReminder (%s)", exc)
+            supplement_reminders = []
+
+        for reminder in supplement_reminders:
+            try:
+                _process_supplement_reminder(db, reminder, today, now)
+            except Exception as exc:
+                # Сбой по одному напоминанию не должен прерывать остальные.
+                rid = getattr(reminder, "id", None)
+                logger.warning(
+                    "check_notifications: сбой напоминания о спортпите id=%s: %s", rid, exc
+                )
                 try:
                     db.rollback()
                 except Exception:

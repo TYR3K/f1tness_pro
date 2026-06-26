@@ -41,6 +41,7 @@ from backend.ai_service import (
     AIError,
     analyze_food_image,
     recommend_meals,
+    recommend_supplements,
     suggest_supplements,
 )
 from backend.auth import get_current_user
@@ -50,6 +51,9 @@ from backend.models import (
     FavoriteFood,
     NotificationSettings,
     Supplement,
+    SupplementReminder,
+    SupplementReminderItem,
+    TrainingReminder,
     User,
     Workout,
 )
@@ -76,8 +80,17 @@ from backend.schemas import (
     SupplementIn,
     SupplementListOut,
     SupplementOut,
+    SupplementRecommendIn,
+    SupplementRecommendOut,
+    SupplementReminderIn,
+    SupplementReminderItemOut,
+    SupplementReminderOut,
+    SupplementRemindersOut,
     SupplementSuggestItem,
     SupplementSuggestOut,
+    TrainingReminderIn,
+    TrainingReminderOut,
+    TrainingRemindersOut,
     WorkoutDayOut,
     WorkoutEstimateIn,
     WorkoutEstimateOut,
@@ -90,6 +103,63 @@ MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
 
 # Максимальный размер загружаемого фото (8 МБ) — защита от перерасхода памяти.
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+
+
+# --------------------------------------------------------------------------- #
+#  Хелперы для напоминаний (дни недели <-> CSV, мягкая валидация времени)
+# --------------------------------------------------------------------------- #
+def _weekdays_to_csv(weekdays: list[int]) -> str:
+    """Превратить список дней недели (Пн=0..Вс=6) в CSV-строку "0,2,4".
+
+    Оставляем только корректные значения 0..6, убираем дубликаты и сортируем,
+    чтобы строка в БД была предсказуемой.
+    """
+    cleaned = sorted({int(d) for d in weekdays if 0 <= int(d) <= 6})
+    return ",".join(str(d) for d in cleaned)
+
+
+def _csv_to_weekdays(csv: str | None) -> list[int]:
+    """Разобрать CSV-строку дней недели обратно в список int (Пн=0..Вс=6).
+
+    Пустые/битые элементы молча пропускаем, чтобы кривые данные в БД не валили
+    выдачу всего списка напоминаний.
+    """
+    if not csv:
+        return []
+    result: list[int] = []
+    for part in csv.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= value <= 6:
+            result.append(value)
+    return result
+
+
+def _normalize_time(value: str | None) -> str:
+    """Мягко привести время к виду "HH:MM".
+
+    Принимаем "9:5" / "09:05" и т.п.; при явной ошибке формата возвращаем 400.
+    Значения вне диапазона (часы 0..23, минуты 0..59) считаем ошибкой клиента.
+    """
+    if value is None:
+        raise HTTPException(status_code=400, detail="Не указано время (HH:MM)")
+    raw = str(value).strip()
+    parts = raw.split(":")
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="Некорректное время, нужен формат HH:MM")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректное время, нужен формат HH:MM")
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise HTTPException(status_code=400, detail="Некорректное время, нужен формат HH:MM")
+    return f"{hour:02d}:{minute:02d}"
 
 
 # Жизненный цикл приложения: создаём таблицы БД при старте и запускаем
@@ -826,6 +896,301 @@ def notifications_update(
     db.commit()
     db.refresh(settings)
     return settings
+
+
+# --------------------------------------------------------------------------- #
+#  Напоминания о тренировках (новые таблицы TrainingReminder)
+# --------------------------------------------------------------------------- #
+@app.get("/reminders/training", response_model=TrainingRemindersOut)
+def training_reminders_list(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TrainingRemindersOut:
+    """Вернуть список напоминаний о тренировках текущего пользователя.
+
+    Дни недели хранятся в БД как CSV (Пн=0..Вс=6) и разворачиваются в List[int].
+    """
+    rows = (
+        db.query(TrainingReminder)
+        .filter(TrainingReminder.telegram_id == user.telegram_id)
+        .order_by(TrainingReminder.created_at.asc(), TrainingReminder.id.asc())
+        .all()
+    )
+    items = [
+        TrainingReminderOut(
+            id=r.id,
+            weekdays=_csv_to_weekdays(r.weekdays),
+            time=r.time,
+            enabled=bool(r.enabled),
+        )
+        for r in rows
+    ]
+    return TrainingRemindersOut(items=items)
+
+
+@app.post("/reminders/training", response_model=TrainingReminderOut)
+def training_reminder_add(
+    data: TrainingReminderIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TrainingReminderOut:
+    """Создать напоминание о тренировке.
+
+    Дни недели (List[int]) сворачиваем в CSV, время мягко валидируем как HH:MM.
+    """
+    time_str = _normalize_time(data.time)
+    weekdays_csv = _weekdays_to_csv(data.weekdays)
+
+    reminder = TrainingReminder(
+        telegram_id=user.telegram_id,
+        weekdays=weekdays_csv,
+        time=time_str,
+        enabled=bool(data.enabled),
+    )
+    db.add(reminder)
+    db.commit()
+    db.refresh(reminder)
+
+    return TrainingReminderOut(
+        id=reminder.id,
+        weekdays=_csv_to_weekdays(reminder.weekdays),
+        time=reminder.time,
+        enabled=bool(reminder.enabled),
+    )
+
+
+@app.delete("/reminders/training/{reminder_id}")
+def training_reminder_delete(
+    reminder_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Удалить напоминание о тренировке, если оно принадлежит пользователю."""
+    reminder = (
+        db.query(TrainingReminder)
+        .filter(TrainingReminder.id == reminder_id)
+        .first()
+    )
+    if reminder is None or reminder.telegram_id != user.telegram_id:
+        # Чужое или несуществующее напоминание прячем за 404.
+        raise HTTPException(status_code=404, detail="Напоминание не найдено")
+
+    db.delete(reminder)
+    db.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  Напоминания о приёме спортпита (новые таблицы SupplementReminder/Item)
+# --------------------------------------------------------------------------- #
+def _build_supplement_reminder_out(
+    db: Session, reminder: SupplementReminder, telegram_id: int
+) -> SupplementReminderOut:
+    """Собрать схему ответа для напоминания спортпита с названиями добавок.
+
+    Названия подтягиваем через SupplementReminderItem -> Supplement, оставляя
+    только добавки, принадлежащие пользователю (чужие связи игнорируем).
+    """
+    items = (
+        db.query(SupplementReminderItem)
+        .filter(SupplementReminderItem.reminder_id == reminder.id)
+        .all()
+    )
+    supplements: list[SupplementReminderItemOut] = []
+    for it in items:
+        supp = (
+            db.query(Supplement)
+            .filter(
+                Supplement.id == it.supplement_id,
+                Supplement.telegram_id == telegram_id,
+            )
+            .first()
+        )
+        if supp is not None:
+            supplements.append(
+                SupplementReminderItemOut(id=supp.id, name=supp.name)
+            )
+
+    return SupplementReminderOut(
+        id=reminder.id,
+        label=reminder.label,
+        time=reminder.time,
+        enabled=bool(reminder.enabled),
+        supplements=supplements,
+    )
+
+
+@app.get("/reminders/supplement", response_model=SupplementRemindersOut)
+def supplement_reminders_list(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SupplementRemindersOut:
+    """Вернуть напоминания о приёме спортпита с названиями привязанных добавок."""
+    rows = (
+        db.query(SupplementReminder)
+        .filter(SupplementReminder.telegram_id == user.telegram_id)
+        .order_by(SupplementReminder.created_at.asc(), SupplementReminder.id.asc())
+        .all()
+    )
+    items = [
+        _build_supplement_reminder_out(db, r, user.telegram_id) for r in rows
+    ]
+    return SupplementRemindersOut(items=items)
+
+
+@app.post("/reminders/supplement", response_model=SupplementReminderOut)
+def supplement_reminder_add(
+    data: SupplementReminderIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SupplementReminderOut:
+    """Создать напоминание о приёме спортпита.
+
+    Для каждого supplement_id, ПРИНАДЛЕЖАЩЕГО пользователю, создаём связь
+    SupplementReminderItem; чужие/несуществующие добавки молча пропускаем.
+    Время мягко валидируем как HH:MM.
+    """
+    time_str = _normalize_time(data.time)
+
+    reminder = SupplementReminder(
+        telegram_id=user.telegram_id,
+        label=data.label,
+        time=time_str,
+        enabled=bool(data.enabled),
+    )
+    db.add(reminder)
+    # flush, чтобы получить reminder.id до создания связей.
+    db.flush()
+
+    # Привязываем только добавки, реально принадлежащие пользователю.
+    for supplement_id in data.supplement_ids or []:
+        supp = (
+            db.query(Supplement)
+            .filter(
+                Supplement.id == supplement_id,
+                Supplement.telegram_id == user.telegram_id,
+            )
+            .first()
+        )
+        if supp is None:
+            continue
+        db.add(
+            SupplementReminderItem(
+                reminder_id=reminder.id,
+                supplement_id=supp.id,
+            )
+        )
+
+    db.commit()
+    db.refresh(reminder)
+
+    return _build_supplement_reminder_out(db, reminder, user.telegram_id)
+
+
+@app.delete("/reminders/supplement/{reminder_id}")
+def supplement_reminder_delete(
+    reminder_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Удалить напоминание о спортпите вместе со связанными элементами."""
+    reminder = (
+        db.query(SupplementReminder)
+        .filter(SupplementReminder.id == reminder_id)
+        .first()
+    )
+    if reminder is None or reminder.telegram_id != user.telegram_id:
+        # Чужое или несуществующее напоминание прячем за 404.
+        raise HTTPException(status_code=404, detail="Напоминание не найдено")
+
+    # Сначала удаляем связанные элементы, затем сам reminder.
+    db.query(SupplementReminderItem).filter(
+        SupplementReminderItem.reminder_id == reminder.id
+    ).delete(synchronize_session=False)
+    db.delete(reminder)
+    db.commit()
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  Персональные рекомендации по спортпиту (ИИ, с учётом тренировок и цели)
+# --------------------------------------------------------------------------- #
+@app.post("/supplement/recommend", response_model=SupplementRecommendOut)
+def supplement_recommend(
+    data: SupplementRecommendIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SupplementRecommendOut:
+    """Персональные рекомендации по спортпиту от ИИ.
+
+    Учитываем цель улучшения (improvement_goal), частоту/тип тренировок за
+    последние 14 дней и цель диеты из профиля. Выбранную цель улучшения
+    сохраняем в профиль (user.supplement_goal). НЕ медицинская рекомендация.
+    """
+    # Сохраняем выбранную цель улучшения в профиль (для будущих советов).
+    user.supplement_goal = data.improvement_goal
+    db.commit()
+
+    # Считаем тренировки за последние 14 дней и собираем их типы.
+    today = date_cls.today()
+    start = today - timedelta(days=13)  # 14 календарных дней включительно
+    start_str = start.isoformat()
+    end_str = today.isoformat()
+
+    workouts = (
+        db.query(Workout)
+        .filter(
+            Workout.telegram_id == user.telegram_id,
+            Workout.date >= start_str,
+            Workout.date <= end_str,
+        )
+        .all()
+    )
+    training_count = len(workouts)
+    # Уникальные типы тренировок (без пустых значений), порядок не важен.
+    workout_types = sorted(
+        {(w.type or "").strip() for w in workouts if (w.type or "").strip()}
+    )
+
+    diet_goal = getattr(user, "diet_goal", None)
+
+    try:
+        result = recommend_supplements(
+            improvement_goal=data.improvement_goal,
+            training_count=training_count,
+            workout_types=workout_types,
+            diet_goal=diet_goal,
+        )
+    except AIError as exc:
+        logger.warning(
+            "supplement/recommend: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось получить рекомендации по добавкам. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("supplement/recommend: %s", exc)
+        detail = "Сервис рекомендаций временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    suggestions = [
+        SupplementSuggestItem(
+            name=s["name"],
+            dosage=s["dosage"],
+            note=s["note"],
+        )
+        for s in result.get("suggestions", [])
+    ]
+    return SupplementRecommendOut(
+        suggestions=suggestions,
+        disclaimer="Не является медицинской рекомендацией, проконсультируйтесь со специалистом",
+        training_count=training_count,
+        improvement_goal=data.improvement_goal,
+    )
 
 
 # --------------------------------------------------------------------------- #
