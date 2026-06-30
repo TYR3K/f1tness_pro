@@ -59,7 +59,7 @@
     viewEl: null,      // корневой элемент страницы (#view)
     loading: false,    // флаг, чтобы не запускать параллельные перезагрузки
     day: null,         // последний загруженный DiaryDayOut (для модалок)
-    panel: null        // открытая панель: "manual" | "recommend" | null
+    panel: null        // открытая панель: "manual" | "recommend" | "templates" | null
   };
 
   /**
@@ -331,9 +331,12 @@
   }
 
   /**
-   * Разметка панели действий рациона: «➕ Добавить вручную» и «🤖 Что съесть?».
-   * Кнопка «Что съесть?» — платная: для бесплатных пользователей помечаем её
-   * замком (🔒). Контроль доступа серверный, фронт лишь показывает paywall.
+   * Разметка панели действий рациона: «➕ Добавить вручную», «🤖 Что съесть?»
+   * и блок шаблонов (Этап 4): «💾 Сохранить день как шаблон», «📋 Шаблоны»,
+   * «📅 Скопировать вчера».
+   * Кнопки «Что съесть?», шаблоны и копирование — платные: для бесплатных
+   * пользователей помечаем их замком (🔒). Контроль доступа серверный, фронт
+   * лишь показывает paywall. Базовый дневник (ручной ввод) остаётся бесплатным.
    * @returns {string}
    */
   function actionsHtml() {
@@ -345,6 +348,15 @@
       "btn btn--ghost diary-actions__btn diary-actions__btn--recommend" +
       (locked ? " is-locked" : "");
 
+    // Премиум-кнопки шаблонов: вешаем замок и data-locked для free.
+    var lockMark = locked ? " 🔒" : "";
+    var lockAttr = locked ? ' data-locked="1"' : "";
+    var lockCls = locked ? " is-locked" : "";
+
+    var saveTplLabel = pick("💾 Сохранить день как шаблон", "💾 Save day as template") + lockMark;
+    var tplListLabel = pick("📋 Шаблоны", "📋 Templates") + lockMark;
+    var copyYestLabel = pick("📅 Скопировать вчера", "📅 Copy yesterday") + lockMark;
+
     return (
       '<div class="diary-actions">' +
       '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
@@ -354,7 +366,22 @@
       App.escapeHtml(recommendLabel) +
       "</button>" +
       "</div>" +
-      // Контейнер для разворачиваемой панели (ручной ввод / рекомендации).
+      // Блок премиум-действий с шаблонами питания (Этап 4). Префикс классов tpl-.
+      // Переиспользуем контейнер .diary-actions (flex + gap) и базовый размер
+      // .diary-actions__btn, чтобы кнопки выглядели в одном стиле с дневником;
+      // собственные tpl-классы добавляем для адресных обработчиков/стилей.
+      '<div class="diary-actions tpl-actions">' +
+      '<button class="btn btn--ghost diary-actions__btn tpl-actions__btn tpl-actions__btn--save' + lockCls + '" ' +
+      'type="button" data-action="tpl-save"' + lockAttr + ">" +
+      App.escapeHtml(saveTplLabel) + "</button>" +
+      '<button class="btn btn--ghost diary-actions__btn tpl-actions__btn tpl-actions__btn--list' + lockCls + '" ' +
+      'type="button" data-action="tpl-list"' + lockAttr + ">" +
+      App.escapeHtml(tplListLabel) + "</button>" +
+      '<button class="btn btn--ghost diary-actions__btn tpl-actions__btn tpl-actions__btn--copy' + lockCls + '" ' +
+      'type="button" data-action="tpl-copy"' + lockAttr + ">" +
+      App.escapeHtml(copyYestLabel) + "</button>" +
+      "</div>" +
+      // Контейнер для разворачиваемой панели (ручной ввод / рекомендации / шаблоны).
       '<div id="diary-panel" class="diary-panel"></div>'
     );
   }
@@ -431,10 +458,21 @@
       delButtons[k].addEventListener("click", onDeleteClick);
     }
 
-    // Навешиваем обработчики на кнопки действий (ручной ввод / рекомендации).
-    var actionButtons = content.querySelectorAll(".diary-actions__btn");
+    // Навешиваем обработчики на базовые кнопки действий (ручной ввод /
+    // рекомендации). Кнопки шаблонов исключаем (:not(.tpl-actions__btn)),
+    // так как они тоже несут класс .diary-actions__btn ради единого размера,
+    // но имеют собственный обработчик onTemplateActionClick.
+    var actionButtons = content.querySelectorAll(
+      ".diary-actions__btn:not(.tpl-actions__btn)"
+    );
     for (var a = 0; a < actionButtons.length; a++) {
       actionButtons[a].addEventListener("click", onActionClick);
+    }
+
+    // Навешиваем обработчики на премиум-кнопки шаблонов (Этап 4).
+    var tplButtons = content.querySelectorAll(".tpl-actions__btn");
+    for (var t = 0; t < tplButtons.length; t++) {
+      tplButtons[t].addEventListener("click", onTemplateActionClick);
     }
 
     // Если перед перезагрузкой была открыта панель — восстанавливаем её.
@@ -446,6 +484,13 @@
         openRecommendPanel();
       } else {
         openRecommendPaywall();
+      }
+    } else if (state.panel === "templates") {
+      // Панель списка шаблонов: free -> paywall, premium -> список.
+      if (isPremium()) {
+        openTemplatesPanel();
+      } else {
+        openTemplatesPaywall();
       }
     }
 
@@ -640,6 +685,8 @@
 
   /**
    * Подсвечивает активную кнопку действия в соответствии с открытой панелью.
+   * Учитывает и базовые кнопки (.diary-actions__btn), и кнопки шаблонов
+   * (.tpl-actions__btn). Панель "templates" подсвечивает кнопку «📋 Шаблоны».
    */
   function syncActionButtons() {
     var content = document.getElementById("diary-content");
@@ -648,6 +695,17 @@
     for (var i = 0; i < buttons.length; i++) {
       var act = buttons[i].getAttribute("data-action");
       buttons[i].classList.toggle("is-active", act === state.panel);
+    }
+    // Кнопки шаблонов: активна только «📋 Шаблоны» (data-action="tpl-list"),
+    // когда открыта панель списка шаблонов. Кнопки «Сохранить»/«Скопировать»
+    // выполняют разовое действие и не остаются «активными».
+    var tplButtons = content.querySelectorAll(".tpl-actions__btn");
+    for (var j = 0; j < tplButtons.length; j++) {
+      var tplAct = tplButtons[j].getAttribute("data-action");
+      tplButtons[j].classList.toggle(
+        "is-active",
+        tplAct === "tpl-list" && state.panel === "templates"
+      );
     }
   }
 
@@ -1200,6 +1258,498 @@
         requestRecommendations();
       });
     }
+  }
+
+  // ===========================================================================
+  // ШАБЛОНЫ ПИТАНИЯ (Этап 4, ПРЕМИУМ).
+  //
+  // Три действия в блоке .tpl-actions:
+  //   «💾 Сохранить день как шаблон» — собирает все записи текущего дня в items
+  //     (с их meal_type) и сохраняет шаблон типа "day" с введённым именем.
+  //   «📋 Шаблоны» — открывает панель со списком шаблонов: применить к текущей
+  //     дате или удалить.
+  //   «📅 Скопировать вчера» — копирует все записи дневника со «вчера» (даты −1)
+  //     на текущую дату.
+  // Все три — платные: для free показываем единый App.paywall в области панели.
+  // Базовый дневник остаётся бесплатным. Префикс классов tpl-.
+  // ===========================================================================
+
+  /**
+   * Клик по премиум-кнопке шаблонов (.tpl-actions__btn).
+   * Для free любая из трёх кнопок показывает paywall в области панели.
+   * Для премиум — выполняет соответствующее действие.
+   * @param {Event} ev
+   */
+  function onTemplateActionClick(ev) {
+    var action = ev.currentTarget.getAttribute("data-action");
+    App.haptic && App.haptic("light");
+
+    // Все действия с шаблонами — платные. Для бесплатных пользователей
+    // показываем единый paywall (ведёт на экран подписки) и помечаем панель
+    // как "templates", чтобы при перерисовке состояние сохранялось.
+    if (!isPremium()) {
+      state.panel = "templates";
+      syncActionButtons();
+      openTemplatesPaywall();
+      return;
+    }
+
+    if (action === "tpl-save") {
+      // Разовое действие: открываем форму ввода имени (панель не «залипает»).
+      openSaveTemplatePanel();
+    } else if (action === "tpl-list") {
+      // Повторный клик по «Шаблоны» сворачивает панель.
+      if (state.panel === "templates") {
+        state.panel = null;
+        var panel = document.getElementById("diary-panel");
+        if (panel) panel.innerHTML = "";
+        syncActionButtons();
+        return;
+      }
+      state.panel = "templates";
+      syncActionButtons();
+      openTemplatesPanel();
+    } else if (action === "tpl-copy") {
+      copyYesterday();
+    }
+  }
+
+  /**
+   * Показывает единый paywall для премиум-фич шаблонов в области панели действий.
+   * Контроль доступа серверный — это лишь визуальная заглушка.
+   */
+  function openTemplatesPaywall() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    if (App && typeof App.paywall === "function") {
+      App.paywall(panel, {
+        icon: "📋",
+        title: pick("Шаблоны питания", "Meal templates"),
+        desc: pick(
+          "Сохраняйте дни как шаблоны и добавляйте их в рацион одним тапом",
+          "Save days as templates and add them to your diary in one tap"
+        ),
+        bullets: [
+          pick("Сохранение дня целиком как шаблона", "Save a whole day as a template"),
+          pick("Применение шаблона к любой дате", "Apply a template to any date"),
+          pick("Копирование рациона со вчерашнего дня", "Copy yesterday's diary in one tap")
+        ]
+      });
+      return;
+    }
+
+    // Запасной вариант, если единый paywall недоступен — ведём в подписку кнопкой.
+    panel.innerHTML =
+      '<section class="card tpl-locked">' +
+      '<h2 class="tpl-locked__title">🔒 ' + App.escapeHtml(pick("Шаблоны питания", "Meal templates")) + "</h2>" +
+      '<p class="tpl-locked__sub">' +
+      App.escapeHtml(pick("Шаблоны доступны по подписке.", "Templates are available with a subscription.")) + "</p>" +
+      '<button type="button" class="btn btn--cta btn-block tpl-locked__subscribe">' +
+      App.escapeHtml(pick("Оформить подписку", "Get subscription")) + "</button>" +
+      "</section>";
+    var subBtn = panel.querySelector(".tpl-locked__subscribe");
+    if (subBtn) {
+      subBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (App && typeof App.navigate === "function") App.navigate("subscription");
+      });
+    }
+  }
+
+  /**
+   * Собирает все записи текущего загруженного дня в массив items для шаблона.
+   * Каждый элемент хранит meal_type своей секции, чтобы при применении шаблона
+   * блюда легли в нужные приёмы пищи.
+   * @returns {Array} items [{dish_name, calories, proteins, fats, carbs, meal_type}]
+   */
+  function collectDayItems() {
+    var day = state.day || {};
+    var meals = day.meals || {};
+    var items = [];
+    for (var i = 0; i < MEAL_ORDER.length; i++) {
+      var type = MEAL_ORDER[i];
+      var arr = meals[type] || [];
+      for (var j = 0; j < arr.length; j++) {
+        var e = arr[j] || {};
+        items.push({
+          dish_name: e.dish_name || pick("Без названия", "Untitled"),
+          calories: Math.round(Number(e.calories) || 0),
+          proteins: Number(e.proteins) || 0,
+          fats: Number(e.fats) || 0,
+          carbs: Number(e.carbs) || 0,
+          meal_type: type
+        });
+      }
+    }
+    return items;
+  }
+
+  /**
+   * Открывает панель «Сохранить день как шаблон»: инлайн-поле ввода имени
+   * и кнопка сохранения. Если за день нет записей — показываем подсказку.
+   */
+  function openSaveTemplatePanel() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    var items = collectDayItems();
+
+    if (!items.length) {
+      // Пустой день нечего сохранять — показываем пустое состояние.
+      panel.innerHTML =
+        '<section class="card tpl-save">' +
+        '<h2 class="tpl-save__title">' +
+        App.escapeHtml(pick("Сохранить день как шаблон", "Save day as template")) + "</h2>" +
+        '<p class="tpl-save__empty">' +
+        App.escapeHtml(pick(
+          "За этот день нет записей. Добавьте блюда, чтобы сохранить день как шаблон.",
+          "No entries for this day. Add dishes to save the day as a template."
+        )) + "</p>" +
+        "</section>";
+      return;
+    }
+
+    // Значение по умолчанию для имени — «Шаблон» + человеко-читаемая дата.
+    var defaultName = pick("Шаблон ", "Template ") + humanDate(state.date);
+
+    panel.innerHTML =
+      '<section class="card tpl-save">' +
+      '<h2 class="tpl-save__title">' +
+      App.escapeHtml(pick("Сохранить день как шаблон", "Save day as template")) + "</h2>" +
+      '<p class="tpl-save__sub">' +
+      App.escapeHtml(
+        pick("Блюд в шаблоне: ", "Dishes in template: ") + items.length
+      ) + "</p>" +
+      '<label class="field">' +
+      '<span class="field__label">' + App.escapeHtml(pick("Название шаблона", "Template name")) + "</span>" +
+      '<input class="field__input tpl-save__name" type="text" maxlength="80" ' +
+      'value="' + App.escapeHtml(defaultName) + '" ' +
+      'placeholder="' + App.escapeHtml(pick("Например, «Мой обычный день»", "e.g. “My usual day”")) + '">' +
+      "</label>" +
+      '<button type="button" class="btn btn--cta btn-block tpl-save__submit">' +
+      App.escapeHtml(pick("Сохранить шаблон", "Save template")) + "</button>" +
+      "</section>";
+
+    var nameInput = panel.querySelector(".tpl-save__name");
+    var submitBtn = panel.querySelector(".tpl-save__submit");
+    if (submitBtn) {
+      submitBtn.addEventListener("click", function () {
+        var name = (nameInput && nameInput.value ? nameInput.value : "").trim();
+        if (!name) {
+          App.toast(pick("Укажите название шаблона", "Enter a template name"));
+          try { if (nameInput) nameInput.focus(); } catch (e) {}
+          return;
+        }
+        submitSaveTemplate(name, items, submitBtn);
+      });
+    }
+  }
+
+  /**
+   * Отправляет шаблон типа "day" на сервер.
+   * @param {string} name имя шаблона
+   * @param {Array} items блюда дня
+   * @param {HTMLElement} [trigger] кнопка-инициатор (для блокировки)
+   */
+  function submitSaveTemplate(name, items, trigger) {
+    if (trigger) {
+      trigger.disabled = true;
+      trigger.textContent = pick("Сохраняем…", "Saving…");
+    }
+    App.showLoading();
+
+    App.api
+      .saveTemplate({ name: name, template_type: "day", items: items })
+      .then(function () {
+        App.haptic && App.haptic("success");
+        App.toast(pick("Шаблон сохранён", "Template saved"));
+        // Сворачиваем панель действий.
+        state.panel = null;
+        var panel = document.getElementById("diary-panel");
+        if (panel) panel.innerHTML = "";
+        syncActionButtons();
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || pick("Не удалось сохранить шаблон", "Failed to save template"));
+        if (trigger) {
+          trigger.disabled = false;
+          trigger.textContent = pick("Сохранить шаблон", "Save template");
+        }
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Открывает панель со списком шаблонов и загружает их с сервера.
+   */
+  function openTemplatesPanel() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    panel.innerHTML =
+      '<section class="card tpl-list">' +
+      '<h2 class="tpl-list__title">' +
+      App.escapeHtml(pick("Шаблоны питания", "Meal templates")) + "</h2>" +
+      '<p class="tpl-list__sub">' +
+      App.escapeHtml(pick(
+        "Добавьте шаблон в рацион выбранной даты или удалите ненужный.",
+        "Add a template to the selected date or remove the ones you don't need."
+      )) + "</p>" +
+      '<div id="tpl-list-body" class="tpl-list__body">' +
+      '<div class="skeleton skeleton-block tpl-list__skeleton"></div>' +
+      '<div class="skeleton skeleton-block tpl-list__skeleton"></div>' +
+      "</div>" +
+      "</section>";
+
+    loadTemplates();
+  }
+
+  /**
+   * Загружает список шаблонов пользователя и рисует его.
+   */
+  function loadTemplates() {
+    var body = document.getElementById("tpl-list-body");
+    if (!body) return;
+
+    App.api
+      .getTemplates()
+      .then(function (res) {
+        var items = (res && res.items) || [];
+        renderTemplates(items);
+      })
+      .catch(function (err) {
+        renderTemplatesError(
+          (err && err.message) ||
+          pick("Не удалось загрузить шаблоны.", "Failed to load templates.")
+        );
+      });
+  }
+
+  /**
+   * Человеко-читаемая подпись типа шаблона.
+   * @param {string} type "dish" | "meal" | "day"
+   * @returns {string}
+   */
+  function templateTypeLabel(type) {
+    switch (type) {
+      case "day":
+        return pick("День", "Day");
+      case "meal":
+        return pick("Приём пищи", "Meal");
+      case "dish":
+        return pick("Блюдо", "Dish");
+      default:
+        return type || "";
+    }
+  }
+
+  /**
+   * Рисует список шаблонов: имя, тип, число блюд, кнопки «Добавить»/«Удалить».
+   * Имена шаблонов — пользовательский ввод, не переводим (только экранируем).
+   * @param {Array} items список TemplateOut
+   */
+  function renderTemplates(items) {
+    var body = document.getElementById("tpl-list-body");
+    if (!body) return;
+
+    if (!items.length) {
+      body.innerHTML =
+        '<p class="tpl-list__empty">' +
+        App.escapeHtml(pick(
+          "У вас пока нет шаблонов. Сохраните день кнопкой «💾 Сохранить день как шаблон».",
+          "You have no templates yet. Save a day with the “💾 Save day as template” button."
+        )) + "</p>";
+      return;
+    }
+
+    var dishesWord = pick("блюд", "dishes");
+    var cards = "";
+    for (var i = 0; i < items.length; i++) {
+      var tpl = items[i] || {};
+      var count = (tpl.items && tpl.items.length) || 0;
+      var typeLabel = templateTypeLabel(tpl.template_type);
+      cards +=
+        '<div class="tpl-card" data-id="' + App.escapeHtml(tpl.id) + '">' +
+        '<div class="tpl-card__info">' +
+        '<span class="tpl-card__name">' +
+        App.escapeHtml(tpl.name || pick("Без названия", "Untitled")) + "</span>" +
+        '<span class="tpl-card__meta">' +
+        App.escapeHtml(typeLabel) + " · " + App.fmt(count) + " " + App.escapeHtml(dishesWord) +
+        "</span>" +
+        "</div>" +
+        '<div class="tpl-card__actions">' +
+        '<button type="button" class="btn btn--cta tpl-card__apply" data-id="' + App.escapeHtml(tpl.id) + '">' +
+        App.escapeHtml(pick("Добавить", "Add")) + "</button>" +
+        '<button type="button" class="tpl-card__del" data-id="' + App.escapeHtml(tpl.id) + '" ' +
+        'aria-label="' + App.escapeHtml(pick("Удалить шаблон", "Delete template")) +
+        '" title="' + App.escapeHtml(pick("Удалить", "Delete")) + '">✕</button>' +
+        "</div>" +
+        "</div>";
+    }
+
+    body.innerHTML = '<div class="tpl-card-list">' + cards + "</div>";
+
+    // Делегируем клики: «Добавить» (применить) и «✕» (удалить).
+    var listWrap = body.querySelector(".tpl-card-list");
+    if (listWrap) {
+      listWrap.addEventListener("click", function (ev) {
+        var applyBtn = ev.target.closest(".tpl-card__apply");
+        if (applyBtn) {
+          var applyId = parseInt(applyBtn.getAttribute("data-id"), 10);
+          if (!isNaN(applyId)) applyTemplate(applyId, applyBtn);
+          return;
+        }
+        var delBtn = ev.target.closest(".tpl-card__del");
+        if (delBtn) {
+          var delId = parseInt(delBtn.getAttribute("data-id"), 10);
+          if (!isNaN(delId)) deleteTemplate(delId, delBtn);
+        }
+      });
+    }
+  }
+
+  /**
+   * Состояние ошибки внутри панели шаблонов с кнопкой «Повторить».
+   * @param {string} message
+   */
+  function renderTemplatesError(message) {
+    var body = document.getElementById("tpl-list-body");
+    if (!body) return;
+    body.innerHTML =
+      '<div class="tpl-list__error">' +
+      '<p class="tpl-list__error-text">' + App.escapeHtml(message) + "</p>" +
+      '<button type="button" class="btn btn--ghost tpl-list__retry">' +
+      App.escapeHtml(pick("Повторить", "Retry")) + "</button>" +
+      "</div>";
+
+    var retry = body.querySelector(".tpl-list__retry");
+    if (retry) {
+      retry.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        body.innerHTML =
+          '<div class="skeleton skeleton-block tpl-list__skeleton"></div>' +
+          '<div class="skeleton skeleton-block tpl-list__skeleton"></div>';
+        loadTemplates();
+      });
+    }
+  }
+
+  /**
+   * Применяет шаблон к текущей дате: создаёт записи дневника и перезагружает день.
+   * @param {number} id id шаблона
+   * @param {HTMLElement} [trigger] кнопка-инициатор (для блокировки)
+   */
+  function applyTemplate(id, trigger) {
+    if (trigger) {
+      if (trigger.disabled) return; // защита от повторных кликов
+      trigger.disabled = true;
+      trigger.textContent = pick("Добавляем…", "Adding…");
+    }
+    App.haptic && App.haptic("light");
+    App.showLoading();
+
+    App.api
+      .applyTemplate(id, { date: state.date })
+      .then(function (res) {
+        var added = (res && res.added) || 0;
+        App.haptic && App.haptic("success");
+        App.toast(
+          pick("Добавлено блюд: ", "Dishes added: ") + App.fmt(added)
+        );
+        // Закрываем панель и инвалидируем кэш дня, затем перезагружаем.
+        state.panel = null;
+        if (App.state && App.state.diaryByDate) {
+          delete App.state.diaryByDate[state.date];
+        }
+        loadAndRender();
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || pick("Не удалось применить шаблон", "Failed to apply template"));
+        if (trigger) {
+          trigger.disabled = false;
+          trigger.textContent = pick("Добавить", "Add");
+        }
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Удаляет шаблон по id и перезагружает список шаблонов.
+   * @param {number} id id шаблона
+   * @param {HTMLElement} [trigger] кнопка-инициатор (для блокировки)
+   */
+  function deleteTemplate(id, trigger) {
+    if (trigger) {
+      if (trigger.disabled) return;
+      trigger.disabled = true;
+      trigger.textContent = "…";
+    }
+    App.haptic && App.haptic("light");
+    App.showLoading();
+
+    App.api
+      .deleteTemplate(id)
+      .then(function () {
+        App.haptic && App.haptic("success");
+        App.toast(pick("Шаблон удалён", "Template deleted"));
+        // Перезагружаем список шаблонов в открытой панели.
+        loadTemplates();
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || pick("Не удалось удалить шаблон", "Failed to delete template"));
+        if (trigger) {
+          trigger.disabled = false;
+          trigger.textContent = "✕";
+        }
+      })
+      .then(function () {
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Копирует все записи дневника со «вчера» (даты −1) на текущую дату.
+   * Разовое действие, не оставляет панель открытой.
+   */
+  function copyYesterday() {
+    App.haptic && App.haptic("light");
+    App.showLoading();
+
+    App.api
+      .copyYesterday({ date: state.date })
+      .then(function (res) {
+        var added = (res && res.added) || 0;
+        if (added > 0) {
+          App.haptic && App.haptic("success");
+          App.toast(
+            pick("Скопировано блюд: ", "Dishes copied: ") + App.fmt(added)
+          );
+          // Инвалидируем кэш дня и перезагружаем актуальные данные.
+          state.panel = null;
+          if (App.state && App.state.diaryByDate) {
+            delete App.state.diaryByDate[state.date];
+          }
+          loadAndRender();
+        } else {
+          // За вчера не было записей — просто сообщаем об этом.
+          App.toast(pick("За вчера нет записей для копирования", "No entries yesterday to copy"));
+        }
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || pick("Не удалось скопировать вчерашний день", "Failed to copy yesterday"));
+      })
+      .then(function () {
+        App.hideLoading();
+      });
   }
 
   // ---------------------------------------------------------------------------

@@ -5176,3 +5176,267 @@ select.field__input {
   color: var(--text);
   background: rgba(194, 102, 77, .12);
 }
+
+/* ============================================================
+   ШАБЛОНЫ ПИТАНИЯ (Этап 4, ПРЕМИУМ) — префикс классов tpl-.
+   Стилизует ровно те классы, что генерирует page-diary.js:
+   панель премиум-действий (.tpl-actions), форму сохранения дня
+   как шаблона (.tpl-save), список шаблонов карточками (.tpl-list,
+   .tpl-card-list, .tpl-card) и запасной paywall (.tpl-locked).
+   Палитра пастельная, согласована с блоком .diary-recommend / .recent.
+   ============================================================ */
+
+/* --- Панель премиум-действий с шаблонами ---
+   Контейнер переиспользует .diary-actions (flex + gap). Три кнопки
+   шаблонов несут .diary-actions__btn ради единого размера; собственные
+   tpl-классы добавляют адресные стили (мягкий акцентный фон). На узких
+   экранах три кнопки в один ряд тесноваты — разрешаем перенос. */
+.tpl-actions {
+  flex-wrap: wrap;
+}
+
+/* Кнопки шаблонов: общий вид — мягкая «контурная» кнопка действий.
+   Базовый размер берётся от .diary-actions__btn; здесь — лёгкий фон,
+   чтобы блок шаблонов визуально отделялся от «Добавить вручную». */
+.tpl-actions__btn {
+  flex: 1 1 calc(50% - 5px);
+  background: rgba(201, 184, 168, .14);
+}
+
+/* Лёгкая цветовая дифференциация трёх действий (в пределах пастели). */
+.tpl-actions__btn--save {
+  background: rgba(125, 155, 118, .12); /* зеленоватый — «сохранить» */
+}
+
+.tpl-actions__btn--list {
+  background: rgba(201, 184, 168, .18); /* нейтральный беж — «список» */
+}
+
+.tpl-actions__btn--copy {
+  background: rgba(201, 184, 168, .14);
+}
+
+/* Активная (выбранная) кнопка «Шаблоны» — как у базовых действий. */
+.tpl-actions__btn.is-active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+/* Заблокированная (free) кнопка шаблона: пунктир + лёгкое затемнение.
+   Совпадает с поведением .diary-actions__btn.is-locked. */
+.tpl-actions__btn.is-locked {
+  opacity: .85;
+  border-style: dashed;
+}
+
+/* --- Запасной paywall шаблонов (.tpl-locked) ---
+   Показывается, только если единый App.paywall недоступен. */
+.tpl-locked {
+  text-align: center;
+  background: var(--white);
+}
+
+.tpl-locked__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tpl-locked__sub {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.tpl-locked__subscribe {
+  margin-top: 4px;
+}
+
+/* --- Панель «Сохранить день как шаблон» (.tpl-save) --- */
+.tpl-save {
+  display: block;
+  background: var(--white);
+}
+
+.tpl-save__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tpl-save__sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+/* Пустое состояние: за день нет записей — сохранять нечего. */
+.tpl-save__empty {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
+
+/* Инлайн-поле ввода имени шаблона (наследует .field__input). */
+.tpl-save__name {
+  width: 100%;
+}
+
+/* Кнопка «Сохранить шаблон» (CTA). */
+.tpl-save__submit {
+  margin-top: 4px;
+}
+
+/* --- Панель со списком шаблонов (.tpl-list) --- */
+.tpl-list {
+  display: block;
+  background: var(--white);
+}
+
+.tpl-list__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tpl-list__sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.tpl-list__body {
+  display: block;
+}
+
+/* Скелетон строки списка шаблонов. */
+.tpl-list__skeleton {
+  height: 64px;
+  margin-bottom: 10px;
+}
+
+/* Пустое состояние: у пользователя ещё нет шаблонов. */
+.tpl-list__empty {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
+
+/* Ошибка загрузки списка шаблонов с кнопкой «Повторить». */
+.tpl-list__error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
+
+.tpl-list__error-text {
+  font-size: 13px;
+  color: var(--danger);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.tpl-list__retry {
+  width: auto;
+  min-width: 150px;
+  margin: 0 auto;
+}
+
+/* Список карточек шаблонов — вертикальная колонка. */
+.tpl-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Карточка одного шаблона: слева имя/мета, справа действия. */
+.tpl-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  animation: fadeIn .28s ease;
+}
+
+/* Левая часть карточки: имя + тип/кол-во. Занимает всё свободное место. */
+.tpl-card__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tpl-card__name {
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Мета: тип шаблона · число блюд. */
+.tpl-card__meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Правая часть: кнопки «Добавить» и «✕». */
+.tpl-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Кнопка «Добавить» (применить шаблон) — компактный CTA. */
+.tpl-card__apply {
+  width: auto;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+/* Кнопка «✕» — удалить шаблон (мягкий круглый «опасный» акцент). */
+.tpl-card__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(194, 102, 77, .12);
+  color: var(--danger);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s ease, transform .08s ease;
+}
+
+.tpl-card__del:active {
+  transform: scale(.94);
+  background: rgba(194, 102, 77, .2);
+}
+
+.tpl-card__del:disabled {
+  opacity: .55;
+  cursor: default;
+}

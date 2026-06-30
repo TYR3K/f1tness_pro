@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -60,6 +61,7 @@ from backend.database import get_db, init_db
 from backend.models import (
     DiaryEntry,
     FavoriteFood,
+    MealTemplate,
     NotificationSettings,
     Supplement,
     SupplementReminder,
@@ -72,6 +74,7 @@ from backend.models import (
 from backend.schemas import (
     AdaptiveResultOut,
     AnalyzeOut,
+    CopyYesterdayIn,
     DiaryDayOut,
     DiaryEntryIn,
     DiaryEntryOut,
@@ -105,6 +108,11 @@ from backend.schemas import (
     SupplementRemindersOut,
     SupplementSuggestItem,
     SupplementSuggestOut,
+    TemplateApplyIn,
+    TemplateItem,
+    TemplateListOut,
+    TemplateOut,
+    TemplateSaveIn,
     TrainingReminderIn,
     TrainingReminderOut,
     TrainingRemindersOut,
@@ -1608,6 +1616,237 @@ def calories_recalculate_adaptive(
         days_used=result.get("days_used", 0),
         explanation=result.get("explanation", ""),
     )
+
+
+# --------------------------------------------------------------------------- #
+#  Шаблоны питания (Этап 4) — ПРЕМИУМ
+#
+#  Пользователь сохраняет набор блюд (одно блюдо / приём / целый день) как
+#  шаблон и быстро применяет его к выбранной дате, создавая записи дневника.
+#  Отдельно — быстрое копирование вчерашнего дня. Все эндпоинты премиум
+#  (require_premium -> 402 без подписки) и объявлены ВЫШЕ app.mount.
+# --------------------------------------------------------------------------- #
+def _parse_template_items(items_json: str | None) -> list[TemplateItem]:
+    """Распарсить items_json шаблона в список TemplateItem, устойчиво к битым данным.
+
+    Если JSON повреждён или это не список — возвращаем пустой список, чтобы
+    кривые данные одного шаблона не валили выдачу всего списка. Каждое блюдо
+    разбираем мягко: недостающие/нечисловые КБЖУ заменяем нулями.
+    """
+    if not items_json:
+        return []
+    try:
+        raw = json.loads(items_json)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(raw, list):
+        return []
+
+    items: list[TemplateItem] = []
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        try:
+            items.append(
+                TemplateItem(
+                    dish_name=str(it.get("dish_name") or ""),
+                    calories=int(it.get("calories") or 0),
+                    proteins=float(it.get("proteins") or 0.0),
+                    fats=float(it.get("fats") or 0.0),
+                    carbs=float(it.get("carbs") or 0.0),
+                    meal_type=it.get("meal_type") or None,
+                )
+            )
+        except (TypeError, ValueError):
+            # Одно битое блюдо не должно ломать весь шаблон — просто пропускаем.
+            continue
+    return items
+
+
+@app.post("/template/save", response_model=TemplateOut)
+def template_save(
+    data: TemplateSaveIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> TemplateOut:
+    """Сохранить шаблон питания текущего пользователя.
+
+    Список блюд (items) сериализуем в JSON-строку (items_json). В ответ
+    возвращаем шаблон с уже распарсенными блюдами.
+    """
+    # Сериализуем блюда в JSON-строку (ensure_ascii=False — храним кириллицу как есть).
+    items_payload = [it.model_dump() for it in data.items]
+    items_json = json.dumps(items_payload, ensure_ascii=False)
+
+    template = MealTemplate(
+        telegram_id=user.telegram_id,
+        name=data.name,
+        template_type=data.template_type,
+        meal_type=data.meal_type,
+        items_json=items_json,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+
+    return TemplateOut(
+        id=template.id,
+        name=template.name,
+        template_type=template.template_type,
+        meal_type=template.meal_type,
+        items=_parse_template_items(template.items_json),
+    )
+
+
+@app.get("/template/list", response_model=TemplateListOut)
+def template_list(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> TemplateListOut:
+    """Вернуть шаблоны питания пользователя (новые сверху).
+
+    items_json каждого шаблона разворачиваем в список блюд устойчиво к битым
+    данным (повреждённый JSON -> пустой список блюд).
+    """
+    rows = (
+        db.query(MealTemplate)
+        .filter(MealTemplate.telegram_id == user.telegram_id)
+        .order_by(MealTemplate.created_at.desc(), MealTemplate.id.desc())
+        .all()
+    )
+    items = [
+        TemplateOut(
+            id=t.id,
+            name=t.name,
+            template_type=t.template_type,
+            meal_type=t.meal_type,
+            items=_parse_template_items(t.items_json),
+        )
+        for t in rows
+    ]
+    return TemplateListOut(items=items)
+
+
+@app.post("/template/apply/{template_id}")
+def template_apply(
+    template_id: int,
+    data: TemplateApplyIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Применить шаблон к указанной дате: создать записи дневника по его блюдам.
+
+    Берём шаблон, ТОЛЬКО если он принадлежит пользователю (иначе 404). Для
+    каждого блюда тип приёма пищи определяем по приоритету:
+      item.meal_type (для day-шаблона — у каждого блюда) -> data.meal_type
+      -> meal_type самого шаблона -> "snack" (на крайний случай).
+    Возвращаем число добавленных записей.
+    """
+    template = (
+        db.query(MealTemplate)
+        .filter(MealTemplate.id == template_id)
+        .first()
+    )
+    if template is None or template.telegram_id != user.telegram_id:
+        # Чужой или несуществующий шаблон прячем за 404.
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+
+    items = _parse_template_items(template.items_json)
+
+    added = 0
+    for it in items:
+        # Приём пищи: у блюда (day) -> переопределение запроса -> у шаблона -> snack.
+        meal_type = (
+            it.meal_type
+            or data.meal_type
+            or template.meal_type
+            or "snack"
+        )
+        db_entry = DiaryEntry(
+            telegram_id=user.telegram_id,
+            date=data.date,
+            meal_type=meal_type,
+            dish_name=it.dish_name,
+            calories=it.calories,
+            proteins=it.proteins,
+            fats=it.fats,
+            carbs=it.carbs,
+        )
+        db.add(db_entry)
+        added += 1
+
+    db.commit()
+    return {"added": added}
+
+
+@app.delete("/template/{template_id}")
+def template_delete(
+    template_id: int,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Удалить шаблон питания, если он принадлежит текущему пользователю."""
+    template = (
+        db.query(MealTemplate)
+        .filter(MealTemplate.id == template_id)
+        .first()
+    )
+    if template is None or template.telegram_id != user.telegram_id:
+        # Чужой или несуществующий шаблон прячем за 404.
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+
+    db.delete(template)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/diary/copy-yesterday")
+def diary_copy_yesterday(
+    data: CopyYesterdayIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Скопировать все записи дневника со вчерашнего дня на указанную дату.
+
+    «Вчера» вычисляется как (data.date - 1 день) по ISO-дате. Для каждой записи
+    создаём новую с теми же полями (блюдо, КБЖУ, приём пищи). Возвращаем число
+    добавленных записей. Если дата некорректна — 400.
+    """
+    # Вычисляем дату «вчера» относительно целевой даты.
+    try:
+        target = date_cls.fromisoformat(data.date)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Некорректная дата (нужен формат YYYY-MM-DD)")
+    yesterday_str = (target - timedelta(days=1)).isoformat()
+
+    # Берём все записи пользователя за «вчера».
+    rows = (
+        db.query(DiaryEntry)
+        .filter(
+            DiaryEntry.telegram_id == user.telegram_id,
+            DiaryEntry.date == yesterday_str,
+        )
+        .order_by(DiaryEntry.created_at.asc(), DiaryEntry.id.asc())
+        .all()
+    )
+
+    added = 0
+    for e in rows:
+        db_entry = DiaryEntry(
+            telegram_id=user.telegram_id,
+            date=data.date,
+            meal_type=e.meal_type,
+            dish_name=e.dish_name,
+            calories=e.calories,
+            proteins=e.proteins,
+            fats=e.fats,
+            carbs=e.carbs,
+        )
+        db.add(db_entry)
+        added += 1
+
+    db.commit()
+    return {"added": added}
 
 
 # --------------------------------------------------------------------------- #

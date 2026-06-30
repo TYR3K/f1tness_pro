@@ -23,6 +23,10 @@ ORM-модели приложения (SQLAlchemy).
 Трекинг веса и адаптивные калории (Этап 3):
   - WeightLog — замер веса пользователя за конкретный день
                 (для построения тренда и расчёта фактического поддержания).
+
+Шаблоны питания (Этап 4):
+  - MealTemplate — сохранённый шаблон (блюдо / приём / целый день),
+                   из которого пользователь быстро добавляет записи в дневник.
 """
 
 from datetime import datetime
@@ -36,6 +40,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
 )
 
 from backend.database import Base
@@ -479,6 +484,43 @@ class WeightLog(Base):
 
     # Дата замера в формате ISO "YYYY-MM-DD" (с индексом для выборок по периоду).
     date = Column(String, index=True)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class MealTemplate(Base):
+    """
+    Шаблон питания пользователя (Этап 4).
+
+    Позволяет сохранить набор блюд (одно блюдо, целый приём пищи или целый день)
+    и быстро применять его к выбранной дате, создавая записи дневника. Список
+    блюд хранится сериализованным в JSON-строке (items_json), чтобы не плодить
+    дополнительную таблицу-связку — для шаблонов этого достаточно.
+    """
+
+    __tablename__ = "meal_templates"
+
+    # Идентификатор шаблона (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Владелец записи — ссылка на пользователя по Telegram ID.
+    telegram_id = Column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+
+    # Человекочитаемое имя шаблона (задаёт пользователь).
+    name = Column(String)
+
+    # Тип шаблона: "dish" (одно блюдо) | "meal" (приём пищи) | "day" (целый день).
+    template_type = Column(String)
+
+    # Тип приёма пищи по умолчанию (breakfast|lunch|dinner|snack) или None.
+    # Для day-шаблона обычно None: приём берётся у каждого блюда отдельно.
+    meal_type = Column(String, nullable=True)
+
+    # Список блюд шаблона в виде JSON-строки (массив объектов с КБЖУ и meal_type).
+    items_json = Column(Text)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)

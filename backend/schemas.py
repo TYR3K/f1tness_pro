@@ -586,3 +586,59 @@ class AdaptiveResultOut(BaseModel):
     avg_intake: Optional[int] = None             # средний дневной калораж, ккал
     days_used: int = 0                           # охват данных в днях
     explanation: str                             # пояснение результата (RU/EN)
+
+
+# --------------------------------------------------------------------------- #
+#  Шаблоны питания (Этап 4)
+# --------------------------------------------------------------------------- #
+class TemplateItem(BaseModel):
+    """Одно блюдо внутри шаблона питания (с КБЖУ и опциональным приёмом пищи).
+
+    meal_type указывается у блюда в day-шаблоне (чтобы при применении блюдо
+    попало в нужный приём пищи); для dish/meal-шаблонов обычно None.
+    """
+
+    dish_name: str
+    calories: int
+    proteins: float
+    fats: float
+    carbs: float
+    meal_type: Optional[str] = None              # breakfast|lunch|dinner|snack|None
+
+
+class TemplateSaveIn(BaseModel):
+    """Запрос на сохранение шаблона питания."""
+
+    name: str                                    # имя шаблона
+    template_type: str                           # "dish" | "meal" | "day"
+    meal_type: Optional[str] = None              # приём пищи по умолчанию (или None)
+    items: List[TemplateItem] = []               # блюда шаблона
+
+
+class TemplateOut(BaseModel):
+    """Шаблон питания, отдаваемый клиенту (с распарсенными блюдами)."""
+
+    id: int
+    name: str
+    template_type: str                           # "dish" | "meal" | "day"
+    meal_type: Optional[str] = None              # приём пищи по умолчанию (или None)
+    items: List[TemplateItem] = []               # блюда шаблона
+
+
+class TemplateListOut(BaseModel):
+    """Список шаблонов питания пользователя."""
+
+    items: List[TemplateOut] = []
+
+
+class TemplateApplyIn(BaseModel):
+    """Запрос на применение шаблона к конкретной дате дневника."""
+
+    date: str                                    # ISO-дата "YYYY-MM-DD"
+    meal_type: Optional[str] = None              # переопределение приёма пищи (или None)
+
+
+class CopyYesterdayIn(BaseModel):
+    """Запрос на копирование записей дневника со вчера на указанную дату."""
+
+    date: str                                    # ISO-дата "YYYY-MM-DD" (целевой день)
