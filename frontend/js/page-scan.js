@@ -78,6 +78,31 @@
     token: 0,             // монотонный токен запроса камеры (отбрасываем устаревшие)
   };
 
+  // Ключ localStorage: пользователь хотя бы раз успешно включил камеру.
+  // Пока флаг НЕ выставлен — первый визит НЕ дёргает getUserMedia автоматически,
+  // а показывает нейтральную заглушку с кнопкой «Включить камеру» (task 1).
+  var CAM_OK_KEY = "scan_cam_ok";
+
+  // Считывает флаг «камера уже разрешалась» (best-effort — localStorage может
+  // быть недоступен в приватном режиме / вебвью).
+  function camPreviouslyGranted() {
+    try {
+      return window.localStorage && localStorage.getItem(CAM_OK_KEY) === "1";
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Помечает камеру как успешно включённую (после первого удачного getUserMedia),
+  // чтобы при следующих визитах открывать поток сразу.
+  function markCamGranted() {
+    try {
+      if (window.localStorage) localStorage.setItem(CAM_OK_KEY, "1");
+    } catch (e) {
+      /* игнорируем — недоступность localStorage не критична */
+    }
+  }
+
   // Поддерживается ли получение видеопотока камеры в этом окружении.
   function cameraSupported() {
     return !!(
@@ -157,7 +182,7 @@
     state.result = null;
     state.base = null;
     state.edited = null;
-    state.mealType = "breakfast";
+    state.mealType = defaultMealTypeByHour();
     render();
   }
 
@@ -198,6 +223,63 @@
   function mealLabel(type) {
     if (App && typeof App.mealLabel === "function") return App.mealLabel(type);
     return type;
+  }
+
+  // Приём пищи по умолчанию исходя из локального часа: до 11 — завтрак,
+  // 11–16 — обед, 16–22 — ужин, иначе — перекус. Используется как разумное
+  // начальное значение фото-потока (голос берёт meal_type от бэкенда).
+  function defaultMealTypeByHour() {
+    var h = new Date().getHours();
+    if (h < 11) return "breakfast";
+    if (h < 16) return "lunch";
+    if (h < 22) return "dinner";
+    return "snack";
+  }
+
+  // Названия месяцев для человекочитаемой дады цели (task 5).
+  var MONTHS_RU_SCAN = [
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+  ];
+  var MONTHS_EN_SCAN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+
+  // Целевая дата добавления записи (task 5): читаем App.state.scanDate,
+  // выставленную FAB-меню дневника; при отсутствии/некорректном значении —
+  // сегодняшняя дата. НЕ очищаем здесь (чистим в onHide).
+  function targetDate() {
+    var d = App.state && App.state.scanDate;
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(String(d))) return String(d);
+    return App.todayStr();
+  }
+
+  // Человекочитаемая подпись даты цели ("18 июня 2026" | "18 June 2026").
+  function humanScanDate(isoDate) {
+    var parts = String(isoDate).split("-");
+    var y = parseInt(parts[0], 10);
+    var m = parseInt(parts[1], 10) - 1;
+    var d = parseInt(parts[2], 10);
+    if (isNaN(y) || isNaN(m) || isNaN(d) || !MONTHS_RU_SCAN[m]) return isoDate;
+    return L(
+      d + " " + MONTHS_RU_SCAN[m] + " " + y,
+      d + " " + MONTHS_EN_SCAN[m] + " " + y
+    );
+  }
+
+  // HTML подсказки о целевой дате: показываем ТОЛЬКО когда цель != сегодня.
+  // Иначе "" (запись уйдёт в сегодняшний день — подсказка не нужна).
+  function scanDateHintHtml() {
+    var d = targetDate();
+    if (d === App.todayStr()) return "";
+    return (
+      '<p class="scan-cam-date">' +
+        "📅 " +
+        esc(L("Добавится в день: ", "Will be added to: ")) +
+        esc(humanScanDate(d)) +
+      "</p>"
+    );
   }
 
   // Короткая локализованная подпись канонической единицы измерения.
@@ -364,9 +446,16 @@
       renderUploadFallback();
       return;
     }
-    // Рисуем каркас живого экрана сразу (с нейтральной подложкой видео), затем
-    // асинхронно запрашиваем поток. При отказе/ошибке — переключаемся на фолбэк.
-    renderCamera();
+    // ПЕРВЫЙ ВИЗИТ (флаг scan_cam_ok не выставлен): не дёргаем getUserMedia сами —
+    // показываем каркас камеры с нейтральной заглушкой и кнопкой «Включить
+    // камеру». Поток запросим только по явному тапу пользователя (task 1).
+    if (!camPreviouslyGranted()) {
+      renderCamera(true);
+      return;
+    }
+    // Камера уже разрешалась ранее — рисуем каркас и сразу запрашиваем поток.
+    // При отказе/ошибке — переключаемся на фолбэк.
+    renderCamera(false);
     startCamera();
   }
 
@@ -441,8 +530,50 @@
   // Рисует каркас: видео-окно с нейтральной подложкой (поток подключается в
   // startCamera), подсказку «нажмите 📷 в меню», счётчик, кнопку голоса и
   // вторичную ссылку «Загрузить из галереи» (открывает скрытый input).
-  function renderCamera() {
+  //   needsEnable=true — первый визит: показываем заглушку + кнопку «Включить
+  //   камеру» вместо автозапуска потока (task 1). Иначе — обычный живой экран.
+  function renderCamera(needsEnable) {
     cam.active = true;
+
+    // Целевая дата добавления (task 5): если отличается от сегодня — показываем
+    // подсказку прямо на главном экране камеры, чтобы пользователь понимал,
+    // что снимок уйдёт в другой день.
+    var dateHintHtml = scanDateHintHtml();
+
+    // Окно камеры. На ПЕРВОМ визите (needsEnable) вместо живого видео рисуем
+    // нейтральную заглушку .scan-cam-enable с кнопкой «Включить камеру» (task 1);
+    // <video> добавим динамически после успешного getUserMedia (revealCameraLive).
+    // При активной камере — сразу окно с <video> и круглый затвор под ним (task 2).
+    var windowHtml = needsEnable
+      ? '<div class="scan-cam-enable" id="scan-cam-enable">' +
+          '<div class="scan-cam-enable__icon" aria-hidden="true">📷</div>' +
+          '<p class="scan-cam-enable__text">' +
+            esc(L(
+              "Включите камеру, чтобы снять блюдо прямо в приложении.",
+              "Enable the camera to capture your dish right in the app."
+            )) +
+          "</p>" +
+          '<span class="scan-cam-enable__btn">' +
+            "📷 " + esc(L("Включить камеру", "Enable camera")) +
+          "</span>" +
+        "</div>"
+      : '<div class="scan-cam-window">' +
+          '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>' +
+        "</div>" +
+        // Круглый затвор (task 2): тот же спуск, что и тап по вкладке-камере.
+        '<button type="button" class="scan-cam-shutter" id="scan-cam-shutter" ' +
+          'aria-label="' + esc(L("Снять кадр", "Capture")) + '"></button>';
+
+    // Подсказка под окном: при активной камере напоминаем про затвор; на первом
+    // визите вспомогательный текст уже внутри заглушки — подсказку не дублируем.
+    var hintHtml = needsEnable
+      ? ""
+      : '<p class="scan-cam-hint">' +
+          esc(L(
+            "Наведите на блюдо и нажмите кнопку затвора, чтобы снять",
+            "Point at your dish and tap the shutter button to capture"
+          )) +
+        "</p>";
 
     viewEl.innerHTML =
       '<section class="page page-scan">' +
@@ -451,16 +582,10 @@
             esc(L("Определение еды", "Food recognition")) +
           "</h1>" +
         "</header>" +
+        dateHintHtml +
         '<div class="card scan-cam-card">' +
-          '<div class="scan-cam-window">' +
-            '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>' +
-          "</div>" +
-          '<p class="scan-cam-hint">' +
-            esc(L(
-              "Наведите на блюдо и нажмите 📷 в меню, чтобы снять",
-              "Point at your dish and tap 📷 in the menu to capture"
-            )) +
-          "</p>" +
+          windowHtml +
+          hintHtml +
           // Счётчик бесплатных сканирований (заполняется асинхронно из state.scans).
           '<div id="scan-counter-slot">' + scanCounterHtml() + "</div>" +
           '<div class="scan-cam-actions">' +
@@ -477,6 +602,27 @@
           '<input type="file" id="scan-file" accept="image/*" capture="environment" hidden>' +
         "</div>" +
       "</section>";
+
+    // Заглушка «Включить камеру» (первый визит): по тапу превращаем плейсхолдер
+    // в живое окно с <video> + затвором, затем запрашиваем поток. При успехе
+    // startCamera запомнит разрешение (scan_cam_ok) — дальше камера сразу.
+    var enableBtn = viewEl.querySelector("#scan-cam-enable");
+    if (enableBtn) {
+      enableBtn.addEventListener("click", function () {
+        haptic("light");
+        revealCameraLive();
+        startCamera();
+      });
+    }
+
+    // Круглый затвор (task 2): тот же спуск, что и тап по вкладке-камере.
+    var shutterBtn = viewEl.querySelector("#scan-cam-shutter");
+    if (shutterBtn) {
+      shutterBtn.addEventListener("click", function () {
+        haptic("medium");
+        window.PageScan.capture();
+      });
+    }
 
     var fileInput = viewEl.querySelector("#scan-file");
 
@@ -538,6 +684,10 @@
         cam.stream = stream;
         cam.starting = false;
 
+        // Успешно получили поток — запоминаем разрешение камеры, чтобы при
+        // следующих визитах открывать её сразу, без кнопки «Включить» (task 1).
+        markCamGranted();
+
         var videoEl = viewEl && viewEl.querySelector("#scan-cam-video");
         if (!videoEl) {
           // Видео-узла нет (DOM сменился) — поток не к чему подключать.
@@ -546,6 +696,10 @@
           return;
         }
         cam.video = videoEl;
+
+        // Если поток запросили по кнопке «Включить камеру» (первый визит) —
+        // прячем заглушку и показываем круглый затвор поверх живого видео.
+        revealCameraLive();
         try {
           videoEl.srcObject = stream;
         } catch (e) {
@@ -574,6 +728,48 @@
         camStopStream();
         renderUploadFallback();
       });
+  }
+
+  // Превращает заглушку первого визита (.scan-cam-enable) в живое окно камеры:
+  // окно с <video> + подсказка + круглый затвор (task 1/2). Идемпотентна: если
+  // заглушки нет (камера уже была активна) — ничего не делает. <video> получит
+  // поток в startCamera; сам поток здесь не запрашиваем.
+  function revealCameraLive() {
+    if (!viewEl) return;
+    var placeholder = viewEl.querySelector("#scan-cam-enable");
+    if (!placeholder || !placeholder.parentNode) return; // уже в живом режиме
+
+    // Собираем окно с видео.
+    var win = document.createElement("div");
+    win.className = "scan-cam-window";
+    win.innerHTML =
+      '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>';
+
+    // Круглый затвор (task 2).
+    var shutterBtn = document.createElement("button");
+    shutterBtn.type = "button";
+    shutterBtn.className = "scan-cam-shutter";
+    shutterBtn.id = "scan-cam-shutter";
+    shutterBtn.setAttribute("aria-label", L("Снять кадр", "Capture"));
+    shutterBtn.addEventListener("click", function () {
+      haptic("medium");
+      window.PageScan.capture();
+    });
+
+    // Подсказка под окном (про затвор).
+    var hint = document.createElement("p");
+    hint.className = "scan-cam-hint";
+    hint.textContent = L(
+      "Наведите на блюдо и нажмите кнопку затвора, чтобы снять",
+      "Point at your dish and tap the shutter button to capture"
+    );
+
+    // Заменяем заглушку окном + затвором + подсказкой (в том же месте).
+    var parent = placeholder.parentNode;
+    parent.insertBefore(win, placeholder);
+    parent.insertBefore(shutterBtn, placeholder);
+    parent.insertBefore(hint, placeholder);
+    parent.removeChild(placeholder);
   }
 
   // Останавливает «сырой» MediaStream (когда он не сохранён в cam.stream).
@@ -769,6 +965,8 @@
           "</p>" +
           '<div class="meal-chips" id="scan-meals">' + chips + "</div>" +
         "</div>" +
+        // Подсказка о целевой дате (task 5) — только если она отличается от сегодня.
+        scanDateHintHtml() +
         '<button type="button" class="btn btn-cta btn-block" id="scan-add">' +
           esc(L("Добавить в рацион", "Add to diary")) +
         "</button>" +
@@ -1061,6 +1259,25 @@
       });
   }
 
+  // Мост «после добавления -> дневник» (task 3). Освобождает ресурсы сканера
+  // (камера/превью) и переходит на вкладку дневника, чтобы пользователь увидел
+  // итог дня. Если навигация недоступна — мягкий откат к главному экрану сканера.
+  function goToDiaryAfterAdd() {
+    revokePreview();
+    camStopStream();
+    state.file = null;
+    state.result = null;
+    state.base = null;
+    state.edited = null;
+    if (App && typeof App.navigate === "function") {
+      App.navigate("diary");
+    } else {
+      // Навигация недоступна — возвращаемся на главный экран сканера.
+      state.mealType = defaultMealTypeByHour();
+      render();
+    }
+  }
+
   // Добавление отредактированного блюда в дневник за сегодня.
   function addToDiary() {
     if (!state.edited) return;
@@ -1076,8 +1293,9 @@
     }
 
     // Формируем запись строго по форме DiaryEntryIn — из ОТРЕДАКТИРОВАННЫХ значений.
+    // Дата цели: App.state.scanDate (из FAB дневника) либо сегодня (task 5).
     var entry = {
-      date: App.todayStr(),
+      date: targetDate(),
       meal_type: state.mealType,
       dish_name: dishName,
       calories: Math.round(num(e.calories)),
@@ -1103,11 +1321,17 @@
         toast(
           L("Добавлено в рацион: ", "Added to diary: ") + mealLabel(state.mealType)
         );
-        // Инвалидируем кэш дневника на сегодня, чтобы вкладка «Мой рацион» обновилась.
+        // Инвалидируем кэш дневника за дату записи, чтобы вкладка «Мой рацион» обновилась.
         if (App.state && App.state.diaryByDate) {
           delete App.state.diaryByDate[entry.date];
         }
-        reset();
+        // Цель использована — очищаем, чтобы следующий скан шёл в сегодня.
+        if (App.state) App.state.scanDate = null;
+        // МОСТ СКАН -> ДНЕВНИК (task 3): вместо тихого возврата к камере ведём
+        // пользователя в дневник, чтобы он сразу увидел итог/прогресс дня.
+        // Не вызываем reset() (он бы зря переоткрыл камеру) — освобождаем ресурсы
+        // и чистим состояние; navigate("diary") запустит onHide (камера/микрофон).
+        goToDiaryAfterAdd();
       })
       .catch(function (err) {
         haptic("error");
@@ -1682,6 +1906,8 @@
           "</div>" +
           '<div class="scan-voice-items" id="scan-voice-items">' + rowsHtml + "</div>" +
         "</div>" +
+        // Подсказка о целевой дате (task 5) — только если она отличается от сегодня.
+        scanDateHintHtml() +
         '<button type="button" class="btn btn-cta btn-block" id="scan-voice-add">' +
           esc(L("Добавить в рацион", "Add to diary")) +
         "</button>" +
@@ -1814,7 +2040,8 @@
     }
 
     // Готовим записи строго по DiaryEntryIn; пропускаем строки без названия.
-    var date = App.todayStr();
+    // Дата цели: App.state.scanDate (из FAB дневника) либо сегодня (task 5).
+    var date = targetDate();
     var mealType = voice.mealType;
     var entries = [];
     for (var i = 0; i < items.length; i++) {
@@ -1853,12 +2080,16 @@
         toast(
           L("Добавлено в рацион: ", "Added to diary: ") + mealLabel(mealType)
         );
-        // Инвалидируем кэш дневника на сегодня.
+        // Инвалидируем кэш дневника за дату записи.
         if (App.state && App.state.diaryByDate) {
           delete App.state.diaryByDate[date];
         }
+        // Цель использована — очищаем, чтобы следующий скан шёл в сегодня.
+        if (App.state) App.state.scanDate = null;
+        // МОСТ ГОЛОС -> ДНЕВНИК (task 3): после добавления ведём в дневник,
+        // чтобы пользователь сразу увидел итог/прогресс дня.
         voiceReset();
-        render();
+        goToDiaryAfterAdd();
       })
       .catch(function (err) {
         haptic("error");
@@ -1944,7 +2175,8 @@
       state.result = null;
       state.base = null;
       state.edited = null;
-      state.mealType = "breakfast";
+      // Приём пищи по умолчанию — по локальному часу (task 4), не всегда «завтрак».
+      state.mealType = defaultMealTypeByHour();
       // Сбрасываем голосовой поток и освобождаем микрофон, если он был занят.
       voiceReset();
 
@@ -1975,6 +2207,9 @@
       camStopStream();
       // Останавливаем активную запись/поток (микрофон) при уходе со страницы.
       voiceStopStream();
+      // Целевую дату используем один раз: чистим при уходе, чтобы следующий
+      // вход на сканер (без FAB) добавлял записи в сегодня (task 5).
+      if (App.state) App.state.scanDate = null;
     },
     // ПУБЛИЧНЫЙ СПУСК ЗАТВОРА. Вызывается из app.js при повторном тапе по уже
     // активной центральной кнопке-камере. Поведение:

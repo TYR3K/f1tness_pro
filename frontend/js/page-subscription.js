@@ -50,8 +50,9 @@
       key: "yearly",
       title: ["Годовой", "Yearly"],
       icon: "🗓️",
-      note: ["Выгоднее на длинной дистанции", "Better value over time"],
-      badge: ["Выгодно", "Best value"]
+      note: ["Выгоднее на длинной дистанции", "Better value over time"]
+      // Бейдж «Выгодно»/«Best value» и подсветка sub-card--best добавляются
+      // динамически в renderTariffs (годовой всегда самый выгодный вариант).
     },
     {
       key: "lifetime",
@@ -70,11 +71,21 @@
       "Учёт добавок, напоминания и AI-советы",
       "Supplement tracking, reminders and AI tips"
     ],
-    ["Безлимитные сканирования еды по фото", "Unlimited food photo scans"],
     [
-      "AI-подсказки «Что съесть?» под вашу цель",
-      "AI “What to eat?” tips for your goal"
-    ]
+      "Распознавание еды по фото и голосу без лимита",
+      "Unlimited food recognition by photo and voice"
+    ],
+    [
+      "Вес и адаптивные калории под ваш прогресс",
+      "Weight tracking and adaptive calories for your progress"
+    ],
+    [
+      "Планировщик меню и AI «Что съесть?»",
+      "Meal planner and AI “What to eat?”"
+    ],
+    ["Недельный отчёт о прогрессе", "Weekly progress report"],
+    ["Трекер цикла", "Cycle tracker"],
+    ["Фото-прогресс", "Photo progress"]
   ];
 
   // Внутреннее состояние контроллера (живёт между методами через замыкание).
@@ -167,6 +178,28 @@
     if (!t) return null;
     var stars = Number(t.stars);
     return isFinite(stars) ? stars : null;
+  }
+
+  /**
+   * Считает «экономику» годового тарифа относительно месячного:
+   *   - perMonth — сколько ⭐/мес выходит по годовому (yearly.stars / 12);
+   *   - savePct  — процент экономии против 12× месячных.
+   * Возвращает null, если данных недостаточно или экономии нет
+   * (тогда никакой рекламной подписи не показываем — честно).
+   */
+  function yearlyEconomy(tariffs) {
+    var yearly = tariffStars(tariffs, "yearly");
+    var monthly = tariffStars(tariffs, "monthly");
+    if (yearly == null || yearly <= 0) return null;
+
+    var perMonth = Math.round(yearly / 12);
+    var savePct = null;
+    if (monthly != null && monthly > 0) {
+      var fullYear = monthly * 12;
+      savePct = Math.round((1 - yearly / fullYear) * 100);
+      if (savePct <= 0) savePct = null; // экономии нет — не завышаем
+    }
+    return { perMonth: perMonth, savePct: savePct };
   }
 
   /* =====================================================================
@@ -317,20 +350,61 @@
     var s = sub();
     var tariffs = s.tariffs || {};
 
+    // «Экономика» годового тарифа (⭐/мес и процент экономии) — для рекламных
+    // подписей и подсветки самой выгодной карточки.
+    var economy = yearlyEconomy(tariffs);
+
     // Собираем только те тарифы, для которых сервер вернул цену.
     var cards = [];
     TARIFF_META.forEach(function (meta) {
       var stars = tariffStars(tariffs, meta.key);
       if (stars == null) return; // тариф недоступен — пропускаем
 
-      var badgeHtml = meta.badge
-        ? '<span class="sub-tariff__badge">' +
-          esc(pick(meta.badge[0], meta.badge[1])) +
-          "</span>"
+      var isYearly = meta.key === "yearly";
+      // Подсвечиваем годовой как «самый выгодный» вариант.
+      var best = isYearly;
+
+      // Бейдж: для годового — «Выгодно» (best value), иначе — из метаданных.
+      var badgeText = best
+        ? pick("Выгодно", "Best value")
+        : meta.badge
+        ? pick(meta.badge[0], meta.badge[1])
+        : null;
+      var badgeHtml = badgeText
+        ? '<span class="sub-tariff__badge">' + esc(badgeText) + "</span>"
         : "";
 
+      // Для годового тарифа — подпись «≈ N⭐/мес» и «экономия M%».
+      var econHtml = "";
+      if (isYearly && economy) {
+        var perMonthLine =
+          '<span class="sub-tariff__permonth">' +
+          esc(
+            pick(
+              "≈ " + economy.perMonth + " ⭐/мес",
+              "≈ " + economy.perMonth + " ⭐/mo"
+            )
+          ) +
+          "</span>";
+        var saveLine =
+          economy.savePct != null
+            ? '<span class="sub-tariff__save">' +
+              esc(
+                pick(
+                  "экономия " + economy.savePct + "%",
+                  "save " + economy.savePct + "%"
+                )
+              ) +
+              "</span>"
+            : "";
+        econHtml =
+          '<div class="sub-tariff__econ">' + perMonthLine + saveLine + "</div>";
+      }
+
       cards.push(
-        '<article class="card sub-tariff" data-tariff="' +
+        '<article class="card sub-tariff' +
+          (best ? " sub-card--best" : "") +
+          '" data-tariff="' +
           esc(meta.key) +
           '">' +
           '<div class="sub-tariff__head">' +
@@ -345,6 +419,7 @@
           '<div class="sub-tariff__note">' +
           esc(pick(meta.note[0], meta.note[1])) +
           "</div>" +
+          econHtml +
           "</div>" +
           '<div class="sub-tariff__price">' +
           esc(String(stars)) +
@@ -543,12 +618,16 @@
 
       App.scrollTop();
 
-      // Кнопка «Назад» -> возврат в аккаунт.
+      // Кнопка «Назад» -> возврат на страницу-источник (App.state.subOrigin),
+      // откуда открыли подписку/пейвол. Фолбэк — «account». Это позволяет,
+      // например, вернуться в «Тренировки», если пейвол открыли оттуда.
       var back = viewEl.querySelector("#subBack");
       if (back) {
         back.addEventListener("click", function () {
           haptic("light");
-          App.navigate("account");
+          var origin =
+            (App.state && App.state.subOrigin) || "account";
+          App.navigate(origin);
         });
       }
 

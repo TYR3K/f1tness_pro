@@ -711,6 +711,12 @@
     var isoEl = state.viewEl && state.viewEl.querySelector(".wk-datebar__iso");
     if (dateEl) dateEl.textContent = humanDate(state.date);
     if (isoEl) isoEl.textContent = state.date;
+
+    // Кнопку «следующий день» ▶ блокируем, если уже на сегодня или в будущем:
+    // заглядывать вперёд по датам нельзя (как в дневнике).
+    var nextBtn =
+      state.viewEl && state.viewEl.querySelector('.wk-datebar__nav[data-nav="next"]');
+    if (nextBtn) nextBtn.disabled = state.date >= App.todayStr();
   }
 
   /**
@@ -1146,6 +1152,9 @@
       viewEl.innerHTML = pageTemplate();
 
       bindEvents();
+
+      // Изначально дата = сегодня, поэтому сразу блокируем стрелку «вперёд».
+      updateDateLabel();
 
       // Параллельно загружаем оба раздела.
       loadWorkouts();

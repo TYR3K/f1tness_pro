@@ -299,6 +299,11 @@
       App.escapeHtml(L("Пол", "Gender")) +
       "</span>" +
       '<select class="field__input" id="accGender">' +
+      // Пустой вариант по умолчанию: пол не выбран, пока пользователь не укажет
+      // явно (бэкенд оставляет gender NULL, чтобы не искажать расчёт калорий).
+      '<option value="">' +
+      App.escapeHtml(L("— выберите —", "— select —")) +
+      "</option>" +
       '<option value="male">' +
       App.escapeHtml(L("Мужской", "Male")) +
       "</option>" +
@@ -693,7 +698,9 @@
     if (p.weight != null) els.weight.value = p.weight;
     if (p.height != null) els.height.value = p.height;
     if (p.age != null) els.age.value = p.age;
-    if (p.gender) els.gender.value = p.gender === "female" ? "female" : "male";
+    // Пол заполняем только если он задан в профиле; иначе оставляем пустой
+    // вариант «— выберите —» (не подставляем «Мужской» по умолчанию).
+    if (p.gender === "female" || p.gender === "male") els.gender.value = p.gender;
 
     // Уровень активности: выбираем ближайшее доступное значение из списка.
     if (p.activity_level != null) {
@@ -3504,6 +3511,21 @@
             )
           );
         });
+
+      // По внешнему флагу разворачиваем аккордеон «Мои параметры и цель» и
+      // прокручиваем к нему (например, при переходе с просьбой заполнить профиль).
+      if (App.state.openProfileFold) {
+        var profFold = viewEl.querySelector("#accFoldProfile");
+        if (profFold) {
+          profFold.classList.add("acc-fold--open");
+          var profBody = profFold.querySelector(".acc-fold__body");
+          if (profBody) profBody.hidden = false;
+          if (typeof profFold.scrollIntoView === "function") {
+            profFold.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
+        App.state.openProfileFold = false;
+      }
 
       // Настройки вечерней сводки грузятся при открытии листа настроек
       // (openSettingsSheet -> loadSummary), а не сразу при показе страницы.

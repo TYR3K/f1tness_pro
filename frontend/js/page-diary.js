@@ -346,13 +346,19 @@
         "</div>" +
         "</div>";
     } else {
-      // Цель не задана — подсказываем перейти в аккаунт.
+      // Цель не задана — короткая подсказка + кнопка перехода к настройке цели.
+      // Кнопка (data-goto-goal) раскрывает свёртку профиля в «Мой аккаунт».
       progressBlock =
-        '<p class="diary-total__nogoal">' +
+        '<div class="diary-total__nogoal">' +
+        '<p class="diary-total__nogoal-hint">' +
         App.escapeHtml(pick(
-          "Цель калорий не задана. Установите её в разделе «Мой аккаунт».",
-          "Calorie goal is not set. Set it in the “My Account” section."
-        )) + "</p>";
+          "Цель калорий пока не задана.",
+          "Your calorie goal isn’t set yet."
+        )) + "</p>" +
+        '<button type="button" class="diary-total__nogoal-cta" data-goto-goal>' +
+        App.escapeHtml(pick("Настроить цель →", "Set your goal →")) +
+        "</button>" +
+        "</div>";
     }
 
     // Главное число карточки: при наличии тренировок показываем net,
@@ -406,6 +412,8 @@
    * @returns {string}
    */
   function dateBarHtml() {
+    // ▶ «следующий день» недоступен для будущих дат (как и мини-календарь).
+    var nextDisabled = state.date >= App.todayStr();
     return (
       '<div class="diary-datebar-wrap">' +
       '<div class="diary-datebar card">' +
@@ -417,6 +425,7 @@
       '<span class="diary-datebar__iso">' + App.escapeHtml(state.date) + "</span>" +
       "</button>" +
       '<button class="diary-datebar__nav" type="button" data-nav="next" ' +
+      (nextDisabled ? "disabled " : "") +
       'aria-label="' + App.escapeHtml(pick("Следующий день", "Next day")) + '">▶</button>' +
       "</div>" +
       '<div id="diary-cal" class="diary-datebar__cal"></div>' +
@@ -475,6 +484,17 @@
     var delButtons = content.querySelectorAll(".diary-entry__del");
     for (var k = 0; k < delButtons.length; k++) {
       delButtons[k].addEventListener("click", onDeleteClick);
+    }
+
+    // Кнопка «Настроить цель →» (когда цель не задана) — уводит в аккаунт
+    // и просит раскрыть свёртку профиля через общий флаг App.state.
+    var goalBtn = content.querySelector("[data-goto-goal]");
+    if (goalBtn) {
+      goalBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (App.state) App.state.openProfileFold = true;
+        if (App && typeof App.navigate === "function") App.navigate("account");
+      });
     }
 
     // Если перед перезагрузкой была открыта панель — восстанавливаем её.
@@ -717,7 +737,9 @@
       '<div class="diary-sheet__group-title">' +
       App.escapeHtml(pick("Добавить", "Add")) + "</div>" +
       sheetItemHtml("photo", "📷", pick("Фото", "Photo"), false) +
-      sheetItemHtml("voice", "🎤", pick("Голос", "Voice"), false) +
+      // Голос — премиум-функция (бэкенд отдаёт 402 для free): показываем замок,
+      // но пункт остаётся тапабельным (маршрутизируется в paywall на экране скана).
+      sheetItemHtml("voice", "🎤", pick("Голос", "Voice"), locked) +
       sheetItemHtml("manual", "✍️", pick("Вручную", "Manual"), false) +
       "</div>" +
       '<div class="diary-sheet__group">' +
@@ -796,12 +818,18 @@
     closeSheet();
 
     if (action === "photo") {
+      // Логируем скан в выбранный в дневнике день (page-scan читает scanDate).
+      if (App.state) App.state.scanDate = state.date;
       if (App && typeof App.navigate === "function") App.navigate("scan");
       return;
     }
     if (action === "voice") {
-      // Просим экран определения открыться сразу в режиме голоса.
-      if (App.state) App.state.scanMode = "voice";
+      // Просим экран определения открыться сразу в режиме голоса
+      // и логировать в текущую выбранную дату дневника.
+      if (App.state) {
+        App.state.scanMode = "voice";
+        App.state.scanDate = state.date;
+      }
       if (App && typeof App.navigate === "function") App.navigate("scan");
       return;
     }
@@ -2752,6 +2780,9 @@
     var isoEl = state.viewEl && state.viewEl.querySelector(".diary-datebar__iso");
     if (dateEl) dateEl.textContent = humanDate(state.date);
     if (isoEl) isoEl.textContent = state.date;
+    // ▶ «следующий день» блокируем для будущих дат (пересчитываем при смене даты).
+    var nextBtn = state.viewEl && state.viewEl.querySelector('.diary-datebar__nav[data-nav="next"]');
+    if (nextBtn) nextBtn.disabled = state.date >= App.todayStr();
   }
 
   /**
@@ -2759,6 +2790,8 @@
    * @param {number} delta
    */
   function changeDate(delta) {
+    // Не уходим в будущее: ▶ должен быть недоступен для дат >= сегодня.
+    if (delta > 0 && state.date >= App.todayStr()) return;
     state.date = shiftDate(state.date, delta);
     // При смене даты закрываем открытую панель действий и календарь.
     state.panel = null;

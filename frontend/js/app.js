@@ -872,9 +872,21 @@
     if (btn) {
       btn.addEventListener("click", function () {
         App.haptic("light");
-        App.navigate("subscription");
+        App.goSubscription();
       });
     }
+  };
+
+  /**
+   * Открывает экран подписки, запомнив страницу, откуда пришли, в
+   * App.state.subOrigin — чтобы «Назад» на экране подписки вернул обратно.
+   * Если мы уже на подписке — origin не перезаписываем.
+   */
+  App.goSubscription = function () {
+    if (App._current && App._current !== "subscription") {
+      App.state.subOrigin = App._current;
+    }
+    App.navigate("subscription");
   };
 
   /**
@@ -975,9 +987,41 @@
    * Делается мягко: при отсутствии данных просто используется дизайн по умолчанию.
    */
   function applyTheme() {
+    // Светлая пастельная тема: фиксируем схему через <meta name="color-scheme">,
+    // чтобы вебвью не переключал элементы формы в тёмный режим. Добавляем тег,
+    // если его нет в разметке (index.html может не содержать его).
+    try {
+      var meta = document.querySelector('meta[name="color-scheme"]');
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.setAttribute("name", "color-scheme");
+        meta.setAttribute("content", "light");
+        var head = document.head || document.getElementsByTagName("head")[0];
+        if (head) {
+          head.appendChild(meta);
+        }
+      }
+    } catch (e) {
+      /* color-scheme — не критично */
+    }
+
     if (!App.tg) {
       return;
     }
+
+    // Красим шапку и фон Telegram под пастельный --bg (#FAF7F2), чтобы
+    // системная область над мини-приложением совпадала с дизайном.
+    try {
+      if (typeof App.tg.setHeaderColor === "function") {
+        App.tg.setHeaderColor("#FAF7F2");
+      }
+      if (typeof App.tg.setBackgroundColor === "function") {
+        App.tg.setBackgroundColor("#FAF7F2");
+      }
+    } catch (e) {
+      /* цвета Telegram — не критично, игнорируем */
+    }
+
     try {
       // Стабильная высота вьюпорта Telegram для корректной верстки.
       var stable = App.tg.viewportStableHeight;
@@ -1134,8 +1178,17 @@
         return App.refreshSubscription();
       })
       .then(function () {
-        // Стартовая страница — «Определение» (после загрузки статуса подписки).
-        App.navigate("scan");
+        // Стартовая страница. Первый запуск (нет цели по калориям в профиле) —
+        // мастер онбординга; иначе сразу дневник. Так мы НЕ открываем камеру
+        // на старте (иначе Telegram сразу спрашивает разрешение камеры).
+        if (
+          !App.state.profile ||
+          App.state.profile.daily_goal_kcal == null
+        ) {
+          App.navigate("onboarding");
+        } else {
+          App.navigate("diary");
+        }
       });
   };
 

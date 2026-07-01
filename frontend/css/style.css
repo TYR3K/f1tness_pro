@@ -7468,3 +7468,452 @@ body::-webkit-scrollbar-thumb:hover {
   opacity: .35;
   cursor: default;
 }
+
+/* ============================================================
+   ОНБОРДИНГ-ВИЗАРД (onb-*)
+   Полноэкранный пошаговый мастер. Пастельная палитра и токены (:root):
+   фон --bg, карточки --card, CTA --cta, поля как .field.
+   ============================================================ */
+
+/* Полноэкранный контейнер: колонка, центрируем содержимое по вертикали. */
+.onb-wizard {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) 20px
+    calc(var(--safe-bottom) + 24px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  animation: fadeIn .28s ease;
+}
+
+/* Один шаг мастера: колонка, растягивается на всю доступную высоту,
+   содержимое центрируем, а onb-actions прижимаем книзу. */
+.onb-step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+  max-width: 440px;
+  width: 100%;
+  margin: 0 auto;
+  animation: fadeIn .24s ease;
+}
+
+/* Заголовок шага. */
+.onb-title {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  margin: 0;
+}
+
+/* Подзаголовок/описание под заголовком (необязательный). */
+.onb-subtitle {
+  font-size: 15px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.5;
+  margin: -8px 0 0;
+}
+
+/* Поле шага: подпись + input, как .field. */
+.onb-field {
+  display: block;
+  margin: 0;
+}
+
+.onb-field__label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* Ввод внутри шага — как .field__input. */
+.onb-field__input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--white);
+  color: var(--text);
+  outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.onb-field__input:focus {
+  border-color: var(--cta);
+  box-shadow: 0 0 0 3px rgba(125, 155, 118, .18);
+}
+
+/* Стрелка для select внутри шага (как select.field__input). */
+select.onb-field__input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='%238A8178' d='M1 1l5 5 5-5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  padding-right: 38px;
+}
+
+/* Выбор пола: две большие кнопки бок о бок. */
+.onb-choices {
+  display: flex;
+  gap: 12px;
+}
+
+/* Одна кнопка пола: большая, карточкой, наследует вид .field__input. */
+.onb-choice {
+  flex: 1;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .18s ease, background .18s ease,
+    box-shadow .18s ease, transform .08s ease;
+}
+
+.onb-choice:active {
+  transform: scale(.98);
+}
+
+/* Крупная эмодзи-иконка над подписью. */
+.onb-choice__icon {
+  font-size: 30px;
+  line-height: 1;
+}
+
+/* Выбранная кнопка пола — зелёная рамка/подсветка (--cta). */
+.onb-choice--on {
+  border-color: var(--cta);
+  background: rgba(125, 155, 118, .12);
+  box-shadow: 0 0 0 3px rgba(125, 155, 118, .18);
+}
+
+/* Ряд действий (обычно одна CTA + при необходимости «Назад»). */
+.onb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* Основная CTA «Далее» — как .btn .btn--cta .btn-block (52px, зелёная). */
+.onb-next {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 14px;
+  background: var(--cta);
+  color: var(--white);
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 6px 16px rgba(125, 155, 118, .28);
+  transition: background .18s ease, transform .08s ease, opacity .18s ease;
+}
+
+.onb-next:active {
+  transform: scale(.98);
+  background: var(--cta-press);
+}
+
+.onb-next:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Приглушённая ссылка «Пропустить». */
+.onb-skip {
+  align-self: center;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.onb-skip:active {
+  opacity: .7;
+}
+
+/* Индикатор шагов — ряд точек по центру. */
+.onb-dots {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.onb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: .5;
+  transition: opacity .18s ease, background .18s ease, transform .18s ease;
+}
+
+/* Активная точка — зелёная и чуть крупнее. */
+.onb-dot--active {
+  background: var(--cta);
+  opacity: 1;
+  transform: scale(1.15);
+}
+
+/* Пройденный шаг — заполненная точка (--cta), без увеличения. */
+.onb-dot--done {
+  background: var(--cta);
+  opacity: 1;
+}
+
+/* Кнопка «Назад» в мастере — приглушённая, вторичная. */
+.onb-back {
+  align-self: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.onb-back:active {
+  opacity: .7;
+}
+
+/* Финальный тумблер «Вечерняя сводка в 21:00» — карточка-переключатель. */
+.onb-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.onb-toggle--on {
+  border-color: var(--cta);
+  background: rgba(125, 155, 118, .12);
+  box-shadow: 0 0 0 3px rgba(125, 155, 118, .16);
+}
+.onb-toggle__emoji {
+  font-size: 26px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.onb-toggle__text {
+  flex: 1;
+  min-width: 0;
+}
+.onb-toggle__title {
+  display: block;
+  font-weight: 700;
+  font-size: 15px;
+}
+.onb-toggle__hint {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.onb-toggle__mark {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  font-size: 14px;
+  font-weight: 800;
+}
+.onb-toggle--on .onb-toggle__mark {
+  border-color: var(--cta);
+  background: var(--cta);
+  color: var(--white);
+}
+
+/* ============================================================
+   КАМЕРА: отложенное включение и затвор (scan-cam-*)
+   ============================================================ */
+
+/* Плейсхолдер + большая CTA «Включить камеру».
+   Заглушка выглядит как окно камеры, пока getUserMedia не запрошен. */
+.scan-cam-enable {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  width: 100%;
+  min-height: 240px;
+  padding: 28px 20px;
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--muted);
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color .18s ease, background .18s ease, transform .08s ease;
+}
+
+.scan-cam-enable:active {
+  transform: scale(.99);
+  background: var(--card);
+}
+
+/* Крупная иконка камеры в плейсхолдере. */
+.scan-cam-enable__icon {
+  font-size: 44px;
+  line-height: 1;
+  opacity: .7;
+}
+
+/* Подпись под иконкой. */
+.scan-cam-enable__text {
+  font-size: 14px;
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+/* «Кнопка»-CTA внутри плейсхолдера (визуально как .btn--cta, но inline). */
+.scan-cam-enable__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 22px;
+  border: none;
+  border-radius: 14px;
+  background: var(--cta);
+  color: var(--white);
+  font-weight: 600;
+  font-size: 16px;
+  box-shadow: 0 6px 16px rgba(125, 155, 118, .28);
+}
+
+/* Круглый затвор ~64px: белый круг с цветным кольцом, по центру. */
+.scan-cam-shutter {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin: 14px auto 0;
+  padding: 0;
+  border: 4px solid var(--cta);
+  border-radius: 50%;
+  background: var(--white);
+  box-shadow: 0 6px 16px rgba(122, 107, 90, .22);
+  cursor: pointer;
+  user-select: none;
+  transition: transform .1s ease, box-shadow .18s ease, background .15s ease;
+}
+
+.scan-cam-shutter:active {
+  transform: scale(.92);
+  background: var(--card);
+}
+
+.scan-cam-shutter:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Маленькая подпись с целевой датой съёмки (под окном/затвором). */
+.scan-cam-date {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 10px;
+}
+
+/* ============================================================
+   ПОДПИСКА: выделенный план + бейджи/экономия (sub-*)
+   Дополняет существующие .sub-* рядом с .card / .sub-tariffs.
+   ============================================================ */
+
+/* Выделенная («лучшая») карточка тарифа: подсвеченная рамка/свечение --cta. */
+.sub-card--best {
+  position: relative;
+  border: 2px solid var(--cta);
+  box-shadow: 0 8px 24px rgba(125, 155, 118, .28);
+}
+
+/* Бейдж «Выгодно» в углу выделенной карточки. */
+.sub-badge {
+  position: absolute;
+  top: -10px;
+  right: 14px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--cta);
+  color: var(--white);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  box-shadow: 0 4px 12px rgba(125, 155, 118, .3);
+}
+
+/* Строка «≈ N ⭐/мес» — приведённая к месяцу цена. */
+.sub-permonth {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* «Экономия N%» — акцентная зелёная подпись. */
+.sub-savings {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(125, 155, 118, .14);
+  color: var(--cta-press);
+  font-size: 12px;
+  font-weight: 700;
+}
