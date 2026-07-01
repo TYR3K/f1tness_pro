@@ -414,6 +414,9 @@
       // ---- ПРЕМИУМ: Трекинг цикла (контейнер заполняется в renderCycle) ----
       '<section class="cyc-card card" id="accCycleCard"></section>' +
 
+      // ---- ПРЕМИУМ: Фото-прогресс (контейнер заполняется в renderProgress) ----
+      '<section class="prog-card card" id="accProgressCard"></section>' +
+
       // ---- Карточка «Вечерняя сводка» ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
@@ -2259,6 +2262,475 @@
   }
 
   /* =====================================================================
+   *  ФОТО-ПРОГРЕСС (Этап 7)
+   *  Премиум-карточка: приватные фото прогресса (загрузка, таймлайн, сравнение
+   *  «до/после»). Файлы приватны — грузятся авторизованно как blob -> object URL,
+   *  ссылки нигде не публикуются. Object URL'ы освобождаются при уходе/перерисовке.
+   *  Префикс CSS-классов: prog-. Весь текст через L/App.pick (RU/EN).
+   * ===================================================================== */
+
+  // Форматирование ISO-даты -> "DD.MM.YYYY" для подписей фото.
+  function progFmtDate(iso) {
+    if (!iso || String(iso).length < 10) return "";
+    var p = String(iso).split("-");
+    return p[2] + "." + p[1] + "." + p[0];
+  }
+
+  // Формат веса с точностью до 0.1 кг (без хвостового ".0"), для подписей фото.
+  function progWeight(w) {
+    var n = Number(w);
+    if (!isFinite(n)) return "";
+    return String(Math.round(n * 10) / 10);
+  }
+
+  // Освобождает все object URL'ы фото (защита от утечек памяти).
+  function revokeProgressUrls() {
+    if (els && els.progressUrlMap) {
+      Object.keys(els.progressUrlMap).forEach(function (k) {
+        try {
+          URL.revokeObjectURL(els.progressUrlMap[k]);
+        } catch (e) {}
+      });
+      els.progressUrlMap = {};
+    }
+    if (els && els.progressPreviewUrl) {
+      try {
+        URL.revokeObjectURL(els.progressPreviewUrl);
+      } catch (e) {}
+      els.progressPreviewUrl = null;
+    }
+  }
+
+  // Возвращает (кэшируя) object URL приватного изображения по id.
+  function getCachedProgressUrl(id) {
+    if (!els) return Promise.reject(new Error("gone"));
+    if (!els.progressUrlMap) els.progressUrlMap = {};
+    if (els.progressUrlMap[id]) return Promise.resolve(els.progressUrlMap[id]);
+    return App.api.getProgressImageUrl(id).then(function (url) {
+      if (!els) {
+        try {
+          URL.revokeObjectURL(url);
+        } catch (e) {}
+        throw new Error("gone");
+      }
+      if (!els.progressUrlMap) els.progressUrlMap = {};
+      els.progressUrlMap[id] = url;
+      return url;
+    });
+  }
+
+  // Заголовок карточки (общий для всех состояний).
+  function progressHeaderHtml() {
+    return (
+      '<h2 class="acc-title">' +
+      App.escapeHtml(L("Фото-прогресс", "Progress photos")) +
+      "</h2>"
+    );
+  }
+
+  /**
+   * Карточка «Фото-прогресс». Для free — единый paywall в карточку. Для премиум —
+   * список фото загружается один раз за показ (кэш в els.progressData), дальше
+   * перерисовки идут из кэша; при загрузке/удалении список обновляется.
+   */
+  function renderProgress() {
+    var card = els.progressCard;
+    if (!card) return;
+
+    if (!App.isPremium()) {
+      els.progressLoaded = false;
+      revokeProgressUrls();
+      card.innerHTML = "";
+      card.classList.add("prog-gate");
+      App.paywall(card, {
+        icon: "📸",
+        title: L("Фото-прогресс", "Progress photos"),
+        desc: L(
+          "Сохраняйте фото прогресса и сравнивайте «до/после». Фото приватны — видите только вы.",
+          "Save progress photos and compare before/after. Photos are private — only you can see them."
+        ),
+        bullets: [
+          L("Личный таймлайн фото", "Personal photo timeline"),
+          L("Сравнение «до/после»", "Before/after comparison"),
+          L("Полная приватность", "Fully private")
+        ]
+      });
+      return;
+    }
+    card.classList.remove("prog-gate");
+
+    if (els.progressLoaded) {
+      renderProgressView(card, els.progressData || []);
+      return;
+    }
+    if (els.progressFetching) return;
+
+    els.progressFetching = true;
+    card.innerHTML =
+      progressHeaderHtml() +
+      '<div class="prog-body"><div class="skeleton skeleton--block"></div></div>';
+
+    App.api
+      .getProgressList()
+      .then(function (res) {
+        els.progressFetching = false;
+        els.progressLoaded = true;
+        els.progressData = (res && res.items) || [];
+        if (els && els.progressCard) renderProgressView(els.progressCard, els.progressData);
+      })
+      .catch(function (err) {
+        els.progressFetching = false;
+        if (!els || !els.progressCard) return;
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        els.progressCard.innerHTML =
+          progressHeaderHtml() +
+          '<div class="prog-body"><div class="cyc-error">' +
+          "<p>" +
+          App.escapeHtml(L("Не удалось загрузить фото.", "Failed to load photos.")) +
+          "</p>" +
+          '<p class="cyc-error__msg">' + App.escapeHtml(reason) + "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accProgRetry">' +
+          App.escapeHtml(L("Повторить", "Retry")) +
+          "</button></div></div>";
+        var retry = els.progressCard.querySelector("#accProgRetry");
+        if (retry) {
+          retry.addEventListener("click", function () {
+            els.progressLoaded = false;
+            renderProgress();
+          });
+        }
+      });
+  }
+
+  /**
+   * Основное содержимое карточки: приватная пометка, кнопка добавления,
+   * таймлайн миниатюр и (при >=2 фото) блок сравнения «до/после».
+   */
+  function renderProgressView(card, items) {
+    if (!card) return;
+    items = items || [];
+
+    var html =
+      progressHeaderHtml() +
+      '<p class="prog-privacy">🔒 ' +
+      App.escapeHtml(
+        L(
+          "Фото приватны и видны только вам.",
+          "Photos are private and visible only to you."
+        )
+      ) +
+      "</p>" +
+      '<button type="button" class="btn btn--cta prog-add" id="accProgAdd">➕ ' +
+      App.escapeHtml(L("Добавить фото", "Add photo")) +
+      "</button>" +
+      '<input type="file" accept="image/*" id="accProgFile" class="prog-file" hidden>' +
+      '<div class="prog-upload" id="accProgForm"></div>';
+
+    if (!items.length) {
+      html +=
+        '<div class="prog-empty">' +
+        '<div class="prog-empty__icon" aria-hidden="true">📷</div>' +
+        '<div class="prog-empty__text">' +
+        App.escapeHtml(
+          L(
+            "Пока нет фото. Добавьте первое — так удобно отслеживать изменения.",
+            "No photos yet. Add your first one — a handy way to track changes."
+          )
+        ) +
+        "</div></div>";
+    } else {
+      html += progressTimelineHtml(items);
+      if (items.length >= 2) {
+        html += progressCompareHtml(items);
+      }
+    }
+
+    card.innerHTML = html;
+    bindProgress(card, items);
+    loadProgressThumbs(card, items);
+    if (items.length >= 2) setupProgressCompare(card, items);
+  }
+
+  // HTML таймлайна миниатюр (img подгружается асинхронно как blob).
+  function progressTimelineHtml(items) {
+    var cells = "";
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var meta = progFmtDate(it.date);
+      if (it.weight != null && it.weight !== "") {
+        meta += " · " + progWeight(it.weight) + " " + L("кг", "kg");
+      }
+      cells +=
+        '<div class="prog-item" data-id="' + it.id + '">' +
+        '<div class="prog-item__frame">' +
+        '<img class="prog-item__img" alt="" data-id="' + it.id + '">' +
+        '<button type="button" class="prog-item__del" data-id="' + it.id + '" ' +
+        'aria-label="' + App.escapeHtml(L("Удалить", "Delete")) + '">✕</button>' +
+        "</div>" +
+        '<div class="prog-item__meta">' + App.escapeHtml(meta) + "</div>" +
+        "</div>";
+    }
+    return (
+      '<div class="prog-timeline-title">' +
+      App.escapeHtml(L("Таймлайн", "Timeline")) +
+      "</div>" +
+      '<div class="prog-timeline">' + cells + "</div>"
+    );
+  }
+
+  // Асинхронно проставляет src миниатюрам (из кэша object URL).
+  function loadProgressThumbs(card, items) {
+    items.forEach(function (it) {
+      var img = card.querySelector('.prog-item__img[data-id="' + it.id + '"]');
+      if (!img) return;
+      getCachedProgressUrl(it.id)
+        .then(function (url) {
+          // Карточка ещё жива и это тот же элемент?
+          if (img && img.isConnected) img.src = url;
+        })
+        .catch(function () {
+          /* фото не загрузилось — оставляем пустую рамку */
+        });
+    });
+  }
+
+  // HTML блока сравнения «до/после» (два селектора + слайдер-шторка).
+  function progressCompareHtml(items) {
+    var opts = "";
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var label = progFmtDate(it.date);
+      if (it.weight != null && it.weight !== "") {
+        label += " · " + progWeight(it.weight) + " " + L("кг", "kg");
+      }
+      opts +=
+        '<option value="' + it.id + '">' + App.escapeHtml(label) + "</option>";
+    }
+    return (
+      '<div class="prog-compare-title">' +
+      App.escapeHtml(L("Сравнение «до/после»", "Before / after")) +
+      "</div>" +
+      '<div class="prog-compare">' +
+      '<div class="prog-compare__stage" id="accProgStage">' +
+      '<img class="prog-compare__img prog-compare__before" id="accProgBeforeImg" alt="">' +
+      '<img class="prog-compare__img prog-compare__after" id="accProgAfterImg" alt="">' +
+      '<div class="prog-compare__handle" id="accProgHandle"></div>' +
+      "</div>" +
+      '<input type="range" min="0" max="100" value="50" class="prog-compare__range" id="accProgRange">' +
+      '<div class="prog-compare__selects">' +
+      '<label class="prog-compare__sel">' +
+      '<span>' + App.escapeHtml(L("До", "Before")) + "</span>" +
+      '<select class="field prog-compare__select" id="accProgBefore">' + opts + "</select>" +
+      "</label>" +
+      '<label class="prog-compare__sel">' +
+      '<span>' + App.escapeHtml(L("После", "After")) + "</span>" +
+      '<select class="field prog-compare__select" id="accProgAfter">' + opts + "</select>" +
+      "</label>" +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  // Инициализирует сравнение: дефолт до=первое, после=последнее; слайдер + селекты.
+  function setupProgressCompare(card, items) {
+    var beforeSel = card.querySelector("#accProgBefore");
+    var afterSel = card.querySelector("#accProgAfter");
+    var beforeImg = card.querySelector("#accProgBeforeImg");
+    var afterImg = card.querySelector("#accProgAfterImg");
+    var range = card.querySelector("#accProgRange");
+    var handle = card.querySelector("#accProgHandle");
+    if (!beforeSel || !afterSel || !beforeImg || !afterImg || !range || !handle) return;
+
+    // По умолчанию сравниваем самое раннее фото с самым поздним.
+    beforeSel.value = String(items[0].id);
+    afterSel.value = String(items[items.length - 1].id);
+
+    function setImg(imgEl, id) {
+      getCachedProgressUrl(id)
+        .then(function (url) {
+          if (imgEl && imgEl.isConnected) imgEl.src = url;
+        })
+        .catch(function () {});
+    }
+
+    function applyClip() {
+      var v = Number(range.value);
+      // Показываем левые v% «после»-фото поверх «до»-фото.
+      afterImg.style.clipPath = "inset(0 " + (100 - v) + "% 0 0)";
+      afterImg.style.webkitClipPath = "inset(0 " + (100 - v) + "% 0 0)";
+      handle.style.left = v + "%";
+    }
+
+    setImg(beforeImg, items[0].id);
+    setImg(afterImg, items[items.length - 1].id);
+    applyClip();
+
+    range.addEventListener("input", applyClip);
+    beforeSel.addEventListener("change", function () {
+      setImg(beforeImg, beforeSel.value);
+    });
+    afterSel.addEventListener("change", function () {
+      setImg(afterImg, afterSel.value);
+    });
+  }
+
+  // Вешает обработчики: добавление фото, форму загрузки, удаление.
+  function bindProgress(card, items) {
+    var addBtn = card.querySelector("#accProgAdd");
+    var fileInput = card.querySelector("#accProgFile");
+    if (addBtn && fileInput) {
+      addBtn.addEventListener("click", function () {
+        App.haptic("selection");
+        fileInput.value = ""; // позволяем повторно выбрать тот же файл
+        fileInput.click();
+      });
+      fileInput.addEventListener("change", function () {
+        var f = fileInput.files && fileInput.files[0];
+        if (f) openProgressUploadForm(card, f);
+      });
+    }
+
+    // Удаление фото (делегирование по кнопкам «✕»).
+    var timeline = card.querySelector(".prog-timeline");
+    if (timeline) {
+      timeline.addEventListener("click", function (e) {
+        var btn = e.target.closest(".prog-item__del");
+        if (!btn) return;
+        var id = btn.getAttribute("data-id");
+        if (!id) return;
+        if (!window.confirm(L("Удалить это фото?", "Delete this photo?"))) return;
+        onProgressDelete(card, id);
+      });
+    }
+  }
+
+  // Показывает инлайн-форму загрузки: превью выбранного файла + вес + дата.
+  function openProgressUploadForm(card, file) {
+    var form = card.querySelector("#accProgForm");
+    if (!form) return;
+
+    // Готовим превью выбранного файла (локальный object URL — освобождаем при закрытии).
+    if (els.progressPreviewUrl) {
+      try {
+        URL.revokeObjectURL(els.progressPreviewUrl);
+      } catch (e) {}
+    }
+    els.progressPreviewUrl = URL.createObjectURL(file);
+    els.progressPendingFile = file;
+
+    form.innerHTML =
+      '<div class="prog-upload__preview">' +
+      '<img src="' + els.progressPreviewUrl + '" alt="" class="prog-upload__img">' +
+      "</div>" +
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Дата", "Date")) +
+      "</span>" +
+      '<input type="date" class="field prog-upload__input" id="accProgDate" max="' +
+      cycToday() +
+      '" value="' + cycToday() + '">' +
+      "</label>" +
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Вес, кг (необязательно)", "Weight, kg (optional)")) +
+      "</span>" +
+      '<input type="number" inputmode="decimal" step="0.1" min="0" class="field prog-upload__input" ' +
+      'id="accProgWeight" placeholder="' + App.escapeHtml(L("напр. 72.5", "e.g. 72.5")) + '">' +
+      "</label>" +
+      '<div class="prog-upload__actions">' +
+      '<button type="button" class="btn btn--cta prog-upload__save" id="accProgSave">' +
+      App.escapeHtml(L("Загрузить", "Upload")) +
+      "</button>" +
+      '<button type="button" class="btn btn--ghost prog-upload__cancel" id="accProgCancel">' +
+      App.escapeHtml(L("Отмена", "Cancel")) +
+      "</button>" +
+      "</div>";
+
+    var save = form.querySelector("#accProgSave");
+    var cancel = form.querySelector("#accProgCancel");
+    if (save) save.addEventListener("click", function () { onProgressUpload(card, form); });
+    if (cancel) cancel.addEventListener("click", function () { closeProgressUploadForm(card); });
+  }
+
+  // Закрывает форму загрузки и освобождает превью-URL.
+  function closeProgressUploadForm(card) {
+    var form = card.querySelector("#accProgForm");
+    if (form) form.innerHTML = "";
+    if (els && els.progressPreviewUrl) {
+      try {
+        URL.revokeObjectURL(els.progressPreviewUrl);
+      } catch (e) {}
+      els.progressPreviewUrl = null;
+    }
+    if (els) els.progressPendingFile = null;
+  }
+
+  // Отправляет выбранный файл на сервер, затем обновляет список.
+  function onProgressUpload(card, form) {
+    var file = els.progressPendingFile;
+    if (!file) return;
+    var dateEl = form.querySelector("#accProgDate");
+    var weightEl = form.querySelector("#accProgWeight");
+    var saveBtn = form.querySelector("#accProgSave");
+
+    var date = dateEl ? String(dateEl.value || "").trim() : "";
+    var weight = weightEl ? String(weightEl.value || "").trim() : "";
+
+    if (saveBtn) saveBtn.disabled = true;
+    App.haptic("light");
+
+    App.api
+      .uploadProgress(file, date, weight)
+      .then(function (photo) {
+        closeProgressUploadForm(card);
+        // Добавляем новое фото в кэш данных и перерисовываем (без полного refetch).
+        if (!Array.isArray(els.progressData)) els.progressData = [];
+        els.progressData.push(photo);
+        // Пересортировка по дате по возрастанию (как на бэкенде).
+        els.progressData.sort(function (a, b) {
+          if (a.date === b.date) return (a.id || 0) - (b.id || 0);
+          return a.date < b.date ? -1 : 1;
+        });
+        renderProgressView(card, els.progressData);
+        App.toast(L("Фото добавлено", "Photo added"));
+        App.haptic("success");
+      })
+      .catch(function (err) {
+        if (saveBtn) saveBtn.disabled = false;
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        App.toast(L("Не удалось загрузить: ", "Failed to upload: ") + reason);
+        App.haptic("error");
+      });
+  }
+
+  // Удаляет фото на сервере и обновляет список/кэш.
+  function onProgressDelete(card, id) {
+    App.haptic("light");
+    App.api
+      .deleteProgress(id)
+      .then(function () {
+        // Освобождаем object URL удалённого фото.
+        if (els.progressUrlMap && els.progressUrlMap[id]) {
+          try {
+            URL.revokeObjectURL(els.progressUrlMap[id]);
+          } catch (e) {}
+          delete els.progressUrlMap[id];
+        }
+        els.progressData = (els.progressData || []).filter(function (p) {
+          return String(p.id) !== String(id);
+        });
+        renderProgressView(card, els.progressData);
+        App.toast(L("Фото удалено", "Photo deleted"));
+        App.haptic("success");
+      })
+      .catch(function (err) {
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        App.toast(L("Не удалось удалить: ", "Failed to delete: ") + reason);
+        App.haptic("error");
+      });
+  }
+
+  /* =====================================================================
    *  ВЕЧЕРНЯЯ СВОДКА
    *  Только ежедневная сводка: тумблер daily_summary_enabled + время summary_time.
    *  Остальные напоминания вынесены в разделы Тренировки / Добавки / Рацион.
@@ -2589,6 +3061,7 @@
       adaptCard: viewEl.querySelector("#accAdaptCard"),
       reportCard: viewEl.querySelector("#accReportCard"),
       cycleCard: viewEl.querySelector("#accCycleCard"),
+      progressCard: viewEl.querySelector("#accProgressCard"),
       summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
@@ -2604,6 +3077,7 @@
     renderAdaptive();
     renderReport();
     renderCycle();
+    renderProgress();
   }
 
   // ---- Контроллер страницы ----
@@ -2694,9 +3168,11 @@
     },
 
     /**
-     * Вызывается при уходе со страницы — освобождаем кэш ссылок.
+     * Вызывается при уходе со страницы — освобождаем object URL'ы фото и кэш ссылок.
      */
     onHide: function () {
+      // Освобождаем blob-URL'ы приватных фото, чтобы не текла память.
+      revokeProgressUrls();
       els = null;
     }
   };

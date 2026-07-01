@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date as date_cls, timedelta
 from pathlib import Path
@@ -32,7 +33,7 @@ logger = logging.getLogger("main")
 # включён в dev-режиме (ALLOW_INSECURE_AUTH=1); на проде включается DEBUG_AI=1.
 DEBUG_AI = os.getenv("DEBUG_AI") == "1" or os.getenv("ALLOW_INSECURE_AUTH") == "1"
 
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -69,6 +70,7 @@ from backend.models import (
     DiaryEntry,
     FavoriteFood,
     MealTemplate,
+    ProgressPhoto,
     NotificationSettings,
     Supplement,
     SupplementReminder,
@@ -104,6 +106,8 @@ from backend.schemas import (
     NotificationSettingsOut,
     ProfileIn,
     ProfileOut,
+    ProgressListOut,
+    ProgressPhotoOut,
     RecentFoodOut,
     RecentFoodsOut,
     RecommendIn,
@@ -2370,6 +2374,186 @@ def cycle_reset(
     )
     db.commit()
     return {"deleted": int(deleted or 0)}
+
+
+# --------------------------------------------------------------------------- #
+#  Фото-прогресс (Этап 7) — ПРЕМИУМ, ПРИВАТНО
+#
+#  Пользователь загружает фото прогресса с датой и (опц.) весом. ПРИВАТНОСТЬ:
+#  файлы сохраняются в защищённый каталог (config.PROGRESS_PHOTOS_DIR) и НЕ
+#  раздаются статикой — отдаются ТОЛЬКО через авторизованный эндпоинт
+#  GET /progress/{id}/image с проверкой владельца (telegram_id). Публичных
+#  ссылок на изображения не существует. Все эндпоинты премиум (402 без подписки)
+#  и объявлены ВЫШЕ app.mount.
+# --------------------------------------------------------------------------- #
+# Разрешённые типы изображений и соответствующие расширения файлов.
+_PROGRESS_MIME_EXT = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
+
+
+def _progress_dir() -> Path:
+    """Абсолютный путь к каталогу приватных фото (создаёт его при необходимости)."""
+    d = Path(config.PROGRESS_PHOTOS_DIR)
+    if not d.is_absolute():
+        d = Path(__file__).resolve().parent.parent / d
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _progress_photo_out(photo: ProgressPhoto) -> ProgressPhotoOut:
+    """Собрать метаданные фото для клиента (без публичной ссылки на файл)."""
+    return ProgressPhotoOut(
+        id=photo.id,
+        date=photo.date,
+        weight=photo.weight,
+        image_url=f"/progress/{photo.id}/image",
+        created_at=photo.created_at.isoformat() if photo.created_at else None,
+    )
+
+
+@app.post("/progress/upload", response_model=ProgressPhotoOut)
+async def progress_upload(
+    file: UploadFile = File(...),
+    date: str | None = Form(None),
+    weight: float | None = Form(None),
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> ProgressPhotoOut:
+    """Принять фото прогресса, сохранить в приватный каталог и создать запись.
+
+    Дата снимка (date) по умолчанию — сегодня; вес (weight) необязателен. Тип
+    файла проверяем по content-type; размер ограничен config.PROGRESS_PHOTO_MAX_BYTES.
+    Возвращаем метаданные (без публичной ссылки — только путь авторизованной выдачи).
+    """
+    mime = (file.content_type or "").lower().split(";")[0].strip()
+    ext = _PROGRESS_MIME_EXT.get(mime)
+    if ext is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Неподдерживаемый формат. Загрузите изображение (JPG/PNG/WEBP).",
+        )
+
+    max_bytes = config.PROGRESS_PHOTO_MAX_BYTES
+    data = await file.read(max_bytes + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Пустой файл изображения")
+    if len(data) > max_bytes:
+        mb = max_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Файл слишком большой (макс. {mb} МБ)")
+
+    # Дата снимка: валидируем ISO; при отсутствии/ошибке — сегодня.
+    snap_date = cycle.parse_date(date) if date else None
+    if snap_date is None:
+        snap_date = date_cls.today()
+
+    # Имя файла: {telegram_id}_{uuid}.{ext} — непубличное, без перечислимости.
+    filename = f"{user.telegram_id}_{uuid.uuid4().hex}{ext}"
+    dest = _progress_dir() / filename
+    try:
+        with open(dest, "wb") as fh:
+            fh.write(data)
+    except OSError as exc:
+        logger.warning("progress/upload: не удалось сохранить файл: %s", exc)
+        raise HTTPException(status_code=500, detail="Не удалось сохранить фото. Попробуйте позже.")
+
+    photo = ProgressPhoto(
+        telegram_id=user.telegram_id,
+        photo_path=filename,
+        date=snap_date.isoformat(),
+        weight=weight,
+    )
+    db.add(photo)
+    db.commit()
+    db.refresh(photo)
+
+    return _progress_photo_out(photo)
+
+
+@app.get("/progress/list", response_model=ProgressListOut)
+def progress_list(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> ProgressListOut:
+    """Вернуть все фото прогресса пользователя по возрастанию даты (для таймлайна)."""
+    rows = (
+        db.query(ProgressPhoto)
+        .filter(ProgressPhoto.telegram_id == user.telegram_id)
+        .order_by(ProgressPhoto.date.asc(), ProgressPhoto.id.asc())
+        .all()
+    )
+    return ProgressListOut(items=[_progress_photo_out(p) for p in rows])
+
+
+@app.get("/progress/{photo_id}/image")
+def progress_image(
+    photo_id: int,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+):
+    """Отдать файл фото прогресса — ТОЛЬКО владельцу (проверка telegram_id).
+
+    Файлы лежат вне статики; сюда попадают лишь авторизованные запросы. Если фото
+    принадлежит другому пользователю или отсутствует — 404 (без утечки факта).
+    """
+    from fastapi.responses import FileResponse
+
+    photo = (
+        db.query(ProgressPhoto)
+        .filter(
+            ProgressPhoto.id == photo_id,
+            ProgressPhoto.telegram_id == user.telegram_id,
+        )
+        .first()
+    )
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+
+    path = _progress_dir() / photo.photo_path
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл фото недоступен")
+
+    # Приватный ответ: запрещаем кеширование на общих узлах.
+    return FileResponse(
+        str(path),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.delete("/progress/{photo_id}")
+def progress_delete(
+    photo_id: int,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Удалить фото прогресса (запись в БД и файл на диске) — только своё."""
+    photo = (
+        db.query(ProgressPhoto)
+        .filter(
+            ProgressPhoto.id == photo_id,
+            ProgressPhoto.telegram_id == user.telegram_id,
+        )
+        .first()
+    )
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+
+    # Сначала пытаемся удалить файл (ошибку не считаем фатальной — запись всё равно чистим).
+    try:
+        fpath = _progress_dir() / photo.photo_path
+        if fpath.exists():
+            fpath.unlink()
+    except OSError as exc:
+        logger.warning("progress/delete: не удалось удалить файл %s: %s", photo.photo_path, exc)
+
+    db.delete(photo)
+    db.commit()
+    return {"deleted": 1}
 
 
 # --------------------------------------------------------------------------- #

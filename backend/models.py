@@ -31,6 +31,10 @@ ORM-модели приложения (SQLAlchemy).
 Трекинг цикла (Этап 6):
   - CycleLog — запись о менструальном цикле (дата начала, длина цикла и
                менструации) для расчёта текущей фазы и прогнозов.
+
+Фото-прогресс (Этап 7):
+  - ProgressPhoto — приватное фото прогресса (имя файла на диске, дата, вес);
+                    файлы отдаются только через авторизованный эндпоинт.
 """
 
 from datetime import datetime
@@ -565,6 +569,39 @@ class CycleLog(Base):
 
     # Необязательная заметка пользователя (самочувствие и т.п.).
     notes = Column(Text, nullable=True)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ProgressPhoto(Base):
+    """
+    Приватное фото прогресса пользователя (Этап 7).
+
+    ПРИВАТНОСТЬ: сами файлы НЕ раздаются статикой. В БД хранится только имя файла
+    (photo_path) внутри защищённого каталога (config.PROGRESS_PHOTOS_DIR); отдаётся
+    файл исключительно через авторизованный эндпоинт с проверкой владельца
+    (telegram_id). Никаких публичных ссылок на изображения не существует.
+    """
+
+    __tablename__ = "progress_photos"
+
+    # Идентификатор записи (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Владелец записи — ссылка на пользователя по Telegram ID.
+    telegram_id = Column(
+        BigInteger, ForeignKey("users.telegram_id"), index=True
+    )
+
+    # Имя файла на диске внутри приватного каталога (НЕ публичный URL).
+    photo_path = Column(String)
+
+    # Дата снимка в формате ISO "YYYY-MM-DD" (с индексом для сортировки по времени).
+    date = Column(String, index=True)
+
+    # Вес на момент снимка, кг (необязательно).
+    weight = Column(Float, nullable=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)

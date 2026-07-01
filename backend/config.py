@@ -33,6 +33,15 @@ BOT_USERNAME: str = os.getenv("BOT_USERNAME", "")
 # Если пусто — кнопка «Оплатить через Tribute» на фронте просто не показывается.
 TRIBUTE_URL: str = os.getenv("TRIBUTE_URL", "")
 
+# Каталог для приватных фото прогресса (Этап 7). Файлы НЕ раздаются статикой —
+# только через авторизованный эндпоинт с проверкой владельца. По умолчанию —
+# локальная папка в корне проекта (на Railway диск эфемерный; для постоянного
+# хранения позже можно подключить том/R2, поменяв только этот путь).
+PROGRESS_PHOTOS_DIR: str = os.getenv("PROGRESS_PHOTOS_DIR", "./progress_photos")
+
+# Максимальный размер загружаемого фото прогресса (12 МБ).
+PROGRESS_PHOTO_MAX_BYTES: int = int(os.getenv("PROGRESS_PHOTO_MAX_BYTES", str(12 * 1024 * 1024)))
+
 
 # Тарифы подписки. Цены — в Telegram Stars (XTR), берутся из env.
 #   stars — стоимость в звёздах;
