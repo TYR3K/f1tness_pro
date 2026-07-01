@@ -386,11 +386,6 @@
       '<span class="field__label">' + esc(pick("Время", "Time")) + "</span>" +
       '<input class="field__input" id="wkRemTime" type="time" value="18:00">' +
       "</label>" +
-
-      '<label class="wk-rem-form__check">' +
-      '<input type="checkbox" id="wkRemEnabled" class="wk-rem-form__checkbox" checked>' +
-      '<span class="wk-rem-form__check-label">' + esc(pick("Включено", "Enabled")) + "</span>" +
-      "</label>" +
       "</div>" +
 
       '<button type="submit" class="btn btn-cta btn-block wk-rem-add" id="wkRemAddBtn">' +
@@ -580,15 +575,10 @@
     var time = r.time ? esc(r.time) : "";
     var meta = time ? daysText + " · " + time : daysText;
 
-    var badge = r.enabled
-      ? '<span class="wk-rem-item__badge wk-rem-item__badge--on">🔔 ' + esc(pick("включено", "on")) + "</span>"
-      : '<span class="wk-rem-item__badge wk-rem-item__badge--off">🔕 ' + esc(pick("выключено", "off")) + "</span>";
-
     return (
       '<li class="wk-rem-item" data-id="' + esc(r.id) + '">' +
       '<div class="wk-rem-item__main">' +
       '<span class="wk-rem-item__meta">' + esc(meta) + "</span>" +
-      badge +
       "</div>" +
       '<button class="wk-rem-item__del" type="button" data-id="' + esc(r.id) + '" ' +
       'aria-label="' + esc(pick("Удалить напоминание", "Delete reminder")) + '" ' +
@@ -949,8 +939,6 @@
     }
     var timeEl = byId("wkRemTime");
     if (timeEl) timeEl.value = "18:00";
-    var enabledEl = byId("wkRemEnabled");
-    if (enabledEl) enabledEl.checked = true;
   }
 
   /**
@@ -960,7 +948,6 @@
     if (e) e.preventDefault();
 
     var timeEl = byId("wkRemTime");
-    var enabledEl = byId("wkRemEnabled");
     var btn = byId("wkRemAddBtn");
 
     // Нужен хотя бы один выбранный день.
@@ -986,7 +973,8 @@
     var payload = {
       weekdays: weekdays,
       time: time,
-      enabled: !!(enabledEl && enabledEl.checked)
+      // Существующее напоминание всегда активно.
+      enabled: true
     };
 
     if (btn) btn.disabled = true;

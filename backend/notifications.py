@@ -45,6 +45,7 @@ HTTP 403) не должны валить приложение. Если план
     send_telegram(chat_id, text) -> bool
 """
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -154,6 +155,8 @@ _TEXTS = {
     "meal_label_breakfast": {"ru": "завтрак", "en": "breakfast"},
     "meal_label_lunch": {"ru": "обед", "en": "lunch"},
     "meal_label_dinner": {"ru": "ужин", "en": "dinner"},
+    # Обобщённая метка приёма пищи для произвольных времён (meal_times).
+    "meal_label_generic": {"ru": "Приём пищи", "en": "Meal"},
     # Заголовок напоминания о приёме пищи (подставляется emoji и метка).
     # {emoji} — иконка приёма, {label} — локализованная метка приёма пищи.
     "meal_reminder": {
@@ -432,6 +435,32 @@ def _parse_weekdays(raw: str | None) -> set:
                 result.add(day)
     except Exception as exc:
         logger.warning("_parse_weekdays: не удалось разобрать '%s' (%s)", raw, exc)
+    return result
+
+
+def _parse_meal_times(raw: str | None) -> list:
+    """Разобрать JSON-массив времён приёмов пищи ("[\"09:00\",\"13:00\"]") в список строк "HH:MM".
+
+    Некорректный/пустой JSON и не-строковые элементы тихо игнорируются —
+    возвращаем то, что удалось распознать (в худшем случае пустой список).
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception as exc:
+        logger.warning("_parse_meal_times: не удалось разобрать JSON '%s' (%s)", raw, exc)
+        return []
+    if not isinstance(parsed, list):
+        return []
+    result: list = []
+    for item in parsed:
+        try:
+            s = str(item).strip()
+        except Exception:
+            continue
+        if s:
+            result.append(s)
     return result
 
 
@@ -923,26 +952,21 @@ def check_notifications() -> None:
                 # Язык пользователя для приёмов пищи (фолбэк "ru").
                 lang = _norm_lang(getattr(user, "language", None))
 
-                # Напоминания о приёмах пищи (только если не записаны).
+                # Напоминания о приёмах пищи: произвольный список времён из
+                # meal_times_json (заменяет фиксированные завтрак/обед/ужин).
+                # Для каждого времени шлём обобщённое напоминание; если список
+                # пуст — не шлём ничего. Дедуп — по kind="meal:HH:MM".
                 if getattr(settings, "meal_reminder_enabled", False):
-                    _process_meal_reminder(
-                        db, tid, today, now,
-                        kind="breakfast",
-                        meal_time=getattr(settings, "breakfast_time", None),
-                        label_key="meal_label_breakfast", emoji="🍳", lang=lang,
+                    meal_times = _parse_meal_times(
+                        getattr(settings, "meal_times_json", None)
                     )
-                    _process_meal_reminder(
-                        db, tid, today, now,
-                        kind="lunch",
-                        meal_time=getattr(settings, "lunch_time", None),
-                        label_key="meal_label_lunch", emoji="🍲", lang=lang,
-                    )
-                    _process_meal_reminder(
-                        db, tid, today, now,
-                        kind="dinner",
-                        meal_time=getattr(settings, "dinner_time", None),
-                        label_key="meal_label_dinner", emoji="🍽️", lang=lang,
-                    )
+                    for meal_time in meal_times:
+                        _process_meal_reminder(
+                            db, tid, today, now,
+                            kind="meal:" + meal_time,
+                            meal_time=meal_time,
+                            label_key="meal_label_generic", emoji="🍽️", lang=lang,
+                        )
 
                 # Вечерняя сводка дня (язык берётся из user внутри функции).
                 _process_daily_summary(db, tid, today, now, user, settings)

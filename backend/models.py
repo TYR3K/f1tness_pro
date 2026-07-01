@@ -264,6 +264,11 @@ class NotificationSettings(Base):
     lunch_time = Column(String, default="13:00")       # время обеда "HH:MM"
     dinner_time = Column(String, default="19:00")      # время ужина "HH:MM"
 
+    # Произвольный список времён приёмов пищи в виде JSON-массива строк "HH:MM"
+    # (заменяет фиксированные breakfast/lunch/dinner). Nullable: старые записи
+    # без него трактуются как пустой список. Легаси-колонки выше не удаляются.
+    meal_times_json = Column(Text, nullable=True)
+
     # Напоминание о тренировке.
     # (Устаревшее: оставлено для совместимости, переехало в TrainingReminder.)
     training_reminder_enabled = Column(Boolean, default=False)

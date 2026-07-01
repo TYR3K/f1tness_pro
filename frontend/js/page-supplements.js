@@ -173,22 +173,15 @@
       'placeholder="' + esc(pick("Креатин", "Creatine")) + '" maxlength="100" autocomplete="off">' +
       "</label>" +
 
-      '<div class="sup-form__grid">' +
-      '<label class="field">' +
-      '<span class="field__label">' + esc(pick("Тип", "Type")) + "</span>" +
-      '<input class="field__input" id="supType" type="text" ' +
-      'placeholder="' + esc(pick("Аминокислоты", "Amino acids")) + '" maxlength="60" autocomplete="off">' +
-      "</label>" +
-
       '<label class="field">' +
       '<span class="field__label">' + esc(pick("Дозировка", "Dosage")) + "</span>" +
       '<input class="field__input" id="supDosage" type="text" ' +
       'placeholder="' + esc(pick("5 г", "5 g")) + '" maxlength="60" autocomplete="off">' +
       "</label>" +
-      "</div>" +
 
       '<label class="field">' +
       '<span class="field__label">' + esc(pick("Время приёма", "Intake time")) + "</span>" +
+      // (Поле «Тип» удалено — тип больше не задаётся вручную.)
       '<input class="field__input" id="supTime" type="time">' +
       "</label>" +
 
@@ -234,18 +227,6 @@
 
       '<div class="sup-rem-form__grid">' +
       '<label class="field">' +
-      '<span class="field__label">' + esc(pick("Название", "Name")) + "</span>" +
-      '<input class="field__input" id="remLabel" type="text" ' +
-      'placeholder="' + esc(pick("Утро / Ночь", "Morning / Night")) + '" maxlength="60" autocomplete="off" list="remLabelList">' +
-      '<datalist id="remLabelList">' +
-      '<option value="' + esc(pick("Утро", "Morning")) + '"></option>' +
-      '<option value="' + esc(pick("День", "Afternoon")) + '"></option>' +
-      '<option value="' + esc(pick("Вечер", "Evening")) + '"></option>' +
-      '<option value="' + esc(pick("Ночь", "Night")) + '"></option>' +
-      "</datalist>" +
-      "</label>" +
-
-      '<label class="field">' +
       '<span class="field__label">' + esc(pick("Время", "Time")) + "</span>" +
       '<input class="field__input" id="remTime" type="time">' +
       "</label>" +
@@ -256,11 +237,6 @@
       '<span class="field__label">' + esc(pick("Какие добавки напомнить", "Which supplements to remind")) + "</span>" +
       '<div id="remPicks" class="sup-rem-picks"></div>' +
       "</div>" +
-
-      '<label class="sup-rem-form__check">' +
-      '<input type="checkbox" id="remEnabled" class="sup-rem-form__checkbox" checked>' +
-      '<span class="sup-rem-form__check-label">' + esc(pick("Напоминание включено", "Reminder enabled")) + "</span>" +
-      "</label>" +
 
       '<button type="submit" class="btn btn-cta btn-block sup-rem-add" id="remAddBtn">' +
       esc(pick("Создать напоминание", "Create reminder")) +
@@ -367,9 +343,8 @@
    * Разметка одной строки добавки.
    */
   function supplementRowHtml(s) {
-    // Собираем строку с деталями (тип / дозировка / время), пропуская пустые.
+    // Собираем строку с деталями (дозировка / время), пропуская пустые.
     var parts = [];
-    if (s.type) parts.push(esc(s.type));
     if (s.dosage) parts.push(esc(s.dosage));
     if (s.intake_time) parts.push(esc(timeValue(s.intake_time)));
     var meta = parts.join(" · ");
@@ -495,7 +470,6 @@
    * Показывает состав («Ночь, 22:00 — магний, ZMA»).
    */
   function reminderRowHtml(r) {
-    var label = r.label || pick("Напоминание", "Reminder");
     var time = timeValue(r.time);
     var sups = (r.supplements || [])
       .map(function (s) {
@@ -505,10 +479,8 @@
         return n !== "";
       });
 
-    // Заголовок: «Ночь, 22:00».
-    var headParts = [esc(label)];
-    if (time) headParts.push(esc(time));
-    var head = headParts.join(", ");
+    // Заголовок теперь только время (метка убрана из UI).
+    var head = time ? esc(time) : esc(pick("Напоминание", "Reminder"));
 
     // Состав через тире: «— магний, ZMA».
     var composition = sups.length
@@ -516,15 +488,10 @@
       : '<span class="sup-rem-item__sups sup-rem-item__sups--empty"> — ' +
         esc(pick("добавки не выбраны", "no supplements selected")) + "</span>";
 
-    var stateBadge = r.enabled
-      ? '<span class="sup-rem-item__badge sup-rem-item__badge--on">🔔 ' + esc(pick("вкл", "on")) + "</span>"
-      : '<span class="sup-rem-item__badge sup-rem-item__badge--off">' + esc(pick("выкл", "off")) + "</span>";
-
     return (
       '<li class="sup-rem-item" data-id="' + esc(r.id) + '">' +
       '<div class="sup-rem-item__main">' +
       '<span class="sup-rem-item__head">' + head + composition + "</span>" +
-      stateBadge +
       "</div>" +
       '<button class="sup-rem-item__del" type="button" data-id="' + esc(r.id) + '" ' +
       'aria-label="' + esc(pick("Удалить напоминание", "Delete reminder")) + '" ' +
@@ -737,7 +704,6 @@
     if (e) e.preventDefault();
 
     var nameEl = byId("supName");
-    var typeEl = byId("supType");
     var dosageEl = byId("supDosage");
     var timeEl = byId("supTime");
     var reminderEl = byId("supReminder");
@@ -754,7 +720,8 @@
 
     var payload = {
       name: name,
-      type: (typeEl && typeEl.value || "").trim(),
+      // Тип больше не задаётся в UI — бэкенд подставит "" по умолчанию.
+      type: "",
       dosage: (dosageEl && dosageEl.value || "").trim(),
       reminder_enabled: !!(reminderEl && reminderEl.checked)
     };
@@ -775,7 +742,6 @@
         toast(pick("Добавка добавлена", "Supplement added"));
         // Очищаем форму.
         nameEl.value = "";
-        if (typeEl) typeEl.value = "";
         if (dosageEl) dosageEl.value = "";
         if (timeEl) timeEl.value = "";
         if (reminderEl) reminderEl.checked = false;
@@ -833,20 +799,10 @@
   function onReminderSubmit(e) {
     if (e) e.preventDefault();
 
-    var labelEl = byId("remLabel");
     var timeEl = byId("remTime");
-    var enabledEl = byId("remEnabled");
     var picksBox = byId("remPicks");
     var btn = byId("remAddBtn");
-    if (!labelEl || !timeEl) return;
-
-    var label = (labelEl.value || "").trim();
-    if (!label) {
-      toast(pick("Укажите название напоминания", "Enter the reminder name"));
-      haptic("error");
-      labelEl.focus();
-      return;
-    }
+    if (!timeEl) return;
 
     var time = (timeEl.value || "").trim();
     if (!time) {
@@ -873,9 +829,11 @@
     }
 
     var payload = {
-      label: label,
+      // Метка убрана из UI — бэкенд подставит "" по умолчанию.
+      label: "",
       time: time,
-      enabled: !!(enabledEl && enabledEl.checked),
+      // Существующее напоминание всегда активно.
+      enabled: true,
       supplement_ids: supplementIds
     };
 
@@ -888,9 +846,7 @@
         haptic("success");
         toast(pick("Напоминание создано", "Reminder created"));
         // Сбрасываем форму.
-        labelEl.value = "";
         timeEl.value = "";
-        if (enabledEl) enabledEl.checked = true;
         if (picksBox) {
           var allChecks = picksBox.querySelectorAll(".sup-rem-pick__input");
           for (var j = 0; j < allChecks.length; j++) {

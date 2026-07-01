@@ -161,6 +161,12 @@ def run_migrations():
     ]
     _migrate_table("workouts", workout_columns)
 
+    # --- Таблица notification_settings: произвольный список времён приёмов пищи. ---
+    notification_settings_columns = [
+        ("meal_times_json", "TEXT", None),  # JSON-массив времён "HH:MM"
+    ]
+    _migrate_table("notification_settings", notification_settings_columns)
+
 
 def init_db():
     """

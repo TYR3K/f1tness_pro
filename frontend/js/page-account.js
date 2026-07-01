@@ -2,25 +2,24 @@
  * page-account.js — страница «Мой аккаунт».
  *
  * Регистрирует контроллер страницы через App.registerPage("account", {...}).
- * Возможности:
- *   - Шапка с аватаром (App.user.photo_url) и именем пользователя.
- *   - Форма профиля: вес, рост, возраст, пол (Мужской/Женский -> male/female),
- *     уровень активности, цель питания (diet_goal) и цель по калориям (ккал/день).
- *   - Кнопка «Рассчитать автоматически» — вызывает App.api.calculateGoal на
- *     сервере (сервер сам сохраняет результат в профиль), подставляет дневную
- *     норму в поле цели и показывает блок целевых БЖУ.
- *   - Кнопка «Сохранить» — отправляет профиль через App.api.saveProfile
- *     (включая diet_goal).
- *   - Карточка «Язык / Language»: переключатель RU/EN -> App.setLang(...).
- *   - ПРЕМИУМ: карточка «Вес / Weight» — ввод замера + SVG-график динамики
- *     (замеры + линия тренда), текущий вес и изменение за период.
- *   - ПРЕМИУМ: карточка «Адаптивные калории / Adaptive calories» — тумблер
- *     adaptive_enabled + кнопка пересчёта дневной цели по реальной динамике веса.
- *   - Карточка «Вечерняя сводка»: ТОЛЬКО тумблер daily_summary_enabled и время
- *     summary_time (App.api.getNotificationSettings / saveNotificationSettings).
- *     Остальные напоминания вынесены в свои разделы (Тренировки, Добавки, Рацион).
- *   - Ниже — история за последние 30 дней (App.api.getHistory(30))
- *     в виде простого столбчатого графика (дата + ккал).
+ * Структура (сверху вниз):
+ *   - Компактная шапка с аватаром (App.user.photo_url) и именем пользователя.
+ *   - Карточка-кнопка «Подписка» -> экран подписки (без изменений).
+ *   - Плавающая кнопка-шестерёнка ⚙ (.acc-fab) открывает нижний ЛИСТ НАСТРОЕК
+ *     (оболочка diary-sheet*), куда вынесены 4 группы:
+ *       • «Язык» — переключатель RU/EN -> App.setLang(...).
+ *       • «Адаптивные калории» (премиум) — кнопка-тумблер .tgl-btn
+ *         (Активировать/Деактивировать) adaptive_enabled + пересчёт по динамике.
+ *       • «Недельный AI-отчёт» (премиум) — App.api.getWeeklyReport().
+ *       • «Вечерняя сводка» — кнопка-тумблер .tgl-btn daily_summary_enabled +
+ *         время summary_time (App.api.getNotificationSettings/save...).
+ *   - «Мои параметры» — сворачиваемая форма профиля (acc-fold, свёрнута):
+ *     вес, рост, возраст, пол, активность, цель питания, целевые БЖУ, расчёт+сохранение.
+ *   - «Вес» (премиум) — ВСЕГДА открытый блок только с SVG-графиком динамики (.wt-open).
+ *   - «История за 30 дней» — ВСЕГДА открытый КАЛЕНДАРЬ текущего месяца (.hist-cal),
+ *     дни окрашены по цели (App.api.getHistory()).
+ *   - «Трекинг цикла» (премиум) — сворачиваемая карточка (без изменений).
+ *   - «Фото-прогресс» (премиум) — сворачиваемая карточка (без изменений).
  *
  * Предзаполнение формы выполняется через App.api.getProfile.
  * Весь видимый пользователю текст локализован через App.pick(ru, en) и
@@ -225,13 +224,10 @@
     // Краткий статус подписки для карточки в начале страницы.
     var sub = subscriptionStatus();
 
-    // Текущий язык — для подсветки активной кнопки переключателя.
-    var curLang = App.lang === "en" ? "en" : "ru";
-
     return (
       '<section class="page page-account">' +
-      // ---- Шапка профиля ----
-      '<header class="acc-header card">' +
+      // ---- Компактная шапка профиля (меньше аватар, плотнее) ----
+      '<header class="acc-header acc-header--compact card">' +
       avatarHtml +
       '<div class="acc-header__info">' +
       '<div class="acc-name">' +
@@ -262,30 +258,10 @@
       '<span class="acc-sub-card__arrow" aria-hidden="true">›</span>' +
       "</button>" +
 
-      // ---- Карточка «Язык / Language» ----
-      // Сегментированный переключатель: Русский / English.
-      // Активная кнопка соответствует текущему App.lang.
-      '<section class="acc-lang card" id="accLang">' +
-      '<h2 class="acc-title">' +
-      App.escapeHtml(L("Язык", "Language")) +
-      "</h2>" +
-      '<div class="acc-lang__switch" role="group" aria-label="' +
-      App.escapeHtml(L("Выбор языка", "Language selection")) +
-      '">' +
-      '<button type="button" class="acc-lang__btn' +
-      (curLang === "ru" ? " acc-lang__btn--active" : "") +
-      '" id="accLangRu" data-lang="ru"' +
-      (curLang === "ru" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
-      ">Русский</button>" +
-      '<button type="button" class="acc-lang__btn' +
-      (curLang === "en" ? " acc-lang__btn--active" : "") +
-      '" id="accLangEn" data-lang="en"' +
-      (curLang === "en" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
-      ">English</button>" +
-      "</div>" +
-      "</section>" +
+      // Язык, адаптивные калории, недельный AI-отчёт и вечерняя сводка
+      // вынесены в нижний лист настроек (открывается кнопкой-шестерёнкой .acc-fab).
 
-      // ---- Форма профиля (в аккордеоне) ----
+      // ---- Форма профиля (в аккордеоне, свёрнута по умолчанию) ----
       '<section class="card acc-fold" id="accFoldProfile">' +
       '<button type="button" class="acc-fold__head">' +
       '<span class="acc-fold__title">' +
@@ -409,43 +385,16 @@
       "</div>" + // .acc-fold__body (Параметры)
       "</section>" + // .acc-fold (Параметры)
 
-      // ---- ПРЕМИУМ: Вес / Weight (контейнер заполняется в renderWeight) ----
-      '<section class="card acc-fold" id="accFoldWeight">' +
-      '<button type="button" class="acc-fold__head">' +
-      '<span class="acc-fold__title">' +
-      App.escapeHtml(L("Вес", "Weight")) +
-      "</span>" +
-      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
-      "</button>" +
-      '<div class="acc-fold__body" hidden>' +
-      '<section class="wt-card" id="accWeightCard"></section>' +
-      "</div>" +
-      "</section>" +
+      // ---- ПРЕМИУМ: Вес / Weight (всегда открыт, только график) ----
+      // Контейнер заполняется в renderWeight (подпись «Вес» + SVG-график).
+      '<section class="card wt-open" id="accWeightCard"></section>' +
 
-      // ---- ПРЕМИУМ: Адаптивные калории (контейнер заполняется в renderAdaptive) ----
-      '<section class="card acc-fold" id="accFoldAdapt">' +
-      '<button type="button" class="acc-fold__head">' +
-      '<span class="acc-fold__title">' +
-      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
-      "</span>" +
-      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
-      "</button>" +
-      '<div class="acc-fold__body" hidden>' +
-      '<section class="adapt-card" id="accAdaptCard"></section>' +
-      "</div>" +
-      "</section>" +
+      // Адаптивные калории и недельный AI-отчёт перенесены в лист настроек
+      // (.acc-fab -> нижний лист). Их контейнеры создаются при построении листа.
 
-      // ---- ПРЕМИУМ: Недельный AI-отчёт (контейнер заполняется в renderReport) ----
-      '<section class="card acc-fold" id="accFoldReport">' +
-      '<button type="button" class="acc-fold__head">' +
-      '<span class="acc-fold__title">' +
-      App.escapeHtml(L("Недельный AI-отчёт", "Weekly AI report")) +
-      "</span>" +
-      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
-      "</button>" +
-      '<div class="acc-fold__body" hidden>' +
-      '<section class="rep-card" id="accReportCard"></section>' +
-      "</div>" +
+      // ---- История за 30 дней (всегда открыта, календарь текущего месяца) ----
+      '<section class="card hist-cal-card" id="accHistory">' +
+      '<div class="skeleton skeleton--block"></div>' +
       "</section>" +
 
       // ---- ПРЕМИУМ: Трекинг цикла (контейнер заполняется в renderCycle) ----
@@ -474,51 +423,198 @@
       "</div>" +
       "</section>" +
 
-      // ---- Карточка «Вечерняя сводка» (в аккордеоне) ----
-      // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
-      // пищи, тренировках и добавках перенесены в соответствующие разделы.
-      '<section class="card acc-fold" id="accFoldSummary">' +
-      '<button type="button" class="acc-fold__head">' +
-      '<span class="acc-fold__title">' +
-      App.escapeHtml(L("Вечерняя сводка", "Evening summary")) +
-      "</span>" +
-      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
-      "</button>" +
-      '<div class="acc-fold__body" hidden>' +
-      '<section class="acc-summary" id="accSummary">' +
-      '<p class="acc-summary-hint">' +
-      App.escapeHtml(
-        L(
-          "Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.",
-          "Once a day we'll send a short recap: how many calories and macros you logged."
-        )
-      ) +
-      "</p>" +
-      '<div class="acc-summary-body" id="accSummaryBody">' +
-      '<div class="skeleton skeleton--block"></div>' +
-      "</div>" +
-      "</section>" +
-      "</div>" +
-      "</section>" +
-
-      // ---- История за 30 дней (в аккордеоне) ----
-      '<section class="card acc-fold" id="accFoldHistory">' +
-      '<button type="button" class="acc-fold__head">' +
-      '<span class="acc-fold__title">' +
-      App.escapeHtml(L("История за 30 дней", "Last 30 days")) +
-      "</span>" +
-      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
-      "</button>" +
-      '<div class="acc-fold__body" hidden>' +
-      '<section class="acc-history" id="accSummaryHistoryWrap">' +
-      '<div id="accHistory" class="acc-history__body">' +
-      '<div class="skeleton skeleton--block"></div>' +
-      "</div>" +
-      "</section>" +
-      "</div>" +
-      "</section>" +
+      // Вечерняя сводка перенесена в лист настроек (.acc-fab -> нижний лист).
       "</section>"
     );
+  }
+
+  /* =====================================================================
+   *  ЛИСТ НАСТРОЕК / SETTINGS SHEET (кнопка-шестерёнка .acc-fab)
+   *  Открывается FAB-кнопкой ⚙ (по образцу диаристного «+»). Переиспользует
+   *  оболочку нижнего листа: diary-sheet + backdrop + panel + handle.
+   *  Содержит 4 группы (acc-set-group): Язык, Адаптивные калории,
+   *  Недельный AI-отчёт, Вечерняя сводка. Контейнеры для адаптива/отчёта/сводки
+   *  создаются здесь и заполняются существующими render*-функциями.
+   * ===================================================================== */
+
+  /**
+   * Монтирует плавающую кнопку-шестерёнку .acc-fab в обёртку страницы.
+   * Не дублирует кнопку, если она уже смонтирована.
+   */
+  function mountFab(viewEl) {
+    if (!viewEl) return;
+    if (viewEl.querySelector(".acc-fab")) return;
+    var host = viewEl.querySelector(".page-account") || viewEl;
+    var fab = document.createElement("button");
+    fab.type = "button";
+    fab.className = "acc-fab";
+    fab.setAttribute("aria-label", L("Настройки", "Settings"));
+    fab.textContent = "⚙";
+    fab.addEventListener("click", function () {
+      App.haptic && App.haptic("light");
+      openSettingsSheet();
+    });
+    host.appendChild(fab);
+  }
+
+  /**
+   * Убирает плавающую кнопку и лист настроек из DOM (при уходе со страницы).
+   */
+  function unmountFab(viewEl) {
+    if (viewEl) {
+      var fab = viewEl.querySelector(".acc-fab");
+      if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
+    }
+    closeSettingsSheet(true);
+  }
+
+  /**
+   * Разметка одной группы настроек внутри листа (заголовок + тело-контейнер).
+   * @param {string} title локализованный заголовок группы
+   * @param {string} inner HTML тела группы
+   */
+  function accSetGroupHtml(title, inner) {
+    return (
+      '<div class="acc-set-group">' +
+      '<div class="acc-set-group__title">' +
+      App.escapeHtml(title) +
+      "</div>" +
+      inner +
+      "</div>"
+    );
+  }
+
+  /**
+   * Открывает нижний лист настроек. Строит DOM (переиспользует классы
+   * diary-sheet*), наполняет группы и запускает существующие render*-функции
+   * для адаптивных калорий, отчёта и вечерней сводки.
+   */
+  function openSettingsSheet() {
+    if (document.getElementById("acc-settings-sheet")) return;
+    var host = document.getElementById("view") || (els && els.viewEl);
+    if (!host) return;
+
+    var curLang = App.lang === "en" ? "en" : "ru";
+
+    // Группа «Язык» — сегментированный переключатель RU/EN.
+    var langInner =
+      '<div class="acc-lang__switch" role="group" aria-label="' +
+      App.escapeHtml(L("Выбор языка", "Language selection")) +
+      '">' +
+      '<button type="button" class="acc-lang__btn' +
+      (curLang === "ru" ? " acc-lang__btn--active" : "") +
+      '" id="accLangRu" data-lang="ru"' +
+      (curLang === "ru" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
+      ">Русский</button>" +
+      '<button type="button" class="acc-lang__btn' +
+      (curLang === "en" ? " acc-lang__btn--active" : "") +
+      '" id="accLangEn" data-lang="en"' +
+      (curLang === "en" ? ' aria-pressed="true"' : ' aria-pressed="false"') +
+      ">English</button>" +
+      "</div>";
+
+    var sheet = document.createElement("div");
+    sheet.id = "acc-settings-sheet";
+    sheet.className = "diary-sheet";
+    sheet.innerHTML =
+      '<div class="diary-sheet__backdrop"></div>' +
+      '<div class="diary-sheet__panel">' +
+      '<div class="diary-sheet__handle"></div>' +
+      '<h2 class="acc-set-sheet__title">' +
+      App.escapeHtml(L("Настройки", "Settings")) +
+      "</h2>" +
+      accSetGroupHtml(L("Язык", "Language"), langInner) +
+      accSetGroupHtml(
+        L("Адаптивные калории", "Adaptive calories"),
+        '<section class="adapt-card" id="accAdaptCard"></section>'
+      ) +
+      accSetGroupHtml(
+        L("Недельный AI-отчёт", "Weekly AI report"),
+        '<section class="rep-card" id="accReportCard"></section>'
+      ) +
+      accSetGroupHtml(
+        L("Вечерняя сводка", "Evening summary"),
+        '<section class="acc-summary" id="accSummary">' +
+          '<p class="acc-summary-hint">' +
+          App.escapeHtml(
+            L(
+              "Раз в день пришлём короткий итог: сколько калорий и БЖУ набрано за день.",
+              "Once a day we'll send a short recap: how many calories and macros you logged."
+            )
+          ) +
+          "</p>" +
+          '<div class="acc-summary-body" id="accSummaryBody">' +
+          '<div class="skeleton skeleton--block"></div>' +
+          "</div>" +
+          "</section>"
+      ) +
+      "</div>";
+
+    host.appendChild(sheet);
+
+    // Кэшируем ссылки на контейнеры групп (для render*-функций).
+    if (els) {
+      els.adaptCard = sheet.querySelector("#accAdaptCard");
+      els.reportCard = sheet.querySelector("#accReportCard");
+      els.summaryBody = sheet.querySelector("#accSummaryBody");
+      els.langRu = sheet.querySelector("#accLangRu");
+      els.langEn = sheet.querySelector("#accLangEn");
+    }
+
+    // Обработчики переключателя языка.
+    if (els && els.langRu) {
+      els.langRu.addEventListener("click", function () {
+        onPickLang("ru");
+      });
+    }
+    if (els && els.langEn) {
+      els.langEn.addEventListener("click", function () {
+        onPickLang("en");
+      });
+    }
+
+    // Наполняем группы существующими рендерами (учитывают премиум-гейтинг).
+    renderAdaptive();
+    renderReport();
+    loadSummary();
+
+    // Анимация открытия на следующем кадре.
+    requestAnimationFrame(function () {
+      sheet.classList.add("diary-sheet--open");
+    });
+
+    // Тап по фону закрывает лист.
+    var backdrop = sheet.querySelector(".diary-sheet__backdrop");
+    if (backdrop) {
+      backdrop.addEventListener("click", function () {
+        closeSettingsSheet();
+      });
+    }
+  }
+
+  /**
+   * Закрывает лист настроек. При immediate=true удаляет сразу (без анимации).
+   * Сбрасывает ссылки на контейнеры групп, т.к. они удаляются вместе с листом.
+   * @param {boolean} [immediate]
+   */
+  function closeSettingsSheet(immediate) {
+    var sheet = document.getElementById("acc-settings-sheet");
+    if (els) {
+      els.adaptCard = null;
+      els.reportCard = null;
+      els.summaryBody = null;
+      els.langRu = null;
+      els.langEn = null;
+    }
+    if (!sheet) return;
+    if (immediate) {
+      if (sheet.parentNode) sheet.parentNode.removeChild(sheet);
+      return;
+    }
+    sheet.classList.remove("diary-sheet--open");
+    setTimeout(function () {
+      if (sheet.parentNode) sheet.parentNode.removeChild(sheet);
+    }, 220);
   }
 
   /**
@@ -789,7 +885,7 @@
     if (!card) return;
 
     if (!App.isPremium()) {
-      // Гейтинг: показываем paywall в саму карточку (суб-контейнер, не весь #view).
+      // Гейтинг: показываем компактный paywall в саму карточку (не весь #view).
       renderPremiumGate(card);
       return;
     }
@@ -798,21 +894,12 @@
     // подписки ещё не подтянулся): иначе карточка теряет фон/паддинг.
     card.classList.remove("wt-gate");
 
-    // Вес вводится ТОЛЬКО в форме «Мои параметры» (это единственное поле веса,
-    // нужное для формулы BMR). Здесь остаётся лишь визуализация тренда:
-    // SVG-график динамики + текущий вес и изменение (App.api.getWeightHistory).
+    // Всегда открытый блок только с графиком: короткая подпись «Вес» + SVG.
+    // Вес вводится ТОЛЬКО в разделе «Мои параметры» (единственное поле веса).
     card.innerHTML =
-      '<h2 class="acc-title">' +
+      '<div class="wt-open__label">' +
       App.escapeHtml(L("Вес", "Weight")) +
-      "</h2>" +
-      '<p class="wt-hint">' +
-      App.escapeHtml(
-        L(
-          "Обновляйте вес в разделе «Мои параметры» — по динамике строится тренд и адаптивная норма.",
-          "Update your weight in «My parameters» — the trend and adaptive goal are built from it."
-        )
-      ) +
-      "</p>" +
+      "</div>" +
       '<div class="wt-chart-wrap" id="accWeightChart">' +
       '<div class="skeleton skeleton--block"></div>' +
       "</div>";
@@ -879,8 +966,8 @@
         '<div class="wt-empty__text">' +
         App.escapeHtml(
           L(
-            "Пока нет замеров. Укажите вес в разделе «Мои параметры».",
-            "No measurements yet. Set your weight in «My parameters»."
+            "Укажите вес в разделе «Мои параметры», чтобы увидеть динамику.",
+            "Set your weight in «My parameters» to see the trend."
           )
         ) +
         "</div>" +
@@ -1123,21 +1210,36 @@
    * ===================================================================== */
 
   /**
-   * Строит карточку «Адаптивные калории». Для free карточка остаётся пустой —
-   * единый paywall показан в карточке веса (renderWeight). Для премиум —
-   * тумблер + кнопка пересчёта + блок результата.
+   * Строит карточку «Адаптивные калории» (в листе настроек). Для free —
+   * компактный paywall прямо в контейнер группы. Для премиум — кнопка-тумблер
+   * (Активировать/Деактивировать) + вторичное «Пересчитать по динамике» + блок
+   * результата.
    */
   function renderAdaptive() {
     var card = els.adaptCard;
     if (!card) return;
 
     if (!App.isPremium()) {
-      // Гейтинг общий: paywall показывается в карточке веса. Эту карточку прячем.
+      // Гейтинг: компактный paywall прямо в группу листа настроек.
+      card.hidden = false;
       card.innerHTML = "";
-      card.hidden = true;
+      card.classList.add("adapt-gate");
+      App.paywall(card, {
+        icon: "⚖️",
+        title: L("Адаптивные калории", "Adaptive calories"),
+        desc: L(
+          "Автоматически подстраивайте норму калорий под реальную динамику веса.",
+          "Auto-tune your calorie goal to real weight dynamics."
+        ),
+        bullets: [
+          L("Фактическое поддержание", "Real maintenance estimate"),
+          L("Авто-коррекция цели", "Auto goal adjustment")
+        ]
+      });
       return;
     }
     card.hidden = false;
+    card.classList.remove("adapt-gate");
 
     var p = App.state.profile || {};
     var enabled = !!p.adaptive_enabled;
@@ -1155,20 +1257,14 @@
         "</div>";
     }
 
+    // Вторичное действие «Пересчитать по динамике» доступно только когда включено.
+    var recalcHtml = enabled
+      ? '<button type="button" class="btn btn--ghost adapt-recalc-btn" id="accAdaptRecalc">' +
+        App.escapeHtml(L("Пересчитать по динамике", "Recalculate now")) +
+        "</button>"
+      : "";
+
     card.innerHTML =
-      '<h2 class="acc-title">' +
-      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
-      "</h2>" +
-      '<div class="adapt-row">' +
-      '<label class="adapt-toggle">' +
-      '<input class="adapt-toggle__input" type="checkbox" id="accAdaptEnabled"' +
-      (enabled ? " checked" : "") +
-      ">" +
-      '<span class="adapt-toggle__label">' +
-      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
-      "</span>" +
-      "</label>" +
-      "</div>" +
       '<p class="adapt-hint">' +
       App.escapeHtml(
         L(
@@ -1178,14 +1274,22 @@
       ) +
       "</p>" +
       maintHtml +
-      '<button type="button" class="btn btn--cta adapt-recalc-btn" id="accAdaptRecalc">' +
-      App.escapeHtml(L("Пересчитать по динамике", "Recalculate now")) +
+      // Тумблер-кнопка (Активировать / Деактивировать) вместо чекбокса.
+      '<button type="button" class="tgl-btn' +
+      (enabled ? " tgl-btn--on" : "") +
+      '" id="accAdaptToggle">' +
+      App.escapeHtml(
+        enabled
+          ? L("Деактивировать", "Deactivate")
+          : L("Активировать", "Activate")
+      ) +
       "</button>" +
+      recalcHtml +
       '<div class="adapt-result" id="accAdaptResult" hidden></div>';
 
-    var toggle = card.querySelector("#accAdaptEnabled");
+    var toggle = card.querySelector("#accAdaptToggle");
     if (toggle) {
-      toggle.addEventListener("change", function () {
+      toggle.addEventListener("click", function () {
         onToggleAdaptive(toggle);
       });
     }
@@ -1199,12 +1303,17 @@
   }
 
   /**
-   * Переключение тумблера adaptive_enabled — сохраняем в профиль на сервере.
+   * Переключение adaptive_enabled по кнопке-тумблеру .tgl-btn — сохраняем в
+   * профиль на сервере. При включении дополнительно запускаем пересчёт по
+   * динамике и показываем его результат. По успеху перерисовываем карточку в
+   * новое состояние (кнопка меняет вид/подпись).
    */
-  function onToggleAdaptive(toggle) {
-    var enabled = !!toggle.checked;
+  function onToggleAdaptive(btn) {
+    // Текущее состояние определяем по классу-модификатору кнопки.
+    var wasOn = btn.classList.contains("tgl-btn--on");
+    var enabled = !wasOn;
     App.haptic("selection");
-    toggle.disabled = true;
+    btn.disabled = true;
 
     App.api
       .saveProfile({ adaptive_enabled: enabled })
@@ -1220,18 +1329,22 @@
             ? L("Адаптивные калории включены", "Adaptive calories enabled")
             : L("Адаптивные калории выключены", "Adaptive calories disabled")
         );
+        // Перерисовываем карточку в новое состояние (вид/подпись кнопки + recalc).
+        renderAdaptive();
+        // При включении сразу считаем цель по реальной динамике веса.
+        if (enabled && els && els.adaptCard) {
+          var recalcBtn = els.adaptCard.querySelector("#accAdaptRecalc");
+          var resultBox = els.adaptCard.querySelector("#accAdaptResult");
+          onRecalcAdaptive(recalcBtn, resultBox);
+        }
       })
       .catch(function (err) {
-        // При ошибке возвращаем тумблер в прежнее положение.
-        toggle.checked = !enabled;
+        btn.disabled = false;
         App.haptic("error");
         var reason = err && err.message ? err.message : L("ошибка", "error");
         App.toast(
           L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
         );
-      })
-      .finally(function () {
-        toggle.disabled = false;
       });
   }
 
@@ -2816,19 +2929,18 @@
     var enabled = !!s.daily_summary_enabled;
     var time = timeValue(s.summary_time) || DEFAULT_SUMMARY_TIME;
 
+    // Кнопка-тумблер (Активировать/Деактивировать) вместо чекбокса. Ниже —
+    // поле времени сводки (сохраняется вместе с тумблером или по «Сохранить»).
     box.innerHTML =
-      '<div class="acc-summary-row">' +
-      '<label class="acc-summary-toggle">' +
-      '<input class="acc-summary-toggle__input" type="checkbox" id="accSummaryEnabled"' +
-      (enabled ? " checked" : "") +
-      ">" +
-      '<span class="acc-summary-toggle__label">' +
+      '<button type="button" class="tgl-btn' +
+      (enabled ? " tgl-btn--on" : "") +
+      '" id="accSummaryToggle">' +
       App.escapeHtml(
-        L("Присылать вечернюю сводку", "Send evening summary")
+        enabled
+          ? L("Деактивировать", "Deactivate")
+          : L("Активировать", "Activate")
       ) +
-      "</span>" +
-      "</label>" +
-      "</div>" +
+      "</button>" +
       '<label class="field acc-summary-time" id="accSummaryTimeField"' +
       (enabled ? "" : " hidden") +
       ">" +
@@ -2839,37 +2951,84 @@
       App.escapeHtml(time) +
       '" placeholder="21:00">' +
       "</label>" +
-      '<button type="button" class="btn btn--cta acc-summary-save" id="accSummarySave">' +
-      App.escapeHtml(L("Сохранить", "Save")) +
+      '<button type="button" class="btn btn--ghost acc-summary-save" id="accSummarySave"' +
+      (enabled ? "" : " hidden") +
+      ">" +
+      App.escapeHtml(L("Сохранить время", "Save time")) +
       "</button>";
 
-    var toggle = box.querySelector("#accSummaryEnabled");
-    var timeField = box.querySelector("#accSummaryTimeField");
-    if (toggle && timeField) {
-      toggle.addEventListener("change", function () {
-        timeField.hidden = !toggle.checked;
-        App.haptic("selection");
+    var toggle = box.querySelector("#accSummaryToggle");
+    if (toggle) {
+      toggle.addEventListener("click", function () {
+        onToggleSummary(toggle);
       });
     }
 
     var saveBtn = box.querySelector("#accSummarySave");
     if (saveBtn) {
+      // Кнопка «Сохранить время» сохраняет время, не меняя флаг включения.
       saveBtn.addEventListener("click", onSaveSummary);
     }
   }
 
   /**
-   * Собирает настройки вечерней сводки из карточки и сохраняет на сервере.
-   * Отправляем ТОЛЬКО поля сводки, чтобы не затронуть остальные напоминания.
+   * Переключение daily_summary_enabled по кнопке-тумблеру .tgl-btn.
+   * Сохраняет флаг (и текущее время, если включаем) на сервере, затем
+   * перерисовывает карточку в новое состояние.
+   */
+  function onToggleSummary(btn) {
+    var box = els.summaryBody;
+    if (!box) return;
+    var wasOn = btn.classList.contains("tgl-btn--on");
+    var enabled = !wasOn;
+    App.haptic("selection");
+    btn.disabled = true;
+
+    var payload = { daily_summary_enabled: enabled };
+    // При включении отправляем текущее значение времени, если оно задано.
+    if (enabled) {
+      var timeInput = box.querySelector("#accSummaryTime");
+      var tVal = timeInput ? (timeInput.value || "").trim() : "";
+      if (tVal) payload.summary_time = tVal;
+    }
+
+    App.showLoading();
+    App.api
+      .saveNotificationSettings(payload)
+      .then(function (settings) {
+        renderSummary(settings || payload);
+        App.haptic("success");
+        App.toast(
+          enabled
+            ? L("Вечерняя сводка включена", "Evening summary enabled")
+            : L("Вечерняя сводка выключена", "Evening summary disabled")
+        );
+      })
+      .catch(function (err) {
+        btn.disabled = false;
+        App.haptic("error");
+        var reason = err && err.message ? err.message : L("ошибка", "error");
+        App.toast(
+          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
+        );
+      })
+      .finally(function () {
+        App.hideLoading();
+      });
+  }
+
+  /**
+   * Сохраняет ТОЛЬКО время сводки (сводка уже включена). Отправляем поля
+   * сводки, чтобы не затронуть остальные напоминания.
    */
   function onSaveSummary() {
     var box = els.summaryBody;
     if (!box) return;
 
-    var toggle = box.querySelector("#accSummaryEnabled");
     var timeInput = box.querySelector("#accSummaryTime");
-
-    var enabled = !!(toggle && toggle.checked);
+    // Сводка включена, если тумблер в состоянии «on».
+    var toggle = box.querySelector("#accSummaryToggle");
+    var enabled = !!(toggle && toggle.classList.contains("tgl-btn--on"));
     var payload = { daily_summary_enabled: enabled };
 
     // Время отправляем только когда сводка включена и поле заполнено.
@@ -2908,20 +3067,45 @@
   }
 
   /* =====================================================================
-   *  ИСТОРИЯ ЗА 30 ДНЕЙ
+   *  ИСТОРИЯ ЗА 30 ДНЕЙ / LAST 30 DAYS — КАЛЕНДАРЬ
+   *  Всегда открытый календарь текущего месяца (Пн-первый). Каждый прошедший
+   *  день окрашивается по цели: зелёный — цель достигнута (ккал>0 и <=goal),
+   *  серый — залогировано, но выше цели; нейтральный — нет данных. Если цель
+   *  не задана — все залогированные дни нейтральны.
+   *  Источник данных: App.api.getHistory() -> { goal, days:[{date,total_calories}] }.
    * ===================================================================== */
 
+  // Локализованные названия месяцев (для заголовка календаря).
+  var MONTH_NAMES_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+  ];
+  var MONTH_NAMES_EN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  // Сокращения дней недели (Пн-первый).
+  var DOW_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+  var DOW_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  // Двузначное дополнение для сборки ISO-дат.
+  function pad2(n) {
+    n = String(n);
+    return n.length < 2 ? "0" + n : n;
+  }
+
   /**
-   * Загружает и отрисовывает историю за 30 дней.
+   * Загружает историю и отрисовывает календарь текущего месяца.
    */
   function loadHistory() {
     var box = els.history;
+    if (!box) return;
     box.innerHTML = '<div class="skeleton skeleton--block"></div>';
 
     App.api
-      .getHistory(30)
+      .getHistory()
       .then(function (res) {
-        renderHistory(res);
+        renderHistoryCalendar(res || {});
       })
       .catch(function (err) {
         box.innerHTML =
@@ -2948,77 +3132,146 @@
   }
 
   /**
-   * Отрисовывает столбчатый график истории.
+   * Отрисовывает календарь текущего месяца с подсветкой дней по цели.
    * @param {Object} res — объект HistoryOut { goal, days:[{date,total_calories}] }.
    */
-  function renderHistory(res) {
-    var box = els.history;
-    var days = (res && res.days) || [];
-    var goal = res && res.goal != null ? res.goal : null;
+  function renderHistoryCalendar(res) {
+    // Кэшируем данные истории и стартуем с текущего месяца. Стрелки ‹ › листают
+    // месяцы без повторного запроса (данные — последние ~30 дней с сервера).
+    if (res) els.histRes = res;
+    var now = new Date();
+    els.histView = { year: now.getFullYear(), month: now.getMonth() };
+    drawHistoryCalendar();
+  }
 
-    if (!days.length) {
-      box.innerHTML =
-        '<div class="acc-empty">' +
-        App.escapeHtml(
-          L(
-            "Пока нет данных. Добавьте приёмы пищи в раздел «Мой рацион».",
-            "No data yet. Add meals in the «Diary» section."
-          )
-        ) +
-        "</div>";
-      return;
+  /**
+   * Сдвигает просматриваемый месяц истории на delta и перерисовывает календарь.
+   */
+  function shiftHistoryMonth(delta) {
+    if (!els || !els.histView) return;
+    var d = new Date(els.histView.year, els.histView.month + delta, 1);
+    els.histView = { year: d.getFullYear(), month: d.getMonth() };
+    drawHistoryCalendar();
+  }
+
+  /**
+   * Рисует календарь истории за просматриваемый месяц (els.histView) по
+   * кэшированным данным (els.histRes). Зелёный — цель достигнута, серый — нет.
+   */
+  function drawHistoryCalendar() {
+    var box = els.history;
+    if (!box || !els.histView) return;
+
+    var res = els.histRes || {};
+    var days = res.days || [];
+    var goal = res.goal != null ? Number(res.goal) : null;
+
+    // Карта данных по датам: "YYYY-MM-DD" -> total_calories.
+    var byDate = {};
+    days.forEach(function (d) {
+      if (d && d.date) byDate[d.date] = Number(d.total_calories) || 0;
+    });
+
+    var year = els.histView.year;
+    var month = els.histView.month; // 0..11
+
+    var now = new Date();
+    var isCurMonth = (year === now.getFullYear() && month === now.getMonth());
+    var todayIso =
+      now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate());
+
+    var monthName =
+      (App.lang === "en" ? MONTH_NAMES_EN : MONTH_NAMES_RU)[month] +
+      " " +
+      year;
+
+    // Заголовок с навигацией по месяцам (‹ / ›); «вперёд» отключаем в текущем месяце.
+    var head =
+      '<div class="hist-cal__head">' +
+      '<button type="button" class="hist-cal__nav" data-hist-nav="prev" ' +
+      'aria-label="' + App.escapeHtml(L("Предыдущий месяц", "Previous month")) + '">‹</button>' +
+      '<span class="hist-cal__title">' +
+      App.escapeHtml(monthName) +
+      "</span>" +
+      '<button type="button" class="hist-cal__nav" data-hist-nav="next"' +
+      (isCurMonth ? " disabled" : "") + " " +
+      'aria-label="' + App.escapeHtml(L("Следующий месяц", "Next month")) + '">›</button>' +
+      "</div>";
+
+    // Строка заголовков дней недели (Пн-первый).
+    var dow = App.lang === "en" ? DOW_EN : DOW_RU;
+    var dowRow = "";
+    dow.forEach(function (name) {
+      dowRow +=
+        '<div class="hist-cal__dow">' + App.escapeHtml(name) + "</div>";
+    });
+
+    // Первый день месяца: индекс дня недели (0=Пн ... 6=Вс).
+    var firstDow = new Date(year, month, 1).getDay(); // 0=Вс..6=Сб
+    var lead = (firstDow + 6) % 7; // сдвиг к Пн-первому
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    var cells = "";
+    // Пустые ячейки-заполнители до первого числа.
+    for (var i = 0; i < lead; i++) {
+      cells += '<div class="hist-cal__cell hist-cal__cell--empty"></div>';
+    }
+    // Числа месяца.
+    for (var day = 1; day <= daysInMonth; day++) {
+      var iso = year + "-" + pad2(month + 1) + "-" + pad2(day);
+      var cls = "hist-cal__cell";
+      var isFuture = iso > todayIso;
+
+      if (isFuture) {
+        // Будущие дни — нейтральные/пустые.
+        cls += " hist-cal__cell--empty";
+      } else if (byDate.hasOwnProperty(iso)) {
+        var kcal = byDate[iso];
+        if (kcal > 0 && goal != null && goal > 0) {
+          // Цель достигнута (в пределах) или превышена.
+          cls += kcal <= goal ? " hist-cal__cell--met" : " hist-cal__cell--miss";
+        } else {
+          // Есть данные, но цель не задана (или ккал=0) — нейтрально.
+          cls += " hist-cal__cell--empty";
+        }
+      } else {
+        // Нет данных за этот день.
+        cls += " hist-cal__cell--empty";
+      }
+
+      cells +=
+        '<div class="' + cls + '">' + day + "</div>";
     }
 
-    // Максимум для масштабирования столбцов: учитываем цель и фактические значения.
-    var maxVal = 0;
-    days.forEach(function (d) {
-      if (d.total_calories > maxVal) maxVal = d.total_calories;
-    });
-    if (goal != null && goal > maxVal) maxVal = goal;
-    if (maxVal <= 0) maxVal = 1; // защита от деления на ноль
+    var grid =
+      '<div class="hist-cal__grid">' + dowRow + cells + "</div>";
 
-    var kcalUnit = L("ккал", "kcal");
+    // Легенда: зелёный = цель достигнута, серый = не достигнута.
+    var legend =
+      '<div class="hist-cal__legend">' +
+      '<span class="hist-cal__legend-item">' +
+      '<span class="hist-cal__cell hist-cal__cell--met" aria-hidden="true"></span>' +
+      App.escapeHtml(L("цель достигнута", "goal met")) +
+      "</span>" +
+      '<span class="hist-cal__legend-item">' +
+      '<span class="hist-cal__cell hist-cal__cell--miss" aria-hidden="true"></span>' +
+      App.escapeHtml(L("не достигнута", "not met")) +
+      "</span>" +
+      "</div>";
 
-    var rows = days
-      .map(function (d) {
-        var pct = Math.max(2, Math.round((d.total_calories / maxVal) * 100));
-        // Превышение цели подсвечиваем другим цветом.
-        var over = goal != null && d.total_calories > goal;
-        return (
-          '<div class="hist-row">' +
-          '<span class="hist-row__date">' +
-          App.escapeHtml(formatDate(d.date)) +
-          "</span>" +
-          '<span class="hist-row__bar-wrap">' +
-          '<span class="hist-row__bar' +
-          (over ? " hist-row__bar--over" : "") +
-          '" style="width:' +
-          pct +
-          '%"></span>' +
-          "</span>" +
-          '<span class="hist-row__val">' +
-          App.fmt(d.total_calories) +
-          " " +
-          App.escapeHtml(kcalUnit) +
-          "</span>" +
-          "</div>"
-        );
-      })
-      .join("");
+    box.innerHTML =
+      '<div class="hist-cal">' + head + grid + legend + "</div>";
 
-    var goalLine =
-      goal != null
-        ? '<div class="hist-goal">' +
-          App.escapeHtml(L("Цель: ", "Goal: ")) +
-          App.fmt(goal) +
-          " " +
-          App.escapeHtml(L("ккал/день", "kcal/day")) +
-          "</div>"
-        : '<div class="hist-goal hist-goal--muted">' +
-          App.escapeHtml(L("Цель не задана", "Goal not set")) +
-          "</div>";
-
-    box.innerHTML = goalLine + '<div class="hist-list">' + rows + "</div>";
+    // Навигация по месяцам (‹ / ›): листаем без повторного запроса истории.
+    var navs = box.querySelectorAll(".hist-cal__nav");
+    for (var n = 0; n < navs.length; n++) {
+      navs[n].addEventListener("click", function (ev) {
+        var btn = ev.currentTarget;
+        if (btn.disabled) return;
+        App.haptic && App.haptic("selection");
+        shiftHistoryMonth(btn.getAttribute("data-hist-nav") === "next" ? 1 : -1);
+      });
+    }
   }
 
   /**
@@ -3083,10 +3336,16 @@
    */
   function bindElements(viewEl) {
     els = {
+      viewEl: viewEl,
       subCard: viewEl.querySelector("#accSubCard"),
       subStatus: viewEl.querySelector("#accSubStatus"),
-      langRu: viewEl.querySelector("#accLangRu"),
-      langEn: viewEl.querySelector("#accLangEn"),
+      // Язык, адаптивные калории, отчёт и вечерняя сводка живут в листе настроек;
+      // их ссылки заполняются при открытии листа (openSettingsSheet).
+      langRu: null,
+      langEn: null,
+      adaptCard: null,
+      reportCard: null,
+      summaryBody: null,
       form: viewEl.querySelector("#accForm"),
       weight: viewEl.querySelector("#accWeight"),
       height: viewEl.querySelector("#accHeight"),
@@ -3102,19 +3361,18 @@
       calcBtn: viewEl.querySelector("#accCalcBtn"),
       saveBtn: viewEl.querySelector("#accSaveBtn"),
       weightCard: viewEl.querySelector("#accWeightCard"),
-      adaptCard: viewEl.querySelector("#accAdaptCard"),
-      reportCard: viewEl.querySelector("#accReportCard"),
       cycleCard: viewEl.querySelector("#accCycleCard"),
       cycleFold: viewEl.querySelector("#accFoldCycle"),
       progressCard: viewEl.querySelector("#accProgressCard"),
-      summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
   }
 
   /**
-   * Перерисовывает премиум-секции (вес + адаптивные калории) по текущему
-   * статусу подписки и кэшу профиля. Безопасно к отсутствию элементов.
+   * Перерисовывает премиум-секции по текущему статусу подписки и кэшу профиля.
+   * Вес, цикл и фото — в основном списке. Адаптивные калории и AI-отчёт живут в
+   * листе настроек: их render*-функции безопасно ничего не делают, пока лист
+   * закрыт (контейнеры отсутствуют), и вызываются заново при открытии листа.
    */
   function renderPremiumSections() {
     if (!els) return;
@@ -3150,17 +3408,10 @@
         });
       }
 
-      // Переключатель языка.
-      if (els.langRu) {
-        els.langRu.addEventListener("click", function () {
-          onPickLang("ru");
-        });
-      }
-      if (els.langEn) {
-        els.langEn.addEventListener("click", function () {
-          onPickLang("en");
-        });
-      }
+      // Плавающая кнопка-шестерёнка ⚙ открывает лист настроек (язык, адаптивные
+      // калории, AI-отчёт, вечерняя сводка). Переключатель языка и наполнение
+      // групп вешаются при открытии листа (openSettingsSheet).
+      mountFab(viewEl);
 
       els.calcBtn.addEventListener("click", onCalc);
       els.form.addEventListener("submit", onSave);
@@ -3208,19 +3459,22 @@
           );
         });
 
-      // Загрузка настроек вечерней сводки.
-      loadSummary();
+      // Настройки вечерней сводки грузятся при открытии листа настроек
+      // (openSettingsSheet -> loadSummary), а не сразу при показе страницы.
 
-      // Загрузка истории за 30 дней.
+      // Загрузка истории за 30 дней (календарь текущего месяца).
       loadHistory();
     },
 
     /**
-     * Вызывается при уходе со страницы — освобождаем object URL'ы фото и кэш ссылок.
+     * Вызывается при уходе со страницы — освобождаем object URL'ы фото, убираем
+     * FAB и лист настроек, сбрасываем кэш ссылок.
      */
     onHide: function () {
       // Освобождаем blob-URL'ы приватных фото, чтобы не текла память.
       revokeProgressUrls();
+      // Убираем плавающую кнопку и лист настроек из DOM.
+      unmountFab(els && els.viewEl);
       els = null;
     }
   };

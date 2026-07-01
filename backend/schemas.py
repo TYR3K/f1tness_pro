@@ -335,7 +335,7 @@ class SupplementIn(BaseModel):
     """Добавка, которую клиент сохраняет в свой список."""
 
     name: str
-    type: str
+    type: Optional[str] = ""              # тип добавки (необязательно, убрано из UI)
     dosage: str
     intake_time: Optional[str] = None    # время приёма "HH:MM"
     reminder_enabled: bool = False       # включено ли напоминание
@@ -411,6 +411,8 @@ class NotificationSettingsIn(BaseModel):
     breakfast_time: Optional[str] = None         # "HH:MM"
     lunch_time: Optional[str] = None
     dinner_time: Optional[str] = None
+    # Произвольный список времён приёмов пищи "HH:MM" (заменяет фикс. приёмы).
+    meal_times: Optional[List[str]] = None
     training_reminder_enabled: Optional[bool] = None
     training_time: Optional[str] = None
     supplement_reminder_enabled: Optional[bool] = None
@@ -428,6 +430,9 @@ class NotificationSettingsOut(BaseModel):
     breakfast_time: str = "09:00"
     lunch_time: str = "13:00"
     dinner_time: str = "19:00"
+    # Список времён приёмов пищи "HH:MM" — заполняется вручную из meal_times_json
+    # в эндпоинтах (НЕ авто-маппится из ORM, т.к. в БД это JSON-строка).
+    meal_times: List[str] = []
     training_reminder_enabled: bool = False
     training_time: str = "18:00"
     supplement_reminder_enabled: bool = False
@@ -474,7 +479,7 @@ class SupplementReminderIn(BaseModel):
     supplement_ids — id добавок пользователя, которые входят в это напоминание.
     """
 
-    label: str                       # метка: "Утро" | "Ночь" | своё
+    label: Optional[str] = ""        # метка: "Утро" | "Ночь" | своё (необязательно, убрано из UI)
     time: str                        # время "HH:MM"
     enabled: bool = True             # включено ли напоминание
     supplement_ids: List[int] = []   # id добавок пользователя

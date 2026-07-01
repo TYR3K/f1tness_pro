@@ -1026,7 +1026,8 @@ def supplement_add(
     db_supp = Supplement(
         telegram_id=user.telegram_id,
         name=data.name,
-        type=data.type,
+        # Тип убран из UI — терпим его отсутствие (по умолчанию пустая строка).
+        type=data.type or "",
         dosage=data.dosage,
         intake_time=data.intake_time,
         reminder_enabled=data.reminder_enabled,
@@ -1199,13 +1200,34 @@ def _get_or_create_notification_settings(
     return settings
 
 
+def _notification_settings_out(settings: NotificationSettings) -> NotificationSettingsOut:
+    """Собрать NotificationSettingsOut из ORM + распарсить список времён приёмов.
+
+    meal_times НЕ маппится авто-магией из ORM (в БД это JSON-строка
+    meal_times_json), поэтому заполняем его вручную с защитой от битого JSON.
+    """
+    out = NotificationSettingsOut.model_validate(settings)
+    try:
+        parsed = json.loads(getattr(settings, "meal_times_json", None) or "[]")
+        # На всякий случай проверяем, что это именно список строк.
+        if isinstance(parsed, list):
+            out.meal_times = [str(t) for t in parsed]
+        else:
+            out.meal_times = []
+    except Exception:
+        # Битый/некорректный JSON — отдаём пустой список.
+        out.meal_times = []
+    return out
+
+
 @app.get("/notifications/settings", response_model=NotificationSettingsOut)
 def notifications_get(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> NotificationSettings:
+) -> NotificationSettingsOut:
     """Вернуть настройки уведомлений (создав их с дефолтами при первом запросе)."""
-    return _get_or_create_notification_settings(db, user.telegram_id)
+    settings = _get_or_create_notification_settings(db, user.telegram_id)
+    return _notification_settings_out(settings)
 
 
 @app.post("/notifications/settings", response_model=NotificationSettingsOut)
@@ -1213,18 +1235,25 @@ def notifications_update(
     data: NotificationSettingsIn,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> NotificationSettings:
+) -> NotificationSettingsOut:
     """Обновить настройки уведомлений (upsert), меняя только переданные поля."""
     settings = _get_or_create_notification_settings(db, user.telegram_id)
 
     payload = data.model_dump(exclude_unset=True)
+    # meal_times обрабатываем отдельно: в БД это JSON-строка meal_times_json.
+    meal_times = payload.pop("meal_times", None)
     for field, value in payload.items():
         # Применяем только реально переданные поля, чтобы не сбросить остальные.
         setattr(settings, field, value)
 
+    # Если пришёл список времён — очищаем "HH:MM" и сериализуем в JSON.
+    if isinstance(meal_times, list):
+        cleaned = [_normalize_time(t) for t in meal_times if str(t or "").strip()]
+        settings.meal_times_json = json.dumps(cleaned)
+
     db.commit()
     db.refresh(settings)
-    return settings
+    return _notification_settings_out(settings)
 
 
 # --------------------------------------------------------------------------- #
@@ -1383,7 +1412,8 @@ def supplement_reminder_add(
 
     reminder = SupplementReminder(
         telegram_id=user.telegram_id,
-        label=data.label,
+        # Метка убрана из UI — терпим её отсутствие (по умолчанию пустая строка).
+        label=data.label or "",
         time=time_str,
         enabled=bool(data.enabled),
     )
