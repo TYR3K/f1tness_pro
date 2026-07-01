@@ -736,3 +736,42 @@ class HealthySnacksOut(BaseModel):
     """Набор низкокалорийных перекусов-«вкусняшек» под остаток калорий."""
 
     suggestions: List[RecommendItem] = []        # 3-4 варианта с обоснованием
+
+
+# --------------------------------------------------------------------------- #
+#  Трекинг цикла (Этап 6)
+# --------------------------------------------------------------------------- #
+class CycleLogIn(BaseModel):
+    """Запрос на сохранение данных о менструальном цикле.
+
+    cycle_length/period_length необязательны: при отсутствии берутся значения
+    по умолчанию (28 и 5) и приводятся к валидному диапазону на бэкенде.
+    """
+
+    cycle_start_date: str                        # ISO-дата начала менструации "YYYY-MM-DD"
+    cycle_length: Optional[int] = None           # средняя длина цикла, дней (по умолч. 28)
+    period_length: Optional[int] = None          # длительность менструации, дней (по умолч. 5)
+    notes: Optional[str] = None                  # необязательная заметка о самочувствии
+
+
+class CycleStatusOut(BaseModel):
+    """Текущий статус цикла: фаза, день, прогнозы и фертильное окно.
+
+    has_data=False означает, что пользователь ещё не вводил данные (остальные
+    поля тогда None). phase — ключ фазы ("menstrual"|"follicular"|"ovulation"|
+    "luteal"), локализуется на клиенте. Все даты — ISO "YYYY-MM-DD".
+    Значения ОРИЕНТИРОВОЧНЫЕ (не медицинская рекомендация).
+    """
+
+    has_data: bool                               # есть ли сохранённые данные цикла
+    cycle_start_date: Optional[str] = None       # начало текущего расчётного цикла
+    cycle_length: Optional[int] = None           # длина цикла, дней
+    period_length: Optional[int] = None          # длительность менструации, дней
+    day_of_cycle: Optional[int] = None           # текущий день цикла (1-based)
+    phase: Optional[str] = None                  # ключ фазы (см. выше)
+    next_period_date: Optional[str] = None       # прогноз следующей менструации
+    days_until_next_period: Optional[int] = None # дней до следующей менструации
+    ovulation_date: Optional[str] = None         # оценка даты овуляции
+    fertile_start: Optional[str] = None          # начало фертильного окна
+    fertile_end: Optional[str] = None            # конец фертильного окна
+    notes: Optional[str] = None                  # заметка пользователя (последняя запись)

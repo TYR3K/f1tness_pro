@@ -638,6 +638,24 @@
     // Ответ: {suggestions:[{dish_name, calories, proteins, fats, carbs, reason}]}.
     getHealthySnacks: function () {
       return request("/food/healthy-snacks");
+    },
+
+    // --- Трекинг цикла (Этап 6, ПРЕМИУМ) ---
+    // Текущий статус цикла: фаза, день, прогнозы, фертильное окно.
+    // Ответ: {has_data, phase, day_of_cycle, next_period_date, ...}.
+    getCycleStatus: function () {
+      return request("/cycle/status");
+    },
+
+    // Сохранить данные цикла и получить пересчитанный статус.
+    // Тело: {cycle_start_date, cycle_length?, period_length?, notes?}.
+    logCycle: function (payload) {
+      return request("/cycle/log", { method: "POST", body: payload });
+    },
+
+    // Сбросить (удалить) все данные цикла пользователя.
+    resetCycle: function () {
+      return request("/cycle", { method: "DELETE" });
     }
   };
 

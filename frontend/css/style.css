@@ -6049,3 +6049,278 @@ select.field__input {
   border-radius: var(--radius-sm);
   padding: 16px 14px;
 }
+
+/* ============================================================
+   ТРЕКИНГ ЦИКЛА (page-account.js, префикс cyc-, Этап 6)
+   Деликатная пастель: розовые/лавандовые оттенки по фазам.
+   Форма ввода, плашка фазы, прогнозы, советы, заметка, дисклеймер.
+   ============================================================ */
+.cyc-card {
+  display: block;
+}
+
+/* В режиме paywall убираем фон/паддинг карточки (paywall рисует свой блок). */
+.cyc-card.cyc-gate {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Вводная подсказка (когда данных ещё нет). */
+.cyc-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.cyc-body {
+  margin-top: 4px;
+}
+
+/* ---- Форма ввода данных цикла ---- */
+.cyc-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cyc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cyc-field__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Поле ввода наследует базовый .field; тут лишь единый размер. */
+.cyc-input {
+  min-height: 48px;
+}
+
+.cyc-save {
+  min-height: 52px;
+  margin-top: 2px;
+}
+
+/* Кнопка «Отмена» под формой редактирования. */
+.cyc-cancel {
+  min-height: 44px;
+}
+
+/* Дисклеймер (не мед. рекомендация) — мягкий мелкий текст. */
+.cyc-disclaimer {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 10px;
+}
+
+/* ---- Плашка текущей фазы ---- */
+.cyc-phase {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  /* Базовый (нейтральный) тон — переопределяется модификаторами фаз. */
+  background: rgba(201, 139, 155, .16);
+  border: 1.5px solid rgba(201, 139, 155, .55);
+}
+
+.cyc-phase__icon {
+  font-size: 30px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cyc-phase__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cyc-phase__name {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.cyc-phase__day {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Оттенки по фазам (деликатные пастельные тона). */
+.cyc-phase--menstrual {
+  background: rgba(201, 102, 77, .13);
+  border-color: rgba(201, 102, 77, .5);
+}
+
+.cyc-phase--follicular {
+  background: rgba(125, 155, 118, .16);
+  border-color: rgba(125, 155, 118, .55);
+}
+
+.cyc-phase--ovulation {
+  background: rgba(201, 168, 120, .18);
+  border-color: rgba(201, 168, 120, .6);
+}
+
+.cyc-phase--luteal {
+  background: rgba(150, 140, 190, .16);
+  border-color: rgba(150, 140, 190, .55);
+}
+
+/* ---- Прогнозы (следующая менструация, овуляция, фертильное окно) ---- */
+.cyc-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.cyc-fact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.cyc-fact__icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.cyc-fact__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.cyc-fact__label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cyc-fact__value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ---- Советы под фазу (питание / тренировки / самочувствие) ---- */
+.cyc-tips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.cyc-tips__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 2px;
+}
+
+.cyc-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+}
+
+.cyc-tip__icon {
+  font-size: 18px;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.cyc-tip__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cyc-tip__title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--cta-press);
+}
+
+.cyc-tip__text {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* ---- Заметка пользователя ---- */
+.cyc-note {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  margin-bottom: 14px;
+}
+
+.cyc-note__label {
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* ---- Действия (обновить данные / сбросить) ---- */
+.cyc-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cyc-actions .btn {
+  flex: 1;
+  min-height: 46px;
+}
+
+/* Кнопка сброса — предупреждающий оттенок. */
+.cyc-reset {
+  color: var(--danger);
+}
+
+/* ---- Ошибка загрузки статуса цикла ---- */
+.cyc-error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 18px 16px;
+}
+
+.cyc-error p {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.cyc-error__msg {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  margin-bottom: 12px;
+}

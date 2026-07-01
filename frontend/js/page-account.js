@@ -411,6 +411,9 @@
       // ---- ПРЕМИУМ: Недельный AI-отчёт (контейнер заполняется в renderReport) ----
       '<section class="rep-card card" id="accReportCard"></section>' +
 
+      // ---- ПРЕМИУМ: Трекинг цикла (контейнер заполняется в renderCycle) ----
+      '<section class="cyc-card card" id="accCycleCard"></section>' +
+
       // ---- Карточка «Вечерняя сводка» ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
@@ -1706,6 +1709,556 @@
   }
 
   /* =====================================================================
+   *  ТРЕКИНГ ЦИКЛА (Этап 6)
+   *  Премиум-карточка: пользователь вводит дату начала последней менструации,
+   *  среднюю длину цикла и длительность менструации; бэкенд считает фазу, день,
+   *  прогноз и фертильное окно. Показываем деликатно, с фазовыми советами по
+   *  питанию/тренировкам/самочувствию. Значения ориентировочные (дисклеймер).
+   *  Женская фича: для профиля с gender="male" карточка скрывается.
+   *  Префикс CSS-классов: cyc-. Весь текст через L/App.pick (RU/EN).
+   * ===================================================================== */
+
+  // Двузначная дополняющая функция (без зависимости от padStart в старых webview).
+  function cyc2(n) {
+    n = String(n);
+    return n.length < 2 ? "0" + n : n;
+  }
+
+  // Сегодняшняя дата в ISO "YYYY-MM-DD" по локальному времени (для max/дефолта).
+  function cycToday() {
+    var d = new Date();
+    return d.getFullYear() + "-" + cyc2(d.getMonth() + 1) + "-" + cyc2(d.getDate());
+  }
+
+  // Короткий формат ISO-даты -> "DD.MM" (для фертильного окна и прогнозов).
+  function cycShortDate(iso) {
+    if (!iso || String(iso).length < 10) return "";
+    var p = String(iso).split("-");
+    return p[2] + "." + p[1];
+  }
+
+  // Метаданные фаз: эмодзи, название и советы (питание/тренировки/самочувствие).
+  function cyclePhaseInfo(phase) {
+    var map = {
+      menstrual: {
+        icon: "🩸",
+        name: L("Менструация", "Menstruation"),
+        cls: "cyc-phase--menstrual",
+        nutrition: L(
+          "Больше железа: красное мясо, гречка, зелень, гранат. Тёплая еда и вода.",
+          "More iron: red meat, buckwheat, greens, pomegranate. Warm food and water."
+        ),
+        training: L(
+          "Мягкая активность: прогулки, растяжка, лёгкая йога.",
+          "Gentle activity: walks, stretching, light yoga."
+        ),
+        wellbeing: L(
+          "Отдых и сон в приоритете — не корите себя за усталость.",
+          "Prioritize rest and sleep — be kind to yourself if you're tired."
+        )
+      },
+      follicular: {
+        icon: "🌱",
+        name: L("Фолликулярная фаза", "Follicular phase"),
+        cls: "cyc-phase--follicular",
+        nutrition: L(
+          "Энергии больше — упор на белок и сложные углеводы.",
+          "More energy — focus on protein and complex carbs."
+        ),
+        training: L(
+          "Хорошее время для силовых и интенсивных тренировок.",
+          "A great time for strength and high-intensity training."
+        ),
+        wellbeing: L(
+          "Настроение на подъёме — планируйте важные дела.",
+          "Mood is rising — plan important tasks."
+        )
+      },
+      ovulation: {
+        icon: "✨",
+        name: L("Овуляция", "Ovulation"),
+        cls: "cyc-phase--ovulation",
+        nutrition: L(
+          "Лёгкая клетчатка и антиоксиданты: овощи, ягоды, зелень.",
+          "Light fiber and antioxidants: veggies, berries, greens."
+        ),
+        training: L(
+          "Пик силы и выносливости — можно замахнуться на рекорды.",
+          "Peak strength and endurance — go for personal bests."
+        ),
+        wellbeing: L(
+          "Больше энергии и общения — используйте момент.",
+          "More energy and sociability — make the most of it."
+        )
+      },
+      luteal: {
+        icon: "🌙",
+        name: L("Лютеиновая фаза", "Luteal phase"),
+        cls: "cyc-phase--luteal",
+        nutrition: L(
+          "Тяга к сладкому — магний и сложные углеводы: орехи, тёмный шоколад, овощи.",
+          "Sweet cravings — magnesium and complex carbs: nuts, dark chocolate, veggies."
+        ),
+        training: L(
+          "Ближе к концу снижайте интенсивность: лёгкое кардио, йога.",
+          "Ease off intensity toward the end: light cardio, yoga."
+        ),
+        wellbeing: L(
+          "Возможна раздражительность — сон, вода, меньше кофеина.",
+          "Possible irritability — sleep, water, less caffeine."
+        )
+      }
+    };
+    return map[phase] || null;
+  }
+
+  /**
+   * Карточка «Трекинг цикла». Для free — единый paywall в карточку. Для мужского
+   * профиля карточка скрывается. Для премиум — статус загружается один раз за
+   * показ (кэш в els.cycleData), дальше перерисовки идут из кэша без запросов.
+   */
+  function renderCycle() {
+    var card = els.cycleCard;
+    if (!card) return;
+
+    // Женская фича: для явно мужского профиля скрываем карточку целиком.
+    var gender = App.state.profile && App.state.profile.gender;
+    if (gender === "male") {
+      card.style.display = "none";
+      card.innerHTML = "";
+      return;
+    }
+    card.style.display = "";
+
+    if (!App.isPremium()) {
+      // Гейтинг: paywall прямо в карточку (суб-контейнер, не весь #view).
+      els.cycleLoaded = false;
+      card.innerHTML = "";
+      card.classList.add("cyc-gate");
+      App.paywall(card, {
+        icon: "🌸",
+        title: L("Трекинг цикла", "Cycle tracking"),
+        desc: L(
+          "Отслеживайте фазу цикла и получайте советы по питанию и тренировкам под неё.",
+          "Track your cycle phase and get nutrition and training tips tailored to it."
+        ),
+        bullets: [
+          L("Текущая фаза и день цикла", "Current phase and cycle day"),
+          L("Прогноз менструации и овуляции", "Period and ovulation forecast"),
+          L("Советы под фазу цикла", "Phase-based tips")
+        ]
+      });
+      return;
+    }
+    card.classList.remove("cyc-gate");
+
+    // Уже загружено в этот показ — рендерим из кэша, без повторного запроса.
+    if (els.cycleLoaded) {
+      renderCycleView(card, els.cycleData || { has_data: false });
+      return;
+    }
+    // Уже идёт загрузка — не перезапускаем (оставляем скелетон).
+    if (els.cycleFetching) return;
+
+    els.cycleFetching = true;
+    card.innerHTML =
+      cycleHeaderHtml() +
+      '<div class="cyc-body">' +
+      '<div class="skeleton skeleton--block"></div>' +
+      "</div>";
+
+    App.api
+      .getCycleStatus()
+      .then(function (res) {
+        els.cycleFetching = false;
+        els.cycleLoaded = true;
+        els.cycleData = res || { has_data: false };
+        // Карточка ещё на экране (не ушли со страницы)?
+        if (els && els.cycleCard) renderCycleView(els.cycleCard, els.cycleData);
+      })
+      .catch(function (err) {
+        els.cycleFetching = false;
+        if (!els || !els.cycleCard) return;
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        els.cycleCard.innerHTML =
+          cycleHeaderHtml() +
+          '<div class="cyc-body"><div class="cyc-error">' +
+          "<p>" +
+          App.escapeHtml(L("Не удалось загрузить данные цикла.", "Failed to load cycle data.")) +
+          "</p>" +
+          '<p class="cyc-error__msg">' + App.escapeHtml(reason) + "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accCycleRetry">' +
+          App.escapeHtml(L("Повторить", "Retry")) +
+          "</button></div></div>";
+        var retry = els.cycleCard.querySelector("#accCycleRetry");
+        if (retry) {
+          retry.addEventListener("click", function () {
+            els.cycleLoaded = false;
+            renderCycle();
+          });
+        }
+      });
+  }
+
+  // Заголовок карточки цикла (общий для всех состояний).
+  function cycleHeaderHtml() {
+    return (
+      '<h2 class="acc-title">' +
+      App.escapeHtml(L("Трекинг цикла", "Cycle tracking")) +
+      "</h2>"
+    );
+  }
+
+  /**
+   * Решает, что показать: форму настройки (нет данных / режим редактирования)
+   * или статус текущей фазы.
+   */
+  function renderCycleView(card, data) {
+    if (!card) return;
+    if (!data || !data.has_data) {
+      card.innerHTML =
+        cycleHeaderHtml() +
+        '<p class="cyc-hint">' +
+        App.escapeHtml(
+          L(
+            "Отметьте начало последней менструации — покажем текущую фазу, прогноз и советы под неё.",
+            "Log the start of your last period — we'll show the current phase, a forecast and phase-based tips."
+          )
+        ) +
+        "</p>" +
+        '<div class="cyc-body">' + cycleFormHtml(null) + "</div>";
+      bindCycleForm(card, false);
+      return;
+    }
+    // Есть данные — показываем статус.
+    card.innerHTML = cycleHeaderHtml() + '<div class="cyc-body">' + cycleStatusHtml(data) + "</div>";
+    bindCycleStatus(card);
+  }
+
+  /**
+   * HTML формы ввода/редактирования данных цикла. При наличии data поля
+   * предзаполняются текущими значениями.
+   */
+  function cycleFormHtml(data) {
+    var startVal = data && data.cycle_start_date ? data.cycle_start_date : "";
+    var clVal = data && data.cycle_length ? data.cycle_length : "";
+    var plVal = data && data.period_length ? data.period_length : "";
+    var notesVal = data && data.notes ? data.notes : "";
+    var today = cycToday();
+
+    return (
+      '<form class="cyc-form" id="accCycleForm">' +
+      // Дата начала менструации.
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Начало последней менструации", "Last period start")) +
+      "</span>" +
+      '<input type="date" class="field cyc-input" id="accCycStart" max="' +
+      today +
+      '" value="' +
+      App.escapeHtml(startVal) +
+      '" required>' +
+      "</label>" +
+      // Средняя длина цикла.
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Средняя длина цикла, дней", "Average cycle length, days")) +
+      "</span>" +
+      '<input type="number" inputmode="numeric" class="field cyc-input" id="accCycLen" ' +
+      'min="20" max="45" placeholder="28" value="' +
+      App.escapeHtml(String(clVal)) +
+      '">' +
+      "</label>" +
+      // Длительность менструации.
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Длительность менструации, дней", "Period length, days")) +
+      "</span>" +
+      '<input type="number" inputmode="numeric" class="field cyc-input" id="accCycPeriod" ' +
+      'min="1" max="10" placeholder="5" value="' +
+      App.escapeHtml(String(plVal)) +
+      '">' +
+      "</label>" +
+      // Заметка (необязательно).
+      '<label class="cyc-field">' +
+      '<span class="cyc-field__label">' +
+      App.escapeHtml(L("Заметка (необязательно)", "Note (optional)")) +
+      "</span>" +
+      '<input type="text" class="field cyc-input" id="accCycNotes" maxlength="200" placeholder="' +
+      App.escapeHtml(L("самочувствие, симптомы…", "how you feel, symptoms…")) +
+      '" value="' +
+      App.escapeHtml(notesVal) +
+      '">' +
+      "</label>" +
+      '<button type="submit" class="btn btn--cta cyc-save" id="accCycSave">' +
+      App.escapeHtml(L("Сохранить", "Save")) +
+      "</button>" +
+      '<p class="cyc-disclaimer">' +
+      App.escapeHtml(
+        L(
+          "Прогноз ориентировочный и не заменяет консультацию врача.",
+          "The forecast is approximate and not a substitute for medical advice."
+        )
+      ) +
+      "</p>" +
+      "</form>"
+    );
+  }
+
+  // Вешает submit-обработчик на форму цикла (сохранение данных).
+  function bindCycleForm(card, isEdit) {
+    var form = card.querySelector("#accCycleForm");
+    if (!form) return;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      onCycleSave(card);
+    });
+    // В режиме редактирования (есть данные) добавим кнопку «Отмена» -> назад к статусу.
+    if (isEdit) {
+      var cancel = card.querySelector("#accCycCancel");
+      if (cancel) {
+        cancel.addEventListener("click", function () {
+          renderCycleView(card, els.cycleData);
+        });
+      }
+    }
+  }
+
+  // Собирает данные формы, валидирует и отправляет на бэкенд.
+  function onCycleSave(card) {
+    var startEl = card.querySelector("#accCycStart");
+    var lenEl = card.querySelector("#accCycLen");
+    var perEl = card.querySelector("#accCycPeriod");
+    var notesEl = card.querySelector("#accCycNotes");
+    var saveBtn = card.querySelector("#accCycSave");
+
+    var start = startEl ? String(startEl.value || "").trim() : "";
+    if (!start) {
+      App.toast(L("Укажите дату начала менструации", "Please set the period start date"));
+      App.haptic("error");
+      return;
+    }
+
+    var payload = { cycle_start_date: start };
+    if (lenEl && String(lenEl.value).trim() !== "") {
+      payload.cycle_length = parseInt(lenEl.value, 10);
+    }
+    if (perEl && String(perEl.value).trim() !== "") {
+      payload.period_length = parseInt(perEl.value, 10);
+    }
+    if (notesEl && String(notesEl.value).trim() !== "") {
+      payload.notes = String(notesEl.value).trim();
+    }
+
+    if (saveBtn) saveBtn.disabled = true;
+    App.haptic("light");
+
+    App.api
+      .logCycle(payload)
+      .then(function (res) {
+        els.cycleLoaded = true;
+        els.cycleData = res || { has_data: false };
+        renderCycleView(card, els.cycleData);
+        App.toast(L("Данные цикла сохранены", "Cycle data saved"));
+        App.haptic("success");
+      })
+      .catch(function (err) {
+        if (saveBtn) saveBtn.disabled = false;
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        App.toast(L("Не удалось сохранить: ", "Failed to save: ") + reason);
+        App.haptic("error");
+      });
+  }
+
+  // HTML блока текущего статуса цикла (фаза, день, прогнозы, советы).
+  function cycleStatusHtml(data) {
+    var info = cyclePhaseInfo(data.phase);
+    var phaseName = info ? info.name : L("Фаза цикла", "Cycle phase");
+    var phaseIcon = info ? info.icon : "🌸";
+    var phaseCls = info ? info.cls : "";
+
+    // Плашка фазы + день цикла.
+    var html =
+      '<div class="cyc-phase ' + phaseCls + '">' +
+      '<span class="cyc-phase__icon" aria-hidden="true">' + phaseIcon + "</span>" +
+      '<span class="cyc-phase__text">' +
+      '<span class="cyc-phase__name">' + App.escapeHtml(phaseName) + "</span>" +
+      '<span class="cyc-phase__day">' +
+      App.escapeHtml(
+        L("День цикла: ", "Cycle day: ") + (data.day_of_cycle != null ? data.day_of_cycle : "—")
+      ) +
+      "</span>" +
+      "</span>" +
+      "</div>";
+
+    // Прогнозы: следующая менструация (обратный отсчёт) + фертильное окно.
+    var facts = [];
+    if (data.days_until_next_period != null) {
+      var dleft = Number(data.days_until_next_period);
+      var whenText;
+      if (dleft <= 0) {
+        whenText = L("ожидается сегодня", "expected today");
+      } else {
+        whenText =
+          L("через ", "in ") + dleft + " " + cycDays(dleft) +
+          (data.next_period_date ? " · " + cycShortDate(data.next_period_date) : "");
+      }
+      facts.push(
+        cycFactHtml("📅", L("Следующая менструация", "Next period"), whenText)
+      );
+    }
+    if (data.ovulation_date) {
+      facts.push(
+        cycFactHtml("✨", L("Овуляция (оценка)", "Ovulation (est.)"), cycShortDate(data.ovulation_date))
+      );
+    }
+    if (data.fertile_start && data.fertile_end) {
+      facts.push(
+        cycFactHtml(
+          "🌷",
+          L("Фертильное окно", "Fertile window"),
+          cycShortDate(data.fertile_start) + "–" + cycShortDate(data.fertile_end)
+        )
+      );
+    }
+    if (facts.length) {
+      html += '<div class="cyc-facts">' + facts.join("") + "</div>";
+    }
+
+    // Советы под фазу (питание / тренировки / самочувствие).
+    if (info) {
+      html +=
+        '<div class="cyc-tips">' +
+        '<div class="cyc-tips__title">' +
+        App.escapeHtml(L("Рекомендации на эту фазу", "Tips for this phase")) +
+        "</div>" +
+        cycTipHtml("🍽️", L("Питание", "Nutrition"), info.nutrition) +
+        cycTipHtml("🏃", L("Тренировки", "Training"), info.training) +
+        cycTipHtml("💗", L("Самочувствие", "Well-being"), info.wellbeing) +
+        "</div>";
+    }
+
+    // Заметка пользователя (если есть).
+    if (data.notes) {
+      html +=
+        '<div class="cyc-note">' +
+        '<span class="cyc-note__label">' +
+        App.escapeHtml(L("Заметка: ", "Note: ")) +
+        "</span>" +
+        App.escapeHtml(data.notes) +
+        "</div>";
+    }
+
+    // Действия: обновить данные / сбросить.
+    html +=
+      '<div class="cyc-actions">' +
+      '<button type="button" class="btn btn--ghost cyc-edit" id="accCycEdit">' +
+      App.escapeHtml(L("Обновить данные", "Update data")) +
+      "</button>" +
+      '<button type="button" class="btn btn--ghost cyc-reset" id="accCycReset">' +
+      App.escapeHtml(L("Сбросить", "Reset")) +
+      "</button>" +
+      "</div>" +
+      '<p class="cyc-disclaimer">' +
+      App.escapeHtml(
+        L(
+          "Прогноз ориентировочный и не заменяет консультацию врача.",
+          "The forecast is approximate and not a substitute for medical advice."
+        )
+      ) +
+      "</p>";
+
+    return html;
+  }
+
+  // Склонение слова «день» для русского (2 дня / 5 дней); для EN всегда day(s).
+  function cycDays(n) {
+    if (App.lang === "en") return n === 1 ? "day" : "days";
+    var m10 = n % 10;
+    var m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return "день";
+    if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return "дня";
+    return "дней";
+  }
+
+  // Один факт-прогноз (иконка + подпись + значение).
+  function cycFactHtml(icon, label, value) {
+    return (
+      '<div class="cyc-fact">' +
+      '<span class="cyc-fact__icon" aria-hidden="true">' + icon + "</span>" +
+      '<span class="cyc-fact__body">' +
+      '<span class="cyc-fact__label">' + App.escapeHtml(label) + "</span>" +
+      '<span class="cyc-fact__value">' + App.escapeHtml(value) + "</span>" +
+      "</span>" +
+      "</div>"
+    );
+  }
+
+  // Один совет под фазу (иконка + заголовок + текст).
+  function cycTipHtml(icon, title, text) {
+    return (
+      '<div class="cyc-tip">' +
+      '<span class="cyc-tip__icon" aria-hidden="true">' + icon + "</span>" +
+      '<span class="cyc-tip__body">' +
+      '<span class="cyc-tip__title">' + App.escapeHtml(title) + "</span>" +
+      '<span class="cyc-tip__text">' + App.escapeHtml(text) + "</span>" +
+      "</span>" +
+      "</div>"
+    );
+  }
+
+  // Вешает обработчики на кнопки «Обновить данные» и «Сбросить».
+  function bindCycleStatus(card) {
+    var editBtn = card.querySelector("#accCycEdit");
+    if (editBtn) {
+      editBtn.addEventListener("click", function () {
+        App.haptic("selection");
+        // Показываем форму, предзаполненную текущими данными, с кнопкой «Отмена».
+        card.innerHTML =
+          cycleHeaderHtml() +
+          '<div class="cyc-body">' +
+          cycleFormHtml(els.cycleData) +
+          "</div>";
+        // Добавляем кнопку отмены рядом с сохранением.
+        var saveBtn = card.querySelector("#accCycSave");
+        if (saveBtn) {
+          var cancel = document.createElement("button");
+          cancel.type = "button";
+          cancel.className = "btn btn--ghost cyc-cancel";
+          cancel.id = "accCycCancel";
+          cancel.textContent = L("Отмена", "Cancel");
+          saveBtn.insertAdjacentElement("afterend", cancel);
+        }
+        bindCycleForm(card, true);
+      });
+    }
+
+    var resetBtn = card.querySelector("#accCycReset");
+    if (resetBtn) {
+      resetBtn.addEventListener("click", function () {
+        if (!window.confirm(L("Удалить данные цикла?", "Delete cycle data?"))) return;
+        resetBtn.disabled = true;
+        App.haptic("light");
+        App.api
+          .resetCycle()
+          .then(function () {
+            els.cycleLoaded = true;
+            els.cycleData = { has_data: false };
+            renderCycleView(card, els.cycleData);
+            App.toast(L("Данные цикла удалены", "Cycle data deleted"));
+            App.haptic("success");
+          })
+          .catch(function (err) {
+            resetBtn.disabled = false;
+            var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+            App.toast(L("Не удалось удалить: ", "Failed to delete: ") + reason);
+            App.haptic("error");
+          });
+      });
+    }
+  }
+
+  /* =====================================================================
    *  ВЕЧЕРНЯЯ СВОДКА
    *  Только ежедневная сводка: тумблер daily_summary_enabled + время summary_time.
    *  Остальные напоминания вынесены в разделы Тренировки / Добавки / Рацион.
@@ -2035,6 +2588,7 @@
       weightCard: viewEl.querySelector("#accWeightCard"),
       adaptCard: viewEl.querySelector("#accAdaptCard"),
       reportCard: viewEl.querySelector("#accReportCard"),
+      cycleCard: viewEl.querySelector("#accCycleCard"),
       summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
@@ -2049,6 +2603,7 @@
     renderWeight();
     renderAdaptive();
     renderReport();
+    renderCycle();
   }
 
   // ---- Контроллер страницы ----

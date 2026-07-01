@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 from backend import (
     adaptive,
     config,
+    cycle,
     fitness,
     notifications,
     nutrition,
@@ -64,6 +65,7 @@ from backend.ai_service import (
 from backend.auth import get_current_user
 from backend.database import get_db, init_db
 from backend.models import (
+    CycleLog,
     DiaryEntry,
     FavoriteFood,
     MealTemplate,
@@ -80,6 +82,8 @@ from backend.schemas import (
     AdaptiveResultOut,
     AnalyzeOut,
     CopyYesterdayIn,
+    CycleLogIn,
+    CycleStatusOut,
     DiaryDayOut,
     DiaryEntryIn,
     DiaryEntryOut,
@@ -2246,6 +2250,126 @@ def food_healthy_snacks(
         for s in result.get("suggestions", [])
     ]
     return HealthySnacksOut(suggestions=suggestions)
+
+
+# --------------------------------------------------------------------------- #
+#  Трекинг цикла (Этап 6) — ПРЕМИУМ
+#
+#  Пользователь вводит дату начала последней менструации, среднюю длину цикла и
+#  длительность менструации; бэкенд рассчитывает текущую фазу, день цикла, прогноз
+#  следующей менструации и фертильное окно (backend/cycle.py). Данные приватны —
+#  всё фильтруется по telegram_id текущего пользователя. Эндпоинты премиум
+#  (require_premium -> 402 без подписки) и объявлены ВЫШЕ app.mount. Значения
+#  ОРИЕНТИРОВОЧНЫЕ (не медицинская рекомендация) — дисклеймер показывает фронтенд.
+# --------------------------------------------------------------------------- #
+def _latest_cycle_log(db: Session, telegram_id: int) -> CycleLog | None:
+    """Вернуть самую свежую запись цикла пользователя (или None)."""
+    return (
+        db.query(CycleLog)
+        .filter(CycleLog.telegram_id == telegram_id)
+        .order_by(CycleLog.created_at.desc(), CycleLog.id.desc())
+        .first()
+    )
+
+
+def _build_cycle_status_out(log: CycleLog | None) -> CycleStatusOut:
+    """Собрать ответ статуса цикла из записи БД (или пустой, если записи нет)."""
+    if log is None:
+        return CycleStatusOut(has_data=False)
+
+    status = cycle.compute_status(
+        log.cycle_start_date,
+        cycle_length=log.cycle_length,
+        period_length=log.period_length,
+    )
+    if status is None:
+        # Дата в записи некорректна — считаем, что данных нет.
+        return CycleStatusOut(has_data=False)
+
+    return CycleStatusOut(
+        has_data=True,
+        cycle_start_date=status["cycle_start_date"],
+        cycle_length=status["cycle_length"],
+        period_length=status["period_length"],
+        day_of_cycle=status["day_of_cycle"],
+        phase=status["phase"],
+        next_period_date=status["next_period_date"],
+        days_until_next_period=status["days_until_next_period"],
+        ovulation_date=status["ovulation_date"],
+        fertile_start=status["fertile_start"],
+        fertile_end=status["fertile_end"],
+        notes=log.notes,
+    )
+
+
+@app.get("/cycle/status", response_model=CycleStatusOut)
+def cycle_status(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> CycleStatusOut:
+    """Вернуть текущий статус цикла пользователя (по самой свежей записи).
+
+    Если пользователь ещё ничего не вводил — has_data=False (остальные поля None).
+    """
+    log = _latest_cycle_log(db, user.telegram_id)
+    return _build_cycle_status_out(log)
+
+
+@app.post("/cycle/log", response_model=CycleStatusOut)
+def cycle_log(
+    data: CycleLogIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> CycleStatusOut:
+    """Сохранить данные о цикле и вернуть пересчитанный статус.
+
+    Дату начала валидируем строго (нужен формат YYYY-MM-DD); длину цикла и
+    менструации приводим к разумному диапазону в backend/cycle.py. Каждая запись
+    добавляется в историю (существующие не перезаписываем).
+    """
+    start = cycle.parse_date(data.cycle_start_date)
+    if start is None:
+        raise HTTPException(
+            status_code=400, detail="Некорректная дата (нужен формат YYYY-MM-DD)"
+        )
+
+    # Приводим числовые параметры к валидному диапазону (или к значениям по умолчанию).
+    cl = cycle.clamp_cycle_length(
+        data.cycle_length if data.cycle_length is not None else cycle.DEFAULT_CYCLE_LENGTH
+    )
+    pl = cycle.clamp_period_length(
+        data.period_length if data.period_length is not None else cycle.DEFAULT_PERIOD_LENGTH
+    )
+
+    notes = (data.notes or "").strip() or None
+
+    entry = CycleLog(
+        telegram_id=user.telegram_id,
+        cycle_start_date=start.isoformat(),
+        cycle_length=cl,
+        period_length=pl,
+        notes=notes,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    return _build_cycle_status_out(entry)
+
+
+@app.delete("/cycle")
+def cycle_reset(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Удалить все записи цикла пользователя (сброс данных трекера)."""
+    deleted = (
+        db.query(CycleLog)
+        .filter(CycleLog.telegram_id == user.telegram_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"deleted": int(deleted or 0)}
 
 
 # --------------------------------------------------------------------------- #
