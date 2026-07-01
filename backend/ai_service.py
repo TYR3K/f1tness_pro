@@ -251,6 +251,48 @@ def _coerce_confidence(value, default: str = "medium") -> str:
         return default
 
 
+# Канонические единицы измерения (язык-независимые КЛЮЧИ, хранятся в БД):
+#   pcs (штучное), g (весовое), ml (жидкое), serving (порция).
+CANONICAL_UNITS = ("pcs", "g", "ml", "serving")
+
+# Карта псевдонимов единиц -> канонический ключ. Всё остальное -> None.
+_UNIT_ALIASES = {
+    # штучное
+    "pcs": "pcs", "pc": "pcs", "piece": "pcs", "pieces": "pcs",
+    "шт": "pcs", "штук": "pcs", "штука": "pcs", "штуки": "pcs", "штук.": "pcs",
+    # весовое
+    "g": "g", "gram": "g", "grams": "g",
+    "г": "g", "гр": "g", "грамм": "g", "граммов": "g", "грамма": "g",
+    # жидкое
+    "ml": "ml", "мл": "ml",
+    # порция
+    "serving": "serving", "servings": "serving", "portion": "serving", "portions": "serving",
+    "порция": "serving", "порции": "serving", "порций": "serving",
+}
+
+
+def _normalize_unit(u) -> str | None:
+    """
+    Приводит единицу измерения к каноническому ключу (pcs|g|ml|serving) или None.
+
+    Принимает как сами канонические ключи, так и распространённые псевдонимы
+    (шт/штук/pc/piece -> pcs; г/гр/грамм/gram -> g; мл/ml -> ml;
+    порция/portion/serving -> serving). Регистр и крайние пробелы игнорируются.
+    Всё, что не удаётся сопоставить, даёт None.
+    """
+    try:
+        if u is None:
+            return None
+        key = str(u).strip().lower()
+        if not key:
+            return None
+        if key in CANONICAL_UNITS:
+            return key
+        return _UNIT_ALIASES.get(key)
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_json(content: str):
     """
     Пытается достать JSON-объект из текста ответа модели.
@@ -1033,9 +1075,20 @@ PARSE_FOOD_SYSTEM_PROMPT = (
     '  "meal_type" — "breakfast" | "lunch" | "dinner" | "snack" — приём пищи из фразы '
     "(завтрак->breakfast, обед->lunch, ужин->dinner, перекус->snack); если не указано — null;\n"
     '  "items" — массив блюд, по одному объекту на продукт: '
-    '{"dish_name": строка на русском, "calories": целое ккал, "proteins": число г, '
+    '{"dish_name": строка на русском, "quantity": число (количество/вес), '
+    '"unit": "pcs"|"g"|"ml"|"serving", "calories": целое ккал, "proteins": число г, '
     '"fats": число г, "carbs": число г}.\n\n'
     "Правила:\n"
+    '- "unit" — СТРОГО один из ключей: "pcs" (штучное: яйца, бананы, котлеты), '
+    '"g" (весовое: хлеб, рис, мясо), "ml" (жидкое: молоко, сок), '
+    '"serving" (порция — если ни то, ни другое).\n'
+    '- "quantity" — количество для единицы: для "pcs" число штук, для "g" вес в граммах, '
+    'для "ml" объём в миллилитрах, для "serving" число порций.\n'
+    "- calories и БЖУ — это СУММА (ИТОГО) для указанного quantity, а НЕ на единицу.\n"
+    "- ОБЪЕДИНЯЙ повторяющиеся одинаковые продукты в ОДИН элемент с суммарным quantity "
+    '(например, «два варёных яйца» -> ОДИН объект {dish_name:"яйцо варёное", quantity:2, '
+    'unit:"pcs", ...итого за 2 яйца}; «100 грамм хлеба» -> {dish_name:"хлеб", quantity:100, '
+    'unit:"g", ...итого за 100 г}).\n'
     "- Учитывай количество/вес (штуки, граммы) при оценке.\n"
     "- Оценивай реалистично; для настоящей еды калории и БЖУ больше нуля.\n"
     "- Не добавляй того, чего нет в описании; если еды в тексте нет — items пустой.\n"
@@ -1051,9 +1104,20 @@ PARSE_FOOD_SYSTEM_PROMPT_EN = (
     '  "meal_type" — "breakfast" | "lunch" | "dinner" | "snack" — the meal detected from the '
     "phrase; if not stated — null;\n"
     '  "items" — array of dishes, one object per product: '
-    '{"dish_name": string in English, "calories": integer kcal, "proteins": number g, '
+    '{"dish_name": string in English, "quantity": number (count/weight), '
+    '"unit": "pcs"|"g"|"ml"|"serving", "calories": integer kcal, "proteins": number g, '
     '"fats": number g, "carbs": number g}.\n\n'
     "Rules:\n"
+    '- "unit" must be STRICTLY one of the keys: "pcs" (countable: eggs, bananas, cutlets), '
+    '"g" (by weight: bread, rice, meat), "ml" (liquid: milk, juice), '
+    '"serving" (a portion — if neither of the above).\n'
+    '- "quantity" is the amount for the unit: for "pcs" the number of pieces, for "g" the '
+    'weight in grams, for "ml" the volume in millilitres, for "serving" the number of portions.\n'
+    "- calories and macros are the TOTAL for the given quantity, NOT per unit.\n"
+    "- COMBINE repeated identical foods into a SINGLE item with the summed quantity "
+    '(e.g. "two boiled eggs" -> ONE object {dish_name:"boiled egg", quantity:2, unit:"pcs", '
+    '...totals for 2 eggs}; "100 grams of bread" -> {dish_name:"bread", quantity:100, '
+    'unit:"g", ...totals for 100 g}).\n'
     "- Take the stated quantity/weight (pieces, grams) into account.\n"
     "- Estimate realistically; for real food calories and macros are greater than zero.\n"
     "- Do not add anything not in the description; if there is no food — items is empty.\n"
@@ -1110,7 +1174,11 @@ def parse_food_text(text: str, lang: str = "ru") -> dict:
     тип приёма пищи.
 
     Возвращает {"meal_type": "breakfast"|"lunch"|"dinner"|"snack"|None,
-                "items": [{"dish_name","calories","proteins","fats","carbs"}, ...]}.
+                "items": [{"dish_name","quantity","unit","calories","proteins",
+                           "fats","carbs"}, ...]}.
+    quantity — число (или None), unit — канонический ключ pcs|g|ml|serving (или None);
+    калории и БЖУ — это ИТОГО за указанное количество. Одинаковые продукты модель
+    объединяет в один элемент с суммарным quantity.
 
     Параметр lang ("ru"/"en") управляет языком значений dish_name. При неудаче
     обращения к ИИ или отсутствии блюд выбрасывает AIError.
@@ -1155,9 +1223,15 @@ def parse_food_text(text: str, lang: str = "ru") -> dict:
         dish_name = it.get("dish_name")
         if not isinstance(dish_name, str) or not dish_name.strip():
             continue
+        # Количество и единица измерения (канонический ключ pcs|g|ml|serving или None).
+        quantity = it.get("quantity")
+        quantity = _coerce_float(quantity) if quantity is not None else None
+        unit = _normalize_unit(it.get("unit"))
         items.append(
             {
                 "dish_name": dish_name.strip(),
+                "quantity": quantity,
+                "unit": unit,
                 "calories": _coerce_int(it.get("calories")),
                 "proteins": _coerce_float(it.get("proteins")),
                 "fats": _coerce_float(it.get("fats")),
@@ -1954,3 +2028,158 @@ def healthy_snacks(remaining_calories: int, lang: str = "ru") -> dict:
         "AI не вернул ни одного корректного перекуса",
     )
     return {"suggestions": suggestions}
+
+
+# --------------------------------------------------------------------------- #
+#  Быстрый расчёт КБЖУ одного продукта по названию + количеству + единице
+# --------------------------------------------------------------------------- #
+#
+# Используется свободным ручным вводом в дневнике (POST /food/calculate):
+# пользователь пишет название продукта, (опционально) количество и единицу,
+# а модель считает ИТОГОВЫЕ калории и БЖУ на всё это количество.
+
+# Системный промпт расчёта КБЖУ одного продукта (RU).
+CALCULATE_FOOD_SYSTEM_PROMPT = (
+    "Ты — внимательный нутрициолог. Пользователь называет ОДИН продукт/блюдо и "
+    "(возможно) его количество и единицу измерения. Оцени ИТОГОВЫЕ калории и БЖУ "
+    "на ВСЁ это количество (а НЕ на единицу).\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '  "dish_name" — строка, очищенное название продукта на русском;\n'
+    '  "quantity"  — число, количество/вес, для которого посчитаны калории;\n'
+    '  "unit"      — "pcs"|"g"|"ml"|"serving" — единица измерения;\n'
+    '  "calories"  — целое число, ИТОГО ккал за это количество;\n'
+    '  "proteins"  — число, белки в граммах (итого);\n'
+    '  "fats"      — число, жиры в граммах (итого);\n'
+    '  "carbs"     — число, углеводы в граммах (итого).\n\n'
+    "Правила:\n"
+    '- "unit" — СТРОГО один из ключей: "pcs" (штучное: яйца, бананы, котлеты), '
+    '"g" (весовое: хлеб, рис, мясо), "ml" (жидкое: молоко, сок), '
+    '"serving" (порция — если ни то, ни другое).\n'
+    "- calories и БЖУ — это СУММА (ИТОГО) для указанного quantity, а НЕ на единицу.\n"
+    "- Если количество и/или единица НЕ заданы — предположи разумную порцию по умолчанию "
+    "(1 шт/порция для штучного, либо типичные ~100 г для весового) и ВЕРНИ выбранные "
+    "quantity и unit.\n"
+    "- Оценивай реалистично; для настоящей еды калории и БЖУ должны быть больше нуля.\n"
+    "- dish_name — на русском языке."
+)
+
+# Английский аналог CALCULATE_FOOD_SYSTEM_PROMPT (те же ключи, значения на английском).
+CALCULATE_FOOD_SYSTEM_PROMPT_EN = (
+    "You are an attentive nutritionist. The user names ONE product/dish and "
+    "(optionally) its quantity and unit of measure. Estimate the TOTAL calories and "
+    "macros for the WHOLE quantity (NOT per unit).\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '  "dish_name" — string, the cleaned product name in English;\n'
+    '  "quantity"  — number, the quantity/weight the calories are computed for;\n'
+    '  "unit"      — "pcs"|"g"|"ml"|"serving" — the unit of measure;\n'
+    '  "calories"  — integer, the TOTAL kcal for this quantity;\n'
+    '  "proteins"  — number, protein in grams (total);\n'
+    '  "fats"      — number, fat in grams (total);\n'
+    '  "carbs"     — number, carbohydrates in grams (total).\n\n'
+    "Rules:\n"
+    '- "unit" must be STRICTLY one of the keys: "pcs" (countable: eggs, bananas, cutlets), '
+    '"g" (by weight: bread, rice, meat), "ml" (liquid: milk, juice), '
+    '"serving" (a portion — if neither of the above).\n'
+    "- calories and macros are the TOTAL for the given quantity, NOT per unit.\n"
+    "- If the quantity and/or unit are NOT given — assume a sensible default portion "
+    "(1 pcs/serving for countable items, or a typical ~100 g by weight) and RETURN the "
+    "chosen quantity and unit.\n"
+    "- Estimate realistically; for real food calories and macros must be greater than zero.\n"
+    "- dish_name must be in English."
+)
+
+
+def calculate_food(
+    name: str,
+    quantity: float | None = None,
+    unit: str | None = None,
+    lang: str = "ru",
+) -> dict:
+    """
+    Считает ИТОГОВЫЕ калории и БЖУ одного продукта по названию + количеству + единице.
+
+    Параметры:
+        name     — название продукта/блюда (обязательно);
+        quantity — количество/вес (число) или None (модель предположит сама);
+        unit     — канонический ключ единицы (pcs|g|ml|serving) или None;
+        lang     — язык значения dish_name ("ru"/"en").
+
+    Возвращает словарь:
+        {"dish_name": str, "quantity": float|None, "unit": str|None,
+         "calories": int, "proteins": float, "fats": float, "carbs": float}
+    где калории и БЖУ — это ИТОГО за указанное (или предположённое) количество.
+
+    Если quantity/unit не заданы — модель выбирает разумную порцию по умолчанию и
+    возвращает её. При неудаче обращения к ИИ (или бесполезном ответе) выбрасывает
+    AIError (502 на уровне роута), как recommend_meals / parse_food_text.
+    """
+    lang = _normalize_lang(lang)
+    if not name or not str(name).strip():
+        raise AIError("Пустое название продукта для расчёта")
+
+    # Нормализуем входные количество/единицу (единицу — к каноническому ключу).
+    in_name = str(name).strip()
+    in_quantity = _coerce_float(quantity) if quantity is not None else None
+    in_unit = _normalize_unit(unit)
+
+    # Формируем запрос пользователя из известных данных — на нужном языке.
+    if lang == "en":
+        parts = [f"Product: {in_name}."]
+        if in_quantity is not None:
+            parts.append(f"Quantity: {in_quantity}.")
+        if in_unit:
+            parts.append(f"Unit: {in_unit}.")
+        if in_quantity is None and not in_unit:
+            parts.append("Quantity and unit are not specified — assume a sensible default portion.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = [f"Продукт: {in_name}."]
+        if in_quantity is not None:
+            parts.append(f"Количество: {in_quantity}.")
+        if in_unit:
+            parts.append(f"Единица: {in_unit}.")
+        if in_quantity is None and not in_unit:
+            parts.append("Количество и единица не указаны — предположи разумную порцию по умолчанию.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    system_prompt = _pick_prompt(
+        CALCULATE_FOOD_SYSTEM_PROMPT, CALCULATE_FOOD_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="calculate_food"
+    )
+
+    # dish_name: очищенная строка, при отсутствии — исходное название.
+    dish_name = data.get("dish_name")
+    if not isinstance(dish_name, str) or not dish_name.strip():
+        dish_name = in_name
+    else:
+        dish_name = dish_name.strip()
+
+    # Количество: из ответа, иначе исходное; единица: канонический ключ, иначе исходная.
+    out_quantity = data.get("quantity")
+    out_quantity = _coerce_float(out_quantity) if out_quantity is not None else in_quantity
+    out_unit = _normalize_unit(data.get("unit")) or in_unit
+
+    calories = _coerce_int(data.get("calories"))
+
+    # Если модель вернула валидный JSON, но по сути пустой (нет названия и 0 ккал) —
+    # считаем это неудачей разбора (роут отдаст 502), как в других функциях.
+    if (not dish_name) and calories <= 0:
+        raise AIError(
+            "AI не вернул пригодной оценки продукта",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return {
+        "dish_name": dish_name,
+        "quantity": out_quantity,
+        "unit": out_unit,
+        "calories": calories,
+        "proteins": _coerce_float(data.get("proteins")),
+        "fats": _coerce_float(data.get("fats")),
+        "carbs": _coerce_float(data.get("carbs")),
+    }

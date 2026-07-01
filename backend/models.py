@@ -164,6 +164,10 @@ class DiaryEntry(Base):
     fats = Column(Float)         # жиры, г
     carbs = Column(Float)        # углеводы, г
 
+    # Количество и единица измерения (добавлены поверх таблицы, nullable).
+    quantity = Column(Float, nullable=True)   # число (2, 100, ...)
+    unit = Column(String, nullable=True)      # канонический ключ: pcs | g | ml | serving
+
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
 

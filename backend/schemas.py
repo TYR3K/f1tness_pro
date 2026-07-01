@@ -95,6 +95,9 @@ class DiaryEntryIn(BaseModel):
     proteins: float
     fats: float
     carbs: float
+    # Количество и единица измерения (канонический ключ pcs|g|ml|serving или None).
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
 
 
 class DiaryEntryOut(BaseModel):
@@ -110,6 +113,9 @@ class DiaryEntryOut(BaseModel):
     proteins: float
     fats: float
     carbs: float
+    # Количество и единица измерения (канонический ключ pcs|g|ml|serving или None).
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
 
 
 class MealsOut(BaseModel):
@@ -212,6 +218,61 @@ class ManualFoodIn(BaseModel):
     proteins: float
     fats: float
     carbs: float
+    # Количество и единица измерения (канонический ключ pcs|g|ml|serving или None).
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+#  Умный расчёт КБЖУ по названию/количеству и «вчерашние» блюда (быстрый повтор)
+# --------------------------------------------------------------------------- #
+class FoodCalculateIn(BaseModel):
+    """Запрос на AI-расчёт КБЖУ продукта в заданном количестве и единице.
+
+    quantity/unit необязательны: при отсутствии ИИ подставляет разумное
+    значение по умолчанию и возвращает его в ответе. unit — канонический
+    ключ (pcs|g|ml|serving) или None.
+    """
+
+    name: str                            # название продукта/блюда
+    quantity: Optional[float] = None     # количество (число) или None
+    unit: Optional[str] = None           # канонический ключ единицы или None
+
+
+class FoodCalculateOut(BaseModel):
+    """Результат AI-расчёта: очищенное название и ИТОГОВЫЕ КБЖУ на количество.
+
+    quantity/unit — фактически применённые (могут быть подставлены ИИ, если
+    не были заданы). calories/proteins/fats/carbs — ВСЕГДА суммарно на всё
+    указанное количество (не на единицу).
+    """
+
+    dish_name: str                       # очищенное название блюда
+    quantity: Optional[float] = None     # применённое количество или None
+    unit: Optional[str] = None           # применённая единица (канонический ключ) или None
+    calories: int                        # калории всего, ккал
+    proteins: float                      # белки всего, г
+    fats: float                          # жиры всего, г
+    carbs: float                         # углеводы всего, г
+
+
+class YesterdayItem(BaseModel):
+    """Одно «вчерашнее» блюдо для быстрого повторного добавления."""
+
+    dish_name: str
+    quantity: Optional[float] = None     # количество или None
+    unit: Optional[str] = None           # канонический ключ единицы или None
+    calories: int
+    proteins: float
+    fats: float
+    carbs: float
+    meal_type: str                       # breakfast | lunch | dinner | snack
+
+
+class YesterdayOut(BaseModel):
+    """Список «вчерашних» блюд (с дедупликацией по названию)."""
+
+    items: List[YesterdayItem] = []
 
 
 class RecentFoodOut(BaseModel):
@@ -515,6 +576,9 @@ class VoiceItemOut(BaseModel):
     proteins: float         # белки, г
     fats: float             # жиры, г
     carbs: float            # углеводы, г
+    # Количество и единица измерения (канонический ключ pcs|g|ml|serving или None).
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
 
 
 class VoiceFoodOut(BaseModel):

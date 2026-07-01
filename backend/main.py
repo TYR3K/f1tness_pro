@@ -52,6 +52,7 @@ from backend import (
 from backend.ai_service import (
     AIError,
     analyze_food_image,
+    calculate_food,
     generate_meal_plan,
     generate_weekly_report,
     healthy_snacks,
@@ -89,6 +90,8 @@ from backend.schemas import (
     DiaryDayOut,
     DiaryEntryIn,
     DiaryEntryOut,
+    FoodCalculateIn,
+    FoodCalculateOut,
     FoodSuggestIn,
     FoodSuggestOut,
     GoalCalcIn,
@@ -150,6 +153,8 @@ from backend.schemas import (
     WorkoutEstimateOut,
     WorkoutIn,
     WorkoutOut,
+    YesterdayItem,
+    YesterdayOut,
 )
 
 # Допустимые типы приёмов пищи (порядок важен для группировки/вывода).
@@ -481,6 +486,9 @@ async def food_voice(
             proteins=it["proteins"],
             fats=it["fats"],
             carbs=it["carbs"],
+            # Количество и единица измерения (parse_food_text теперь их отдаёт).
+            quantity=it.get("quantity"),
+            unit=it.get("unit"),
         )
         for it in parsed.get("items", [])
     ]
@@ -510,6 +518,9 @@ def diary_add(
         proteins=entry.proteins,
         fats=entry.fats,
         carbs=entry.carbs,
+        # Количество и единица измерения (канонический ключ) — опциональны.
+        quantity=entry.quantity,
+        unit=entry.unit,
     )
     db.add(db_entry)
     db.commit()
@@ -730,6 +741,9 @@ def food_manual(
         proteins=data.proteins,
         fats=data.fats,
         carbs=data.carbs,
+        # Количество и единица измерения (канонический ключ) — опциональны.
+        quantity=data.quantity,
+        unit=data.unit,
     )
     db.add(db_entry)
 
@@ -835,6 +849,105 @@ def food_recommend(
         for s in result.get("suggestions", [])
     ]
     return RecommendOut(suggestions=suggestions)
+
+
+# --------------------------------------------------------------------------- #
+#  Умный расчёт КБЖУ по названию/количеству (базовый дневник — БЕЗ премиума)
+# --------------------------------------------------------------------------- #
+@app.post("/food/calculate", response_model=FoodCalculateOut)
+def food_calculate(
+    data: FoodCalculateIn,
+    user: User = Depends(get_current_user),
+) -> FoodCalculateOut:
+    """Оценить ИТОГОВЫЕ КБЖУ продукта в заданном количестве и единице (ИИ).
+
+    Базовая функция дневника — доступна без премиума (get_current_user).
+    Если количество/единица не заданы, ИИ подставляет разумное значение по
+    умолчанию (1 шт/порция или типичные 100 г) и возвращает применённые
+    quantity/unit. Язык расчёта берём из профиля пользователя ("ru" по умолчанию).
+    При сбое ИИ отдаём 502 (как в /food/recommend).
+    """
+    try:
+        result = calculate_food(
+            data.name,
+            data.quantity,
+            data.unit,
+            lang=user.language or "ru",
+        )
+    except AIError as exc:
+        logger.warning(
+            "food/calculate: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось рассчитать калорийность. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("food/calculate: %s", exc)
+        detail = "Сервис расчёта калорийности временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    return FoodCalculateOut(**result)
+
+
+# --------------------------------------------------------------------------- #
+#  «Вчерашние» блюда для быстрого повтора (базовый дневник — БЕЗ премиума)
+# --------------------------------------------------------------------------- #
+@app.get("/food/yesterday", response_model=YesterdayOut)
+def food_yesterday(
+    date: str | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> YesterdayOut:
+    """Вернуть блюда, залогированные пользователем во «вчерашний» день.
+
+    Базовая функция дневника — доступна без премиума (get_current_user).
+    ref — переданная дата (если валидна) либо сегодня; «вчера» = ref - 1 день.
+    Дедупликация по нижнему регистру названия: оставляем ПЕРВОЕ вхождение
+    (самое раннее по времени добавления).
+    """
+    # Опорная дата: переданная (если валидна) либо сегодняшняя.
+    try:
+        ref = date_cls.fromisoformat(date) if date else date_cls.today()
+    except (TypeError, ValueError):
+        ref = date_cls.today()
+    yesterday = (ref - timedelta(days=1)).isoformat()
+
+    rows = (
+        db.query(DiaryEntry)
+        .filter(
+            DiaryEntry.telegram_id == user.telegram_id,
+            DiaryEntry.date == yesterday,
+        )
+        .order_by(DiaryEntry.created_at.asc(), DiaryEntry.id.asc())
+        .all()
+    )
+
+    # Дедупликация по названию блюда — оставляем первое (самое раннее) вхождение.
+    seen: set[str] = set()
+    items: list[YesterdayItem] = []
+    for r in rows:
+        key = (r.dish_name or "").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(
+            YesterdayItem(
+                dish_name=r.dish_name,
+                quantity=r.quantity,
+                unit=r.unit,
+                calories=r.calories or 0,
+                proteins=r.proteins or 0.0,
+                fats=r.fats or 0.0,
+                carbs=r.carbs or 0.0,
+                meal_type=r.meal_type,
+            )
+        )
+
+    return YesterdayOut(items=items)
 
 
 # --------------------------------------------------------------------------- #

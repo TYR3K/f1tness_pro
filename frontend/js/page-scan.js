@@ -200,6 +200,23 @@
     return type;
   }
 
+  // Короткая локализованная подпись канонической единицы измерения.
+  // pcs -> шт/pcs, g -> г/g, ml -> мл/ml, serving -> порция/serving.
+  function unitLabel(key) {
+    switch (key) {
+      case "pcs":
+        return L("шт", "pcs");
+      case "g":
+        return L("г", "g");
+      case "ml":
+        return L("мл", "ml");
+      case "serving":
+        return L("порция", "serving");
+      default:
+        return "";
+    }
+  }
+
   // Короткий показ уведомления.
   function toast(msg) {
     if (App && typeof App.toast === "function") App.toast(msg);
@@ -1068,6 +1085,14 @@
       carbs: num(e.carbs),
     };
 
+    // Количество/единица: фото-поток измеряет порцию в граммах. Если вес порции
+    // известен (отредактированный или оценённый ИИ) — прокидываем его как g.
+    var weightVal = num(e.weight);
+    if (weightVal > 0) {
+      entry.quantity = weightVal;
+      entry.unit = "g";
+    }
+
     if (App && typeof App.showLoading === "function") App.showLoading();
 
     App.api
@@ -1394,6 +1419,10 @@
             proteins: round1(num(it.proteins)),
             fats: round1(num(it.fats)),
             carbs: round1(num(it.carbs)),
+            // Количество/единица приходят из parse_food_text (могут быть null).
+            // Прокидываем как есть — редактируем только КБЖУ, эти поля read-only.
+            quantity: it.quantity == null ? null : num(it.quantity),
+            unit: it.unit == null ? null : String(it.unit),
           };
         });
         voice.result = {
@@ -1693,6 +1722,14 @@
   // HTML одной редактируемой строки блюда голосового результата.
   function voiceItemRowHtml(it, idx) {
     it = it || {};
+    // Небольшой бейдж количества/единицы (read-only), если распознаны из речи.
+    var qtyHtml = "";
+    if (it.quantity != null) {
+      var uLbl = unitLabel(it.unit);
+      var qtyText = fmt(it.quantity) + (uLbl ? " " + uLbl : "");
+      qtyHtml =
+        '<span class="scan-voice-item__qty">' + esc(qtyText) + "</span>";
+    }
     return (
       '<div class="scan-voice-item" data-idx="' + idx + '">' +
         '<div class="scan-voice-item__head">' +
@@ -1700,6 +1737,7 @@
             'data-field="dish_name" data-idx="' + idx + '" ' +
             'value="' + esc(it.dish_name == null ? "" : it.dish_name) + '" ' +
             'placeholder="' + esc(L("Название блюда", "Dish name")) + '" maxlength="120">' +
+          qtyHtml +
           '<button type="button" class="scan-voice-item__remove" data-idx="' + idx + '" ' +
             'aria-label="' + esc(L("Удалить", "Remove")) + '">✕</button>' +
         "</div>" +
@@ -1790,6 +1828,9 @@
         proteins: num(it.proteins),
         fats: num(it.fats),
         carbs: num(it.carbs),
+        // Количество/единица прокидываются как есть (из parse_food_text).
+        quantity: it.quantity == null ? null : num(it.quantity),
+        unit: it.unit == null ? null : it.unit,
       });
     }
 
@@ -1905,7 +1946,25 @@
       state.mealType = "breakfast";
       // Сбрасываем голосовой поток и освобождаем микрофон, если он был занят.
       voiceReset();
+
+      // Одноразовый хинт: если на страницу пришли с намерением «голос»
+      // (App.state.scanMode === "voice"), открываем голосовой ввод сразу после
+      // рендера. Флаг гасим, чтобы не срабатывал повторно.
+      var wantVoice = !!(App.state && App.state.scanMode === "voice");
+      if (wantVoice && App.state) {
+        App.state.scanMode = null;
+      }
+
       render();
+
+      // После рендера главного экрана — переходим к голосовому вводу
+      // (onVoiceTap сам решает: paywall / запись / фолбэк). Делаем это
+      // асинхронно, чтобы не мешать первичной отрисовке камеры.
+      if (wantVoice) {
+        setTimeout(function () {
+          if (App._current === "scan") onVoiceTap();
+        }, 0);
+      }
     },
     // Вызывается при уходе с вкладки — освобождаем ресурсы превью, камеру и микрофон.
     onHide: function () {

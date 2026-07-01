@@ -394,6 +394,19 @@
       return request("/food/recent");
     },
 
+    // Расчёт КБЖУ блюда по названию/количеству/единице (НЕ премиум — базовый дневник).
+    // Тело: {name, quantity:float|null, unit:str|null}.
+    // Ответ: {dish_name, quantity, unit, calories, proteins, fats, carbs}.
+    calculateFood: function (payload) {
+      return request("/food/calculate", { method: "POST", body: payload });
+    },
+
+    // Записи «вчера» (для быстрого добавления). dateIso — "YYYY-MM-DD".
+    // Ответ: {items:[{dish_name, quantity, unit, calories, proteins, fats, carbs, meal_type}]}.
+    getYesterday: function (dateIso) {
+      return request("/food/yesterday?date=" + encodeURIComponent(dateIso));
+    },
+
     // Рекомендации блюд по остатку нормы.
     // Тело: {remaining_calories, remaining_proteins, remaining_fats,
     //        remaining_carbs, diet_goal?, time_of_day?}.
@@ -586,47 +599,6 @@
         method: "POST",
         body: {}
       });
-    },
-
-    /* -------------------------------------------------------------------
-     *  ШАБЛОНЫ ПИТАНИЯ (Этап 4, ПРЕМИУМ)
-     *  Все роуты платные: для free бэкенд отдаёт 402 (paywall).
-     * ------------------------------------------------------------------- */
-
-    // Сохранение шаблона питания.
-    // Тело: {name, template_type:"dish"|"meal"|"day", meal_type?,
-    //   items:[{dish_name, calories, proteins, fats, carbs, meal_type?}]}.
-    // Ответ: TemplateOut {id, name, template_type, meal_type, items:[...]}.
-    saveTemplate: function (payload) {
-      return request("/template/save", { method: "POST", body: payload });
-    },
-
-    // Список шаблонов пользователя (новые сверху).
-    // Ответ: {items:[TemplateOut]}.
-    getTemplates: function () {
-      return request("/template/list");
-    },
-
-    // Применение шаблона к дате (создаёт записи дневника).
-    // Тело: {date:"YYYY-MM-DD", meal_type?}. Ответ: {added:int}.
-    applyTemplate: function (id, payload) {
-      return request("/template/apply/" + encodeURIComponent(id), {
-        method: "POST",
-        body: payload
-      });
-    },
-
-    // Удаление шаблона по id. Ответ: {ok}.
-    deleteTemplate: function (id) {
-      return request("/template/" + encodeURIComponent(id), {
-        method: "DELETE"
-      });
-    },
-
-    // Копирование всех записей дневника со «вчера» на указанную дату.
-    // Тело: {date:"YYYY-MM-DD"}. Ответ: {added:int}.
-    copyYesterday: function (payload) {
-      return request("/diary/copy-yesterday", { method: "POST", body: payload });
     },
 
     /* -------------------------------------------------------------------
