@@ -544,12 +544,16 @@ class SubscriptionStatusOut(BaseModel):
     tariffs — словарь тарифов из конфига (цены берутся из env, не хардкодятся).
     """
 
-    subscription_type: str                       # "free" | "monthly" | "yearly" | "lifetime"
+    subscription_type: str                       # "free" | "monthly" | "yearly" | "lifetime" | "trial"
     subscription_until: Optional[str] = None     # ISO-дата окончания подписки (или None)
     is_premium: bool                             # есть ли активный премиум-доступ
     is_owner: bool                               # является ли пользователь владельцем
     tariffs: Dict[str, Any]                      # доступные тарифы (config.TARIFFS)
     tribute_url: Optional[str] = None            # ссылка оплаты через Tribute (или None)
+    # Триал и «истёкшее» состояние (для UX экрана подписки).
+    is_trial_available: bool = False             # можно ли активировать пробный период
+    trial_days: int = 0                          # длительность пробного периода (дней)
+    is_expired: bool = False                     # подписка была, но истекла (не free)
 
 
 class ScansRemainingOut(BaseModel):

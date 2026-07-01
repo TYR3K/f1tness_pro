@@ -1598,16 +1598,56 @@ def subscription_status(
     is_premium вычисляется ТОЛЬКО на бэкенде (owner / lifetime / активная дата).
     Эндпоинт бесплатный — нужен в т.ч. для показа экрана оформления подписки.
     """
+    return _subscription_status_out(user)
+
+
+def _subscription_status_out(user: User) -> SubscriptionStatusOut:
+    """Собрать статус подписки (+ признаки триала и истечения) для клиента."""
+    premium = subscription.is_premium(user)
+    stype = user.subscription_type or "free"
+    # «Истекло» — была платная подписка, но она больше не активна.
+    is_expired = (not premium) and stype not in ("free",) and not user.is_owner
+    is_trial_available = (
+        config.TRIAL_DAYS > 0 and not premium and not bool(getattr(user, "used_trial", False))
+    )
     return SubscriptionStatusOut(
-        subscription_type=user.subscription_type or "free",
+        subscription_type=stype,
         subscription_until=(
             user.subscription_until.isoformat() if user.subscription_until else None
         ),
-        is_premium=subscription.is_premium(user),
+        is_premium=premium,
         is_owner=bool(user.is_owner),
         tariffs=config.TARIFFS,
         tribute_url=config.TRIBUTE_URL or None,
+        is_trial_available=is_trial_available,
+        trial_days=config.TRIAL_DAYS,
+        is_expired=is_expired,
     )
+
+
+@app.post("/subscription/trial", response_model=SubscriptionStatusOut)
+def subscription_trial(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionStatusOut:
+    """Активировать одноразовый бесплатный пробный период (TRIAL_DAYS дней).
+
+    Нельзя, если пользователь уже премиум или триал уже использован.
+    """
+    if config.TRIAL_DAYS <= 0:
+        raise HTTPException(status_code=400, detail={"error": "trial_disabled", "message": "Пробный период недоступен"})
+    if subscription.is_premium(user):
+        raise HTTPException(status_code=400, detail={"error": "already_premium", "message": "Премиум уже активен"})
+    if bool(getattr(user, "used_trial", False)):
+        raise HTTPException(status_code=400, detail={"error": "trial_used", "message": "Пробный период уже был использован"})
+
+    payment_providers.grant_days(
+        db, user.telegram_id, config.TRIAL_DAYS, "trial", subscription_type="trial"
+    )
+    user.used_trial = True
+    db.commit()
+    db.refresh(user)
+    return _subscription_status_out(user)
 
 
 @app.get("/scans/remaining", response_model=ScansRemainingOut)

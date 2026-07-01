@@ -18,6 +18,9 @@ OWNER_ID: int = int(os.getenv("OWNER_ID", "0") or 0)
 # Сколько бесплатных сканирований еды в сутки доступно free-пользователю.
 FREE_SCAN_LIMIT: int = int(os.getenv("FREE_SCAN_LIMIT", "3"))
 
+# Длительность одноразового бесплатного пробного периода (дней). 0 — триал выключен.
+TRIAL_DAYS: int = int(os.getenv("TRIAL_DAYS", "7"))
+
 # Секрет вебхука Telegram (заголовок X-Telegram-Bot-Api-Secret-Token).
 # Если пусто — проверка секрета пропускается (dev-режим).
 TELEGRAM_WEBHOOK_SECRET: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")

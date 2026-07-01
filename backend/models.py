@@ -134,6 +134,9 @@ class User(Base):
     # Используется планировщиком для дедупликации (не чаще раза в 7 дней).
     adaptive_last_calc = Column(String, nullable=True)
 
+    # Использован ли одноразовый бесплатный пробный период (триал).
+    used_trial = Column(Boolean, nullable=True, default=False)
+
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
 

@@ -145,6 +145,7 @@ def run_migrations():
         ("adaptive_enabled", "INTEGER", "0"),      # включён ли адаптивный пересчёт (0/1)
         ("calculated_maintenance", "INTEGER", None),  # фактическое поддержание (ккал/день)
         ("adaptive_last_calc", "TEXT", None),      # дата последнего пересчёта (ISO)
+        ("used_trial", "INTEGER", "0"),            # использован ли пробный период (0/1)
     ]
     _migrate_table("users", user_columns)
 

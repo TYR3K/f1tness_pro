@@ -440,6 +440,17 @@ def _parse_username_arg(text: str) -> str | None:
         return None
 
 
+def _parse_days_arg(text: str) -> int | None:
+    """Извлечь число дней из "/givepro @user 30" (третий токен). None, если нет/не число."""
+    try:
+        parts = str(text).split()
+        if len(parts) < 3:
+            return None
+        return int(parts[2].strip())
+    except Exception:
+        return None
+
+
 # --------------------------------------------------------------------------- #
 #  Команды владельца: /givepro и /revokepro
 # --------------------------------------------------------------------------- #
@@ -518,9 +529,15 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
     # Выполняем выдачу/отзыв доступа через единый слой активации.
     try:
         if is_give:
-            # Владелец выдаёт пожизненный доступ вручную (provider="owner", сумма 0).
-            payment_providers.activate_premium(db, int(target_id), "lifetime", "owner", 0, "XTR")
-            result_text = f"Готово: @{uname} получил пожизненный доступ."
+            # Опциональный аргумент — число дней: "/givepro @user 30". Без него —
+            # пожизненный доступ (как раньше). Для промо/подарков на срок.
+            days = _parse_days_arg(text)
+            if days and days > 0:
+                payment_providers.grant_days(db, int(target_id), days, "owner", subscription_type="monthly")
+                result_text = f"Готово: @{uname} получил доступ на {days} дн."
+            else:
+                payment_providers.activate_premium(db, int(target_id), "lifetime", "owner", 0, "XTR")
+                result_text = f"Готово: @{uname} получил пожизненный доступ."
         else:
             payment_providers.revoke_premium(db, int(target_id))
             result_text = f"Готово: доступ для @{uname} отозван."

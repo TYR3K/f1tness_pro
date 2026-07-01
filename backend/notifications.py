@@ -1043,7 +1043,17 @@ def check_notifications() -> None:
                 except Exception:
                     pass
 
-        # --- 4) Авто-пересчёт адаптивных калорий раз в неделю (Этап 3) -------- #
+        # --- 4.5) Жизненный цикл подписки: напоминания об окончании / win-back -- #
+        try:
+            _process_subscription_lifecycle(db, now, today)
+        except Exception as exc:
+            logger.warning("check_notifications: сбой жизненного цикла подписки: %s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+        # --- 5) Авто-пересчёт адаптивных калорий раз в неделю (Этап 3) -------- #
         # Изолированно: для пользователей с adaptive_enabled, у кого пересчёт не
         # делался или старше 7 дней. Дедуп обеспечивается обновлением
         # adaptive_last_calc внутри run_adaptive_recalc. Весь блок в try/except,
@@ -1082,6 +1092,85 @@ def check_notifications() -> None:
             db.close()
         except Exception:
             pass
+
+
+def _process_subscription_lifecycle(db, now: datetime, today: str) -> None:
+    """Напоминания о подписке: за 3 дня до конца, в день конца и win-back через 7 дней.
+
+    Шлём только премиум-тарифам monthly/yearly (lifetime/free/владельца — нет),
+    и не ночью (после 12:00). Дедуп — по kind + дате. Продлить пользователь может
+    в приложении (на экране подписки).
+    """
+    # Не будим ночью — шлём только во второй половине дня.
+    if not _time_reached(now, "12:00"):
+        return
+
+    try:
+        users = (
+            db.query(User)
+            .filter(
+                User.subscription_until.isnot(None),
+                User.subscription_type.in_(("monthly", "yearly")),
+            )
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("subscription lifecycle: не удалось прочитать пользователей: %s", exc)
+        return
+
+    for u in users:
+        try:
+            if getattr(u, "is_owner", False):
+                continue
+            tid = getattr(u, "telegram_id", None)
+            until = getattr(u, "subscription_until", None)
+            if tid is None or until is None:
+                continue
+
+            days_left = (until.date() - now.date()).days
+            lang = _norm_lang(getattr(u, "language", None))
+            date_str = until.strftime("%d.%m")
+
+            kind = text = None
+            if days_left == 3:
+                kind = "sub_exp_3"
+                text = (
+                    f"⏳ Your «Calories» subscription ends in 3 days ({date_str}). "
+                    "Renew in the app to keep premium access."
+                    if lang == "en" else
+                    f"⏳ Подписка «Калории» заканчивается через 3 дня ({date_str}). "
+                    "Продлите в приложении, чтобы не потерять доступ."
+                )
+            elif days_left == 0:
+                kind = "sub_exp_0"
+                text = (
+                    "⚠️ Your «Calories» subscription ends today. "
+                    "Renew in the app to keep premium."
+                    if lang == "en" else
+                    "⚠️ Подписка «Калории» заканчивается сегодня. "
+                    "Продлите в приложении, чтобы сохранить премиум."
+                )
+            elif days_left == -7:
+                kind = "sub_winback"
+                text = (
+                    "We miss you! Your «Calories» premium ended a week ago. "
+                    "Come back and keep tracking — resubscribe in the app."
+                    if lang == "en" else
+                    "Скучаем! 😔 Премиум «Калории» закончился неделю назад. "
+                    "Возвращайтесь — оформить снова можно прямо в приложении."
+                )
+
+            if kind and text and not _was_sent(db, tid, kind, today):
+                if send_telegram(tid, text):
+                    _mark_sent(db, tid, kind, today)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "subscription lifecycle: сбой tid=%s: %s", getattr(u, "telegram_id", None), exc
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
 
 # --------------------------------------------------------------------------- #

@@ -131,6 +131,56 @@ def activate_premium(
         raise
 
 
+def grant_days(
+    db: Session,
+    telegram_id: int,
+    days: int,
+    provider: str,
+    subscription_type: str = "monthly",
+    amount=None,
+    currency: str | None = None,
+) -> User:
+    """Выдать/продлить доступ на явное число дней (для триала и /givepro N).
+
+    Работает как activate_premium, но с произвольным числом дней и типом
+    подписки (не привязано к config.TARIFFS). Продлеваем от max(now, until),
+    чтобы дни складывались. Пишем Payment для аудита.
+    """
+    try:
+        now = datetime.utcnow()
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if user is None:
+            user = User(telegram_id=telegram_id)
+            db.add(user)
+
+        current_until = getattr(user, "subscription_until", None)
+        base = max(now, current_until) if current_until else now
+        user.subscription_type = subscription_type
+        user.subscription_until = base + timedelta(days=int(days))
+
+        db.add(Payment(
+            telegram_id=telegram_id,
+            provider=provider,
+            amount=amount,
+            currency=currency,
+            subscription_type=subscription_type,
+        ))
+        db.commit()
+        db.refresh(user)
+        logger.info(
+            "Выдан доступ на %s дн.: telegram_id=%s type=%s provider=%s until=%s",
+            days, telegram_id, subscription_type, provider, user.subscription_until,
+        )
+        return user
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Ошибка grant_days (telegram_id=%s days=%s): %s", telegram_id, days, exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+
+
 def revoke_premium(db: Session, telegram_id: int) -> User | None:
     """
     Снять премиум-доступ у пользователя (вернуть на бесплатный тариф).
