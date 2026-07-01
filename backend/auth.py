@@ -84,18 +84,16 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
     if not hmac.compare_digest(calc_hash, received_hash):
         return None
 
-    # Мягкая проверка свежести: если auth_date слишком старый, это может быть
-    # повторно использованные данные. Не валим запрос жёстко, как требует
-    # контракт, но игнорируем некорректный формат auth_date.
+    # Проверка свежести: отклоняем устаревший или некорректный auth_date, чтобы
+    # перехваченный initData нельзя было переиспользовать бесконечно (Telegram
+    # выдаёт свежий initData при каждом открытии мини-аппа, так что легитимные
+    # клиенты не страдают). Нет/битый/старый auth_date -> данные невалидны.
     auth_date = pairs.get("auth_date")
-    if auth_date is not None:
-        try:
-            # Если данным больше суток — оставляем на усмотрение вызывающего;
-            # здесь просто не делаем ничего деструктивного.
-            _ = (time.time() - int(auth_date)) > _MAX_AUTH_AGE_SECONDS
-        except (TypeError, ValueError):
-            # Некорректный auth_date — не критично, продолжаем.
-            pass
+    try:
+        if auth_date is None or (time.time() - int(auth_date)) > _MAX_AUTH_AGE_SECONDS:
+            return None
+    except (TypeError, ValueError):
+        return None
 
     # Шаг 7. Разбираем поле "user" из JSON-строки в словарь.
     user_raw = pairs.get("user")

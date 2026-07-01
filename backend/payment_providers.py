@@ -34,6 +34,7 @@ def activate_premium(
     provider: str,
     amount,
     currency: str,
+    charge_id: str | None = None,
 ) -> User:
     """
     Активировать (или продлить) премиум-подписку пользователя.
@@ -90,13 +91,14 @@ def activate_premium(
             user.subscription_type = tariff
             user.subscription_until = base + timedelta(days=days)
 
-        # 4) Аудит: запись о платеже.
+        # 4) Аудит: запись о платеже (с идентификатором списания для дедупа).
         payment = Payment(
             telegram_id=telegram_id,
             provider=provider,
             amount=amount,
             currency=currency,
             subscription_type=user.subscription_type,
+            charge_id=charge_id,
         )
         db.add(payment)
 

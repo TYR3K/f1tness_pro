@@ -78,8 +78,10 @@ class User(Base):
     height = Column(Float, nullable=True)   # рост, см
     age = Column(Integer, nullable=True)    # возраст, лет
 
-    # Пол: "male" | "female" — нужен для формулы расчёта BMR.
-    gender = Column(String, nullable=True, default="male")
+    # Пол: "male" | "female" — нужен для формулы расчёта BMR. По умолчанию НЕ
+    # задаём (NULL): авто-расчёт цели включается только когда пол выбран явно,
+    # иначе женщинам цель считалась бы по мужской формуле (+166 ккал завышение).
+    gender = Column(String, nullable=True)
 
     # Коэффициент активности для расчёта суточной нормы (TDEE).
     activity_level = Column(Float, nullable=True, default=1.375)
@@ -450,6 +452,11 @@ class Payment(Base):
 
     # Какой тариф был оплачён: "monthly" | "yearly" | "lifetime".
     subscription_type = Column(String)
+
+    # Идентификатор списания провайдера (telegram_payment_charge_id для Stars) —
+    # для ИДЕМПОТЕНТНОСТИ: по нему отсекаем повторную доставку одного платежа,
+    # чтобы подписка не продлевалась дважды. UNIQUE-индекс создаётся в миграции.
+    charge_id = Column(String, nullable=True)
 
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)

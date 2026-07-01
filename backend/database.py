@@ -167,6 +167,19 @@ def run_migrations():
     ]
     _migrate_table("notification_settings", notification_settings_columns)
 
+    # --- Таблица payments: идентификатор списания для идемпотентности оплат. ---
+    _migrate_table("payments", [("charge_id", "TEXT", None)])
+    # UNIQUE-индекс по charge_id (NULL-значения не конфликтуют в SQLite/PostgreSQL).
+    # Через ALTER ADD COLUMN UNIQUE нельзя (SQLite), поэтому отдельным индексом.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_charge_id "
+                "ON payments (charge_id)"
+            ))
+    except Exception as exc:  # noqa: BLE001 — индекс не критичен для старта
+        logger.warning("Не удалось создать уникальный индекс payments.charge_id: %s", exc)
+
 
 def init_db():
     """

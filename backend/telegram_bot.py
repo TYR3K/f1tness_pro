@@ -42,13 +42,22 @@ except Exception:  # pragma: no cover - на случай отсутствия h
 
 from datetime import datetime
 
-from backend.config import OWNER_ID, TARIFFS, BOT_USERNAME
-from backend.models import User, ProGrant, DiaryEntry
+from backend.config import OWNER_ID, TARIFFS, BOT_USERNAME, MINI_APP_URL
+from backend.models import User, ProGrant, DiaryEntry, Payment
 from backend import payment_providers
 from backend import subscription
 from backend import ai_service
 
 logger = logging.getLogger("telegram_bot")
+
+
+class PaymentActivationError(Exception):
+    """Оплата прошла, но активация подписки не удалась.
+
+    Пробрасывается наружу из handle_update, чтобы /telegram/webhook вернул не-200
+    и Telegram повторил доставку апдейта (дедуп по charge_id защищает от двойного
+    начисления). Для всех остальных сбоев апдейт «глушится» и отвечаем 200.
+    """
 
 # Токен Telegram-бота (без него вызовы Bot API невозможны).
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -123,6 +132,55 @@ def _payment_success_text(lang: str) -> str:
         "✅ Оплата получена! Премиум-доступ активирован.\n"
         "Спасибо за поддержку — приятного пользования приложением «Калории»."
     )
+
+
+def _payment_pending_text(lang: str) -> str:
+    """Текст на случай, если оплата прошла, но активация временно не удалась."""
+    if lang == "en":
+        return (
+            "✅ Payment received. We're activating your premium access — it will "
+            "appear within a few minutes. If it doesn't, please contact support."
+        )
+    return (
+        "✅ Оплата получена. Активируем премиум-доступ — он появится в течение "
+        "нескольких минут. Если не появился — напишите в поддержку."
+    )
+
+
+def _alert_owner_payment(text: str) -> None:
+    """Отправить владельцу (OWNER_ID) алерт по проблемному платежу (best-effort)."""
+    if not OWNER_ID:
+        return
+    try:
+        _bot_api("sendMessage", {"chat_id": OWNER_ID, "text": "⚠️ Платёж: " + text})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("_alert_owner_payment: не удалось уведомить владельца: %s", exc)
+
+
+def _validate_pre_checkout(pcq: dict) -> tuple[bool, str | None]:
+    """Проверить pre_checkout_query перед подтверждением оплаты.
+
+    Валидны: payload вида "{tariff}:{telegram_id}", известный тариф, сумма счёта
+    (total_amount, в звёздах) совпадает с ценой тарифа. Иначе — отказ.
+    """
+    try:
+        payload = pcq.get("invoice_payload", "") or ""
+        tariff, tid_raw = payload.split(":", 1)
+        int(tid_raw)  # telegram_id должен быть числом
+        t = TARIFFS.get(tariff)
+        if not t:
+            return False, "Неизвестный тариф."
+        expected = int(t.get("stars") or 0)
+        total = pcq.get("total_amount")
+        if expected and total is not None and int(total) != expected:
+            logger.warning(
+                "pre_checkout: сумма %s != ожидаемой %s (tariff=%s)", total, expected, tariff
+            )
+            return False, "Сумма счёта не совпадает."
+        return True, None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pre_checkout: невалидный payload: %s", exc)
+        return False, "Счёт недействителен."
 
 
 # --------------------------------------------------------------------------- #
@@ -692,11 +750,14 @@ def handle_update(db, update: dict) -> None:
         if isinstance(pre_checkout, dict):
             pcq_id = pre_checkout.get("id")
             if pcq_id is not None:
-                # Подтверждаем, что готовы принять платёж.
-                _bot_api("answerPreCheckoutQuery", {
-                    "pre_checkout_query_id": pcq_id,
-                    "ok": True,
-                })
+                # Валидируем счёт ПЕРЕД подтверждением: payload "{tariff}:{tid}",
+                # тариф из TARIFFS, сумма совпадает с ценой тарифа. Иначе — отказ,
+                # чтобы не принять оплату по поддельному/несогласованному счёту.
+                ok, err = _validate_pre_checkout(pre_checkout)
+                payload = {"pre_checkout_query_id": pcq_id, "ok": ok}
+                if not ok:
+                    payload["error_message"] = err or "Счёт недействителен. Попробуйте ещё раз."
+                _bot_api("answerPreCheckoutQuery", payload)
             return
 
         # Дальше работаем с message (обычное сообщение / событие оплаты).
@@ -708,38 +769,67 @@ def handle_update(db, update: dict) -> None:
         # --- 2) Успешная оплата -> активируем premium ------------------------- #
         successful_payment = message.get("successful_payment")
         if isinstance(successful_payment, dict):
+            # payload мы задали при создании счёта: "{tariff}:{telegram_id}".
+            payload = successful_payment.get("invoice_payload", "") or ""
+            charge_id = successful_payment.get("telegram_payment_charge_id") or None
+            chat_id = message.get("chat", {}).get("id")
+
             try:
-                # payload мы задали при создании счёта: "{tariff}:{telegram_id}".
-                payload = successful_payment.get("invoice_payload", "") or ""
                 tariff, tid_raw = payload.split(":", 1)
                 tid = int(tid_raw)
+            except Exception as exc:
+                # Оплата есть, но не понимаем, кому активировать — ретрай не поможет,
+                # поэтому алертим владельца и молча выходим (ответим 200).
+                logger.error("successful_payment: битый payload %r: %s", payload, exc)
+                _alert_owner_payment(f"оплата с непонятным payload={payload!r}, charge={charge_id}")
+                return
 
+            # ИДЕМПОТЕНТНОСТЬ: этот платёж (charge_id) уже обработан? Повторная
+            # доставка апдейта не должна продлевать подписку второй раз.
+            if charge_id:
+                try:
+                    already = db.query(Payment).filter(Payment.charge_id == charge_id).first()
+                except Exception:  # noqa: BLE001
+                    already = None
+                if already is not None:
+                    logger.info("successful_payment: charge %s уже обработан — пропуск", charge_id)
+                    if chat_id is not None:
+                        _bot_api("sendMessage", {
+                            "chat_id": chat_id,
+                            "text": _payment_success_text(_user_language(db, tid)),
+                        })
+                    return
+
+            try:
                 payment_providers.activate_premium(
-                    db,
-                    tid,
-                    tariff,
-                    "stars",
+                    db, tid, tariff, "stars",
                     successful_payment.get("total_amount"),
                     successful_payment.get("currency", "XTR"),
+                    charge_id=charge_id,
                 )
-
-                # Подтверждение оплаты — на языке активированного пользователя
-                # (User.language, фолбэк "ru"). Берём язык по tid из payload —
-                # он точно указывает на того, кому активировали подписку.
                 lang = _user_language(db, tid)
-
-                # Подтверждаем пользователю активацию подписки.
-                chat_id = message.get("chat", {}).get("id", tid)
                 _bot_api("sendMessage", {
-                    "chat_id": chat_id,
+                    "chat_id": chat_id if chat_id is not None else tid,
                     "text": _payment_success_text(lang),
                 })
             except Exception as exc:
-                logger.warning("handle_update: сбой активации после оплаты: %s", exc)
+                # Оплата ПРОШЛА, но активация не удалась — НЕ глушим:
+                logger.error("successful_payment: сбой активации (tid=%s charge=%s): %s", tid, charge_id, exc)
                 try:
                     db.rollback()
                 except Exception:
                     pass
+                # (1) сообщаем плательщику, что доступ появится; (2) алертим владельца;
+                if chat_id is not None:
+                    _bot_api("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": _payment_pending_text(_user_language(db, tid)),
+                    })
+                _alert_owner_payment(
+                    f"НЕ активирован премиум после оплаты: tid={tid} tariff={tariff} charge={charge_id} err={exc}"
+                )
+                # (3) пробрасываем — /telegram/webhook вернёт 500, Telegram повторит.
+                raise PaymentActivationError(str(exc))
             return
 
         # --- 3) Голосовой / аудио ввод еды (премиум, Этап 2) ----------------- #
@@ -778,9 +868,23 @@ def handle_update(db, update: dict) -> None:
                         lang_code = ""
                     lang = _norm_lang(lang_code)
                     greeting = _greeting_text(lang, name)
-                    _bot_api("sendMessage", {"chat_id": chat_id, "text": greeting})
+                    msg = {"chat_id": chat_id, "text": greeting}
+                    # Кнопка открытия мини-приложения (если задан MINI_APP_URL) —
+                    # иначе пользователю негде нажать «открыть». Ключевой рост-фикс.
+                    if MINI_APP_URL:
+                        btn_text = "🥗 Open the app" if lang == "en" else "🥗 Открыть приложение"
+                        msg["reply_markup"] = {
+                            "inline_keyboard": [[
+                                {"text": btn_text, "web_app": {"url": MINI_APP_URL}}
+                            ]]
+                        }
+                    _bot_api("sendMessage", msg)
                 return
 
+    except PaymentActivationError:
+        # Сбой активации ПОСЛЕ оплаты — пробрасываем, чтобы вебхук вернул не-200
+        # и Telegram повторил доставку (дедуп по charge_id защитит от дубля).
+        raise
     except Exception as exc:
         # Любой неожиданный сбой — логируем, наружу не пробрасываем.
         logger.warning("handle_update: общий сбой обработки апдейта: %s", exc)

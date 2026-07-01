@@ -29,6 +29,11 @@ TRIBUTE_WEBHOOK_SECRET: str = os.getenv("TRIBUTE_WEBHOOK_SECRET", "")
 # Username бота (без "@") — для формирования ссылок/счётов.
 BOT_USERNAME: str = os.getenv("BOT_USERNAME", "")
 
+# Публичный https-URL мини-приложения (для кнопки «Открыть приложение» в /start).
+# Если задан — к приветствию прикрепляется inline-кнопка web_app. Пример:
+# https://f1tnesspro-production.up.railway.app
+MINI_APP_URL: str = os.getenv("MINI_APP_URL", "")
+
 # Ссылка на оплату через Tribute (создаётся в Tribute и кладётся в env).
 # Если пусто — кнопка «Оплатить через Tribute» на фронте просто не показывается.
 TRIBUTE_URL: str = os.getenv("TRIBUTE_URL", "")

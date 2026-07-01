@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -28,12 +29,17 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
-# Режим отладки ИИ: при включении в ответ /food/analyze добавляется «сырой»
-# ответ модели (поле debug), а в тексте ошибки — её причина. По умолчанию
-# включён в dev-режиме (ALLOW_INSECURE_AUTH=1); на проде включается DEBUG_AI=1.
-DEBUG_AI = os.getenv("DEBUG_AI") == "1" or os.getenv("ALLOW_INSECURE_AUTH") == "1"
+# Dev-режим (ТОЛЬКО для локальной разработки): небезопасная авторизация.
+# В проде эта переменная НЕ должна быть выставлена.
+DEV_MODE = os.getenv("ALLOW_INSECURE_AUTH") == "1"
+
+# Режим отладки ИИ: при включении в ответ добавляется «сырой» ответ модели и
+# причина ошибки. ОТВЯЗАН от dev-режима (иначе утечка в прод) — включается
+# ТОЛЬКО явной переменной DEBUG_AI=1. Никогда не включать в проде.
+DEBUG_AI = os.getenv("DEBUG_AI") == "1"
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -45,6 +51,7 @@ from backend import (
     fitness,
     notifications,
     nutrition,
+    ratelimit,
     payment_providers,
     subscription,
     telegram_bot,
@@ -260,10 +267,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Calorie Mini App", lifespan=lifespan)
 
-# CORS: разрешаем любой источник и кастомный заголовок X-Telegram-Init-Data.
+# CORS. Фронтенд раздаётся тем же бэкендом (запросы same-origin), поэтому CORS
+# по сути не используется. Источники можно ограничить через env CORS_ORIGINS
+# (список через запятую); по умолчанию оставляем "*", чтобы ничего не сломать,
+# но в проде рекомендуется задать конкретные домены.
+_cors_env = os.getenv("CORS_ORIGINS", "*").strip()
+_cors_origins = ["*"] if _cors_env in ("", "*") else [o.strip() for o in _cors_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -274,8 +286,15 @@ app.add_middleware(
 #  Служебный маршрут (без авторизации)
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
-def health() -> dict:
-    """Проверка работоспособности сервиса."""
+def health(db: Session = Depends(get_db)) -> dict:
+    """Health-check: проверяем и доступность БД (чтобы Railway видел сбои)."""
+    from sqlalchemy import text as _sql_text
+
+    try:
+        db.execute(_sql_text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("health: БД недоступна: %s", exc)
+        raise HTTPException(status_code=503, detail="db unavailable")
     return {"status": "ok"}
 
 
@@ -403,6 +422,8 @@ async def food_analyze(
     # Проверяем лимит ДО любой тяжёлой работы: не читаем файл впустую и не
     # дёргаем ИИ, если бесплатный лимит на сегодня уже исчерпан (бросит 402).
     subscription.assert_scan_available(db, user)
+    # Дополнительный анти-абьюз лимит частоты AI-вызовов.
+    ratelimit.enforce_ai(user.telegram_id)
 
     # Читаем не больше лимита + 1 байт, чтобы поймать превышение размера.
     image_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -417,7 +438,9 @@ async def food_analyze(
     # Язык распознавания берём из профиля пользователя ("ru" по умолчанию).
     lang = user.language or "ru"
     try:
-        result = analyze_food_image(image_bytes, mime=mime, lang=lang)
+        # Синхронный вызов OpenAI выносим в threadpool, чтобы не блокировать
+        # event loop (иначе один скан морозит запросы всех пользователей).
+        result = await run_in_threadpool(analyze_food_image, image_bytes, mime, lang)
     except AIError as exc:
         # Сырой ответ модели всегда пишем в лог сервера (виден в логах Railway).
         logger.warning(
@@ -472,6 +495,7 @@ async def food_voice(
     Язык распознавания/разбора берём из профиля пользователя ("ru" по умолчанию).
     Запись в дневник здесь НЕ создаём — клиент сам решает, что добавить.
     """
+    ratelimit.enforce_ai(user.telegram_id)
     # Читаем не больше лимита + 1 байт, чтобы поймать превышение размера.
     audio_bytes = await file.read(MAX_AUDIO_BYTES + 1)
     if not audio_bytes:
@@ -487,10 +511,11 @@ async def food_voice(
     filename = file.filename or "audio.ogg"
 
     try:
-        # 1) Речь -> текст (Whisper).
-        text = transcribe_audio(audio_bytes, filename, lang)
+        # Синхронные вызовы OpenAI — в threadpool, чтобы не блокировать event loop.
+        # 1) Речь -> текст (Whisper / gpt-4o-transcribe).
+        text = await run_in_threadpool(transcribe_audio, audio_bytes, filename, lang)
         # 2) Текст -> блюда с количеством, КБЖУ и определением приёма пищи (GPT).
-        parsed = parse_food_text(text, lang)
+        parsed = await run_in_threadpool(parse_food_text, text, lang)
     except AIError as exc:
         # Сырой ответ модели всегда пишем в лог сервера (виден в логах Railway).
         logger.warning(
@@ -751,6 +776,7 @@ def workout_estimate(
     """
     # Для произвольной активности с описанием — AI-оценка калорий по тексту.
     if data.type == "other" and (data.description or "").strip():
+        ratelimit.enforce_ai(user.telegram_id)
         try:
             result = estimate_workout_calories(
                 data.description,
@@ -874,6 +900,7 @@ def food_recommend(
     diet_goal = data.diet_goal if data.diet_goal is not None else getattr(user, "diet_goal", None)
 
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = recommend_meals(
             remaining_calories=data.remaining_calories,
             remaining_proteins=data.remaining_proteins,
@@ -930,6 +957,9 @@ def food_calculate(
     quantity/unit. Язык расчёта берём из профиля пользователя ("ru" по умолчанию).
     При сбое ИИ отдаём 502 (как в /food/recommend).
     """
+    # Бесплатный AI-эндпоинт — обязательно ограничиваем частоту (иначе цикл
+    # запросов «нажёг» бы неограниченный счёт OpenAI). Free — узкий дневной кап.
+    ratelimit.enforce_calc(user.telegram_id, subscription.is_premium(user))
     try:
         result = calculate_food(
             data.name,
@@ -1082,6 +1112,7 @@ def supplement_suggest(
     diet_goal = getattr(user, "diet_goal", None)
     try:
         # Язык подсказок берём из профиля пользователя ("ru" по умолчанию).
+        ratelimit.enforce_ai(user.telegram_id)
         result = suggest_supplements(diet_goal, lang=user.language or "ru")
     except AIError as exc:
         logger.warning(
@@ -1514,6 +1545,7 @@ def supplement_recommend(
     diet_goal = getattr(user, "diet_goal", None)
 
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = recommend_supplements(
             improvement_goal=data.improvement_goal,
             training_count=training_count,
@@ -1634,15 +1666,29 @@ async def telegram_webhook(
     и при несовпадении отвечаем 403. Любые ошибки разбора апдейта глушим и всегда
     отвечаем {"ok": True}, чтобы Telegram не ретраил доставку бесконечно.
     """
-    # Проверка секрета вебхука (если он сконфигурирован в env).
-    if config.TELEGRAM_WEBHOOK_SECRET:
-        header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-        if header_secret != config.TELEGRAM_WEBHOOK_SECRET:
+    # Проверка секрета вебхука. FAIL-CLOSED: в боевом режиме секрет ОБЯЗАТЕЛЕН,
+    # иначе кто угодно смог бы прислать поддельный successful_payment и получить
+    # премиум. Пропуск проверки допустим ТОЛЬКО в dev-режиме (ALLOW_INSECURE_AUTH).
+    secret = config.TELEGRAM_WEBHOOK_SECRET
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if secret:
+        if not hmac.compare_digest(header_secret, secret):
             raise HTTPException(status_code=403, detail="Неверный секрет вебхука")
+    elif not DEV_MODE:
+        logger.error("telegram/webhook: TELEGRAM_WEBHOOK_SECRET не задан в проде — запрос отклонён")
+        raise HTTPException(status_code=403, detail="Webhook secret not configured")
 
     try:
         update = await request.json()
-        telegram_bot.handle_update(db, update)
+        # Обработка синхронная (внутри бывают блокирующие вызовы OpenAI при
+        # голосовых). Выносим в threadpool, чтобы не морозить event loop.
+        await run_in_threadpool(telegram_bot.handle_update, db, update)
+    except telegram_bot.PaymentActivationError:
+        # Оплата прошла, но активация не удалась — просим Telegram повторить
+        # доставку (200 не отдаём). Дедуп по charge_id защищает от двойного
+        # начисления при повторе.
+        logger.error("telegram/webhook: активация после оплаты не удалась — вернём 500 для ретрая")
+        raise HTTPException(status_code=500, detail="activation failed, retry")
     except Exception as exc:  # noqa: BLE001 — вебхук не должен падать наружу
         logger.warning("telegram/webhook: ошибка обработки апдейта: %s", exc)
 
@@ -1672,18 +1718,27 @@ async def payment_tribute_webhook(
         if not isinstance(payload, dict):
             payload = {}
 
-        # Проверка секрета (если сконфигурирован): сверяем заголовок или поле тела.
+        # Проверка секрета. FAIL-CLOSED: без секрета в проде НЕ активируем ничего
+        # (иначе любой мог бы прислать {telegram_id, tariff:'lifetime'}). Точный
+        # формат подписи Tribute уточняется при подключении провайдера.
         if config.TRIBUTE_WEBHOOK_SECRET:
             header_secret = (
                 request.headers.get("X-Tribute-Signature")
                 or request.headers.get("X-Webhook-Secret")
                 or request.headers.get("Authorization")
+                or ""
             )
-            body_secret = payload.get("secret") or payload.get("signature")
-            if config.TRIBUTE_WEBHOOK_SECRET not in (header_secret, body_secret):
-                # Неверный секрет — молча игнорируем, но отвечаем 200.
+            body_secret = payload.get("secret") or payload.get("signature") or ""
+            if not (
+                hmac.compare_digest(str(header_secret), config.TRIBUTE_WEBHOOK_SECRET)
+                or hmac.compare_digest(str(body_secret), config.TRIBUTE_WEBHOOK_SECRET)
+            ):
                 logger.warning("payment/tribute/webhook: неверный секрет, апдейт пропущен")
                 return {"ok": True}
+        elif not DEV_MODE:
+            # Секрет не задан в проде — не доверяем запросу (Tribute отключён).
+            logger.error("payment/tribute/webhook: TRIBUTE_WEBHOOK_SECRET не задан — апдейт пропущен")
+            return {"ok": True}
 
         # Гибко извлекаем telegram_id из payload/metadata (формат уточняется).
         meta = payload.get("metadata") or payload.get("data") or {}
@@ -2206,6 +2261,7 @@ def report_weekly(
     }
 
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = generate_weekly_report(stats, lang=user.language or "ru")
     except AIError as exc:
         logger.warning(
@@ -2248,6 +2304,12 @@ def meal_plan_generate(
     """
     # Нормализуем scope: всё, кроме "week", трактуем как "day".
     scope = "week" if str(data.scope or "").strip().lower() == "week" else "day"
+
+    # Тяжёлая генерация (особенно неделя, ~3500 токенов) — отдельный кулдаун.
+    if scope == "week":
+        ratelimit.enforce_heavy(user.telegram_id)
+    else:
+        ratelimit.enforce_ai(user.telegram_id)
 
     try:
         result = generate_meal_plan(
@@ -2321,6 +2383,7 @@ def meal_plan_regenerate_item(
     Цель диеты берём из профиля. При сбое ИИ -> 502.
     """
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = regenerate_meal_item(
             meal_type=data.meal_type,
             around_calories=data.around_calories,
@@ -2365,6 +2428,7 @@ def food_suggest(
     Цель диеты берём из профиля. При сбое ИИ -> 502.
     """
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = suggest_food(
             meal_type=data.meal_type,
             free_text=data.free_text,
@@ -2431,6 +2495,7 @@ def food_healthy_snacks(
     remaining = max(0, int(goal - consumed))
 
     try:
+        ratelimit.enforce_ai(user.telegram_id)
         result = healthy_snacks(remaining, lang=user.language or "ru")
     except AIError as exc:
         logger.warning(
@@ -2722,7 +2787,14 @@ def progress_image(
 
     path = _progress_dir() / photo.photo_path
     if not path.exists():
-        raise HTTPException(status_code=404, detail="Файл фото недоступен")
+        # Файл пропал (например, эфемерный диск после передеплоя без тома) —
+        # чистим осиротевшую запись, чтобы список не показывал «битые» фото.
+        try:
+            db.delete(photo)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        raise HTTPException(status_code=410, detail="Файл фото недоступен")
 
     # Приватный ответ: запрещаем кеширование на общих узлах.
     return FileResponse(

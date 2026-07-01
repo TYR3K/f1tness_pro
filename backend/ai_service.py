@@ -60,6 +60,56 @@ logger = logging.getLogger("ai_service")
 
 # Модель можно переопределить переменной окружения (например, gpt-4o-mini — дешевле).
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+# Модель для VISION (распознавание фото по картинке) — тут качество важно,
+# оставляем полноценную gpt-4o.
+VISION_MODEL = os.getenv("OPENAI_VISION_MODEL", MODEL)
+# Модель для ТЕКСТОВЫХ функций (расчёт КБЖУ, разбор голоса, рекомендации, план
+# меню, отчёт) — это структурированный JSON, gpt-4o-mini справляется практически
+# так же, но примерно в 16 раз дешевле. Меняется через env при желании.
+TEXT_MODEL = os.getenv("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+# Таймаут запроса к OpenAI (сек). Без него дефолт SDK — 600с: один зависший
+# вызов надолго занимал бы поток. Ретраи делаем сами (MAX_ATTEMPTS), поэтому
+# у клиента max_retries=0. Транскрипции даём больший таймаут (аудио дольше).
+OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
+OPENAI_TRANSCRIBE_TIMEOUT = float(os.getenv("OPENAI_TRANSCRIBE_TIMEOUT", "120"))
+
+# Единые клиенты OpenAI (создаются один раз, переиспользуются). С таймаутом,
+# чтобы зависший запрос не держал поток бесконечно.
+_shared_client = None
+_transcribe_client = None
+
+
+def _get_client():
+    """Единый клиент OpenAI для текстовых/vision-запросов (с таймаутом)."""
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = OpenAI(timeout=OPENAI_TIMEOUT, max_retries=0)
+    return _shared_client
+
+
+def _get_transcribe_client():
+    """Отдельный клиент для распознавания речи (больший таймаут — аудио дольше)."""
+    global _transcribe_client
+    if _transcribe_client is None:
+        _transcribe_client = OpenAI(timeout=OPENAI_TRANSCRIBE_TIMEOUT, max_retries=0)
+    return _transcribe_client
+
+
+def _log_usage(tag: str, response) -> None:
+    """Залогировать расход токенов вызова (для контроля стоимости AI)."""
+    try:
+        u = getattr(response, "usage", None)
+        if u is not None:
+            logger.info(
+                "AI[%s] tokens prompt=%s completion=%s total=%s model=%s",
+                tag,
+                getattr(u, "prompt_tokens", None),
+                getattr(u, "completion_tokens", None),
+                getattr(u, "total_tokens", None),
+                getattr(response, "model", None),
+            )
+    except Exception:  # noqa: BLE001 — телеметрия не должна ронять запрос
+        pass
 # Максимальный размер большей стороны изображения после уменьшения (в пикселях).
 MAX_DIMENSION = 1024
 # Качество JPEG при пересжатии.
@@ -349,7 +399,7 @@ def _call_model(client: "OpenAI", data_url: str, lang: str = "ru"):
         user_text = VISION_USER_PROMPT
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=VISION_MODEL,
         response_format={"type": "json_object"},
         max_tokens=MAX_TOKENS,
         temperature=0.3,
@@ -367,6 +417,7 @@ def _call_model(client: "OpenAI", data_url: str, lang: str = "ru"):
             },
         ],
     )
+    _log_usage("analyze_food", response)
     choice = response.choices[0]
     content = choice.message.content
     refusal = getattr(choice.message, "refusal", None)
@@ -409,8 +460,8 @@ def analyze_food_image(
     b64 = base64.b64encode(processed_bytes).decode("ascii")
     data_url = f"data:{processed_mime};base64,{b64}"
 
-    # 2. Клиент OpenAI (ключ из переменной окружения OPENAI_API_KEY).
-    client = OpenAI()
+    # 2. Единый клиент OpenAI (с таймаутом; ключ из OPENAI_API_KEY).
+    client = _get_client()
 
     last_error = "неизвестная ошибка"
     raw = ""
@@ -692,16 +743,15 @@ def _pick_prompt(prompt_ru: str, prompt_en: str, lang: str) -> str:
     return prompt_en if _normalize_lang(lang) == "en" else prompt_ru
 
 
-def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str, max_tokens: int | None = None):
+def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str, max_tokens: int | None = None, log_tag: str = "text"):
     """
     Один текстовый вызов модели (без изображения) с принудительным JSON-ответом.
 
-    Возвращает (content, finish_reason, refusal). max_tokens можно переопределить
-    локально (например, для планировщика меню) — по умолчанию берётся MAX_TOKENS.
-    Так лимит токенов не приходится менять через глобал (потокобезопасно).
+    Использует более дешёвую TEXT_MODEL (gpt-4o-mini по умолчанию). Возвращает
+    (content, finish_reason, refusal). max_tokens можно переопределить локально.
     """
     response = client.chat.completions.create(
-        model=MODEL,
+        model=TEXT_MODEL,
         response_format={"type": "json_object"},
         max_tokens=max_tokens or MAX_TOKENS,
         temperature=0.5,
@@ -710,6 +760,7 @@ def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str, max
             {"role": "user", "content": user_prompt},
         ],
     )
+    _log_usage(log_tag, response)
     choice = response.choices[0]
     content = choice.message.content
     refusal = getattr(choice.message, "refusal", None)
@@ -726,7 +777,7 @@ def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str, max
 
     При неудаче всех попыток выбрасывает AIError (как и analyze_food_image).
     """
-    client = OpenAI()
+    client = _get_client()
 
     last_error = "неизвестная ошибка"
     raw = ""
@@ -736,7 +787,7 @@ def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str, max
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             content, finish_reason, refusal = _call_text_model(
-                client, system_prompt, user_prompt, max_tokens=max_tokens
+                client, system_prompt, user_prompt, max_tokens=max_tokens, log_tag=log_tag
             )
             raw = content or ""
             logger.info(
@@ -1307,7 +1358,7 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg", lang: str 
     elif code.startswith("en"):
         norm = "en"
 
-    client = OpenAI()
+    client = _get_transcribe_client()
 
     # 1) Основная (более точная) модель. 2) Фолбэк на whisper-1 при любом сбое
     #    (например, если у аккаунта нет доступа к новой модели).
