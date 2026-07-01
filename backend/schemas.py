@@ -642,3 +642,97 @@ class CopyYesterdayIn(BaseModel):
     """Запрос на копирование записей дневника со вчера на указанную дату."""
 
     date: str                                    # ISO-дата "YYYY-MM-DD" (целевой день)
+
+
+# --------------------------------------------------------------------------- #
+#  AI-функции (Этап 5): недельный отчёт, планировщик меню, умные предложения еды
+# --------------------------------------------------------------------------- #
+class WeeklyReportOut(BaseModel):
+    """Недельный AI-отчёт: краткая сводка, инсайты-наблюдения и фокус-совет.
+
+    summary — 1-2 предложения общей картины недели;
+    insights — 3-5 строк с инсайтами (тренды калорий/БЖУ, связь с весом и
+    тренировками, средний дефицит); focus — один главный совет на следующую
+    неделю; stats — сырая собранная статистика (для отображения цифр на клиенте).
+    """
+
+    summary: str                                 # краткая сводка недели (1-2 предложения)
+    insights: List[str] = []                     # инсайты-наблюдения (3-5 строк)
+    focus: Optional[str] = None                  # главный фокус-совет на неделю
+    stats: Optional[Dict[str, Any]] = None       # собранная недельная статистика
+
+
+class MealPlanIn(BaseModel):
+    """Запрос на генерацию AI-плана меню на день или неделю."""
+
+    scope: str = "day"                           # "day" (1 день) | "week" (7 дней)
+    preferences: Optional[str] = None            # пищевые предпочтения/ограничения
+    budget: Optional[str] = None                 # бюджет ("эконом" и т.п.)
+
+
+class MealPlanDish(BaseModel):
+    """Одно блюдо в плане меню (с КБЖУ)."""
+
+    dish_name: str
+    calories: int
+    proteins: float
+    fats: float
+    carbs: float
+
+
+class MealPlanDay(BaseModel):
+    """Один день плана меню: блюда, сгруппированные по приёмам пищи.
+
+    meals — словарь "breakfast"|"lunch"|"dinner"|"snack" -> список блюд.
+    """
+
+    label: str                                   # подпись дня ("День 1" / "Понедельник")
+    meals: Dict[str, List[MealPlanDish]] = {}    # блюда по приёмам пищи
+
+
+class MealPlanOut(BaseModel):
+    """AI-план меню: дни с блюдами и общий список покупок."""
+
+    days: List[MealPlanDay] = []                 # дни плана (1 или 7)
+    shopping_list: List[str] = []                # список покупок под план
+
+
+class RegenerateItemIn(BaseModel):
+    """Запрос на замену одного блюда в плане меню альтернативным."""
+
+    meal_type: str                               # breakfast | lunch | dinner | snack
+    around_calories: Optional[int] = None        # целевая калорийность блюда (~)
+    preferences: Optional[str] = None            # пищевые предпочтения/ограничения
+
+
+class RegenerateItemOut(BaseModel):
+    """Одно альтернативное блюдо (та же форма, что MealPlanDish)."""
+
+    dish_name: str
+    calories: int
+    proteins: float
+    fats: float
+    carbs: float
+
+
+class FoodSuggestIn(BaseModel):
+    """Запрос на умное предложение еды под остаток КБЖУ и пожелание."""
+
+    meal_type: Optional[str] = None              # breakfast|lunch|dinner|snack|None
+    free_text: Optional[str] = None              # произвольное пожелание ("хочу рыбу")
+    remaining_calories: int                      # осталось калорий до цели, ккал
+    remaining_proteins: float                    # осталось белка, г
+    remaining_fats: float                        # осталось жира, г
+    remaining_carbs: float                       # осталось углеводов, г
+
+
+class FoodSuggestOut(BaseModel):
+    """Набор умных предложений еды (переиспользует RecommendItem)."""
+
+    suggestions: List[RecommendItem] = []        # 2-3 варианта с обоснованием
+
+
+class HealthySnacksOut(BaseModel):
+    """Набор низкокалорийных перекусов-«вкусняшек» под остаток калорий."""
+
+    suggestions: List[RecommendItem] = []        # 3-4 варианта с обоснованием

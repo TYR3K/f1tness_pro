@@ -594,6 +594,50 @@
     // Тело: {date:"YYYY-MM-DD"}. Ответ: {added:int}.
     copyYesterday: function (payload) {
       return request("/diary/copy-yesterday", { method: "POST", body: payload });
+    },
+
+    /* -------------------------------------------------------------------
+     *  AI-ФУНКЦИИ (Этап 5, ПРЕМИУМ)
+     *  Все роуты платные: для free бэкенд отдаёт 402 (paywall).
+     * ------------------------------------------------------------------- */
+
+    // Недельный AI-отчёт по дневнику/тренировкам/весу.
+    // Ответ: {summary, insights:[str], focus:str|null, stats:{avg_calories,
+    //   goal, calories_trend, avg_proteins, avg_fats, avg_carbs, days_logged,
+    //   workouts_count, total_burned, weight_change_kg, avg_deficit}|null}.
+    getWeeklyReport: function () {
+      return request("/report/weekly");
+    },
+
+    // AI-планировщик меню. Тело: {scope:"day"|"week", preferences?, budget?}.
+    // Ответ: {days:[{label, meals:{breakfast:[{dish_name,calories,proteins,
+    //   fats,carbs}], lunch:[...], dinner:[...], snack:[...]}}], shopping_list:[str]}.
+    generateMealPlan: function (payload) {
+      return request("/meal-plan/generate", { method: "POST", body: payload });
+    },
+
+    // Замена одного блюда в плане меню.
+    // Тело: {meal_type, around_calories?, preferences?}.
+    // Ответ: {dish_name, calories, proteins, fats, carbs}.
+    regenerateMealItem: function (payload) {
+      return request("/meal-plan/regenerate-item", {
+        method: "POST",
+        body: payload
+      });
+    },
+
+    // Умные предложения еды по остатку нормы / типу приёма / свободному тексту.
+    // Тело: {meal_type?, free_text?, remaining_calories, remaining_proteins,
+    //   remaining_fats, remaining_carbs}.
+    // Ответ: {suggestions:[{dish_name, calories, proteins, fats, carbs, reason}]}.
+    suggestFood: function (payload) {
+      return request("/food/suggest", { method: "POST", body: payload });
+    },
+
+    // Готовый список полезных перекусов («вкусняшек»).
+    // Ответ: {suggestions:[{dish_name, calories, proteins, fats, carbs, reason}]}.
+    getHealthySnacks: function () {
+      return request("/food/healthy-snacks");
     }
   };
 

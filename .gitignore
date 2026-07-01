@@ -6,3 +6,5 @@ app.db
 .venv/
 venv/
 .DS_Store
+
+.claude/launch.json

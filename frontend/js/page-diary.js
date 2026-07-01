@@ -10,10 +10,16 @@
  *   - Удаление записи через App.api.deleteEntry(id) с последующей перезагрузкой.
  *   - Итог калорий за день с учётом тренировок («Съедено − Сожжено = Итого»)
  *     + прогресс-бар относительно daily_goal_kcal по net_calories.
- *   - Две кнопки действий: «➕ Добавить вручную» и «🤖 Что съесть?».
+ *   - Кнопки действий: «➕ Добавить вручную», «🤖 Что съесть?» (премиум),
+ *     «🍴 AI-план меню» (премиум) и блок шаблонов питания (премиум).
  *       • Ручное добавление: форма (название, ккал, Б/Ж/У, вес — необязательно,
  *         селектор приёма пищи) + блок «Недавние» с добавлением в один тап.
- *       • «Что съесть?»: рекомендации блюд под оставшиеся КБЖУ.
+ *       • «Что съесть?» (Этап 5, премиум): выбор приёма пищи + свободный ввод
+ *         «Чего хочется?» -> App.api.suggestFood (умные предложения), кнопка
+ *         «🍬 Вкусняшки» -> App.api.getHealthySnacks; фолбэк — recommendFood.
+ *       • «AI-план меню» (Этап 5, премиум): выбор охвата (День/Неделя) +
+ *         предпочтения -> App.api.generateMealPlan; по дням приёмы пищи с КБЖУ,
+ *         замена блюда -> App.api.regenerateMealItem; список покупок.
  *   - Карточка «Напоминания о еде»: тумблер + три поля времени (завтрак/обед/
  *     ужин). Хранится через App.api.getNotificationSettings /
  *     saveNotificationSettings (поля meal_reminder_enabled, breakfast_time,
@@ -59,7 +65,15 @@
     viewEl: null,      // корневой элемент страницы (#view)
     loading: false,    // флаг, чтобы не запускать параллельные перезагрузки
     day: null,         // последний загруженный DiaryDayOut (для модалок)
-    panel: null        // открытая панель: "manual" | "recommend" | "templates" | null
+    panel: null,       // открытая панель: "manual" | "recommend" | "templates" | "meal-plan" | null
+    // Состояние панели AI-плана меню (Этап 5): выбранный охват, предпочтения,
+    // последний полученный план (для замены блюд в UI без полного перезапроса).
+    planScope: "day",  // "day" | "week"
+    planPrefs: "",     // текст предпочтений из поля ввода
+    plan: null,        // последний MealPlanOut {days:[...], shopping_list:[...]}
+    // Состояние улучшенной панели «Что съесть?» (Этап 5).
+    suggestMeal: null, // выбранный приём пищи ("breakfast"... ) или null (весь день)
+    suggestText: ""    // свободный ввод «Чего хочется?»
   };
 
   /**
@@ -323,7 +337,7 @@
 
   /**
    * Возвращает true, если пользователь премиум (через единый App.isPremium).
-   * Базовый дневник бесплатен; платная только AI-рекомендация «Что съесть?».
+   * Базовый дневник бесплатен; платные только AI-фичи.
    * @returns {boolean}
    */
   function isPremium() {
@@ -331,28 +345,32 @@
   }
 
   /**
-   * Разметка панели действий рациона: «➕ Добавить вручную», «🤖 Что съесть?»
-   * и блок шаблонов (Этап 4): «💾 Сохранить день как шаблон», «📋 Шаблоны»,
-   * «📅 Скопировать вчера».
-   * Кнопки «Что съесть?», шаблоны и копирование — платные: для бесплатных
-   * пользователей помечаем их замком (🔒). Контроль доступа серверный, фронт
-   * лишь показывает paywall. Базовый дневник (ручной ввод) остаётся бесплатным.
+   * Разметка панели действий рациона: «➕ Добавить вручную», «🤖 Что съесть?»,
+   * «🍴 AI-план меню» (Этап 5) и блок шаблонов (Этап 4): «💾 Сохранить день как
+   * шаблон», «📋 Шаблоны», «📅 Скопировать вчера».
+   * Кнопки «Что съесть?», «AI-план меню», шаблоны и копирование — платные: для
+   * бесплатных пользователей помечаем их замком (🔒). Контроль доступа серверный,
+   * фронт лишь показывает paywall. Базовый дневник (ручной ввод) остаётся бесплатным.
    * @returns {string}
    */
   function actionsHtml() {
     var locked = !isPremium();
-    var recommendText = pick("🤖 Что съесть?", "🤖 What to eat?");
-    // Для бесплатного пользователя добавляем замок и пометку платной фичи.
-    var recommendLabel = locked ? recommendText + " 🔒" : recommendText;
-    var recommendCls =
-      "btn btn--ghost diary-actions__btn diary-actions__btn--recommend" +
-      (locked ? " is-locked" : "");
-
-    // Премиум-кнопки шаблонов: вешаем замок и data-locked для free.
     var lockMark = locked ? " 🔒" : "";
     var lockAttr = locked ? ' data-locked="1"' : "";
     var lockCls = locked ? " is-locked" : "";
 
+    var recommendText = pick("🤖 Что съесть?", "🤖 What to eat?");
+    var recommendLabel = recommendText + lockMark;
+    var recommendCls =
+      "btn btn--ghost diary-actions__btn diary-actions__btn--recommend" + lockCls;
+
+    // AI-план меню (Этап 5) — премиум. Префикс классов plan-.
+    var planText = pick("🍴 AI-план меню", "🍴 AI meal plan");
+    var planLabel = planText + lockMark;
+    var planCls =
+      "btn btn--ghost diary-actions__btn diary-actions__btn--meal-plan plan-actions__btn" + lockCls;
+
+    // Премиум-кнопки шаблонов: вешаем замок и data-locked для free.
     var saveTplLabel = pick("💾 Сохранить день как шаблон", "💾 Save day as template") + lockMark;
     var tplListLabel = pick("📋 Шаблоны", "📋 Templates") + lockMark;
     var copyYestLabel = pick("📅 Скопировать вчера", "📅 Copy yesterday") + lockMark;
@@ -362,8 +380,12 @@
       '<button class="btn btn--ghost diary-actions__btn" type="button" ' +
       'data-action="manual">' + App.escapeHtml(pick("➕ Добавить вручную", "➕ Add manually")) + "</button>" +
       '<button class="' + recommendCls + '" type="button" ' +
-      'data-action="recommend"' + (locked ? ' data-locked="1"' : "") + ">" +
+      'data-action="recommend"' + lockAttr + ">" +
       App.escapeHtml(recommendLabel) +
+      "</button>" +
+      '<button class="' + planCls + '" type="button" ' +
+      'data-action="meal-plan"' + lockAttr + ">" +
+      App.escapeHtml(planLabel) +
       "</button>" +
       "</div>" +
       // Блок премиум-действий с шаблонами питания (Этап 4). Префикс классов tpl-.
@@ -381,7 +403,8 @@
       'type="button" data-action="tpl-copy"' + lockAttr + ">" +
       App.escapeHtml(copyYestLabel) + "</button>" +
       "</div>" +
-      // Контейнер для разворачиваемой панели (ручной ввод / рекомендации / шаблоны).
+      // Контейнер для разворачиваемой панели (ручной ввод / рекомендации /
+      // шаблоны / AI-план меню).
       '<div id="diary-panel" class="diary-panel"></div>'
     );
   }
@@ -459,9 +482,9 @@
     }
 
     // Навешиваем обработчики на базовые кнопки действий (ручной ввод /
-    // рекомендации). Кнопки шаблонов исключаем (:not(.tpl-actions__btn)),
-    // так как они тоже несут класс .diary-actions__btn ради единого размера,
-    // но имеют собственный обработчик onTemplateActionClick.
+    // рекомендации / AI-план меню). Кнопки шаблонов исключаем
+    // (:not(.tpl-actions__btn)), так как они тоже несут класс .diary-actions__btn
+    // ради единого размера, но имеют собственный обработчик onTemplateActionClick.
     var actionButtons = content.querySelectorAll(
       ".diary-actions__btn:not(.tpl-actions__btn)"
     );
@@ -484,6 +507,13 @@
         openRecommendPanel();
       } else {
         openRecommendPaywall();
+      }
+    } else if (state.panel === "meal-plan") {
+      // AI-план меню: free -> paywall, premium -> панель.
+      if (isPremium()) {
+        openMealPlanPanel();
+      } else {
+        openMealPlanPaywall();
       }
     } else if (state.panel === "templates") {
       // Панель списка шаблонов: free -> paywall, premium -> список.
@@ -598,7 +628,7 @@
   }
 
   // ===========================================================================
-  // ДЕЙСТВИЯ: ручное добавление и рекомендации.
+  // ДЕЙСТВИЯ: ручное добавление, рекомендации, AI-план меню.
   // ===========================================================================
 
   /**
@@ -610,13 +640,20 @@
     var action = ev.currentTarget.getAttribute("data-action");
     App.haptic && App.haptic("light");
 
-    // «Что съесть?» — платная фича. Для бесплатных пользователей вместо панели
-    // рекомендаций показываем единый paywall (ведёт на экран подписки).
-    // Базовый дневник (ручной ввод, недавние, удаление, баланс) остаётся бесплатным.
+    // «Что съесть?» и «AI-план меню» — платные фичи. Для бесплатных
+    // пользователей вместо панели показываем единый paywall (ведёт на экран
+    // подписки). Базовый дневник (ручной ввод, недавние, удаление, баланс)
+    // остаётся бесплатным.
     if (action === "recommend" && !isPremium()) {
       state.panel = "recommend";
       syncActionButtons();
       openRecommendPaywall();
+      return;
+    }
+    if (action === "meal-plan" && !isPremium()) {
+      state.panel = "meal-plan";
+      syncActionButtons();
+      openMealPlanPaywall();
       return;
     }
 
@@ -636,6 +673,8 @@
       openManualPanel();
     } else if (action === "recommend") {
       openRecommendPanel();
+    } else if (action === "meal-plan") {
+      openMealPlanPanel();
     }
   }
 
@@ -684,6 +723,49 @@
   }
 
   /**
+   * Показывает единый paywall для платной фичи «AI-план меню» в области панели
+   * действий. Контроль доступа серверный — это лишь визуальная заглушка.
+   */
+  function openMealPlanPaywall() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    if (App && typeof App.paywall === "function") {
+      App.paywall(panel, {
+        icon: "🍴",
+        title: pick("AI-план меню", "AI meal plan"),
+        desc: pick(
+          "AI составит меню на день или неделю и соберёт список покупок",
+          "AI will compose a day or week menu and build a shopping list"
+        ),
+        bullets: [
+          pick("Меню по приёмам пищи с КБЖУ", "Menu by meals with calories and macros"),
+          pick("Замена любого блюда в один тап", "Swap any dish in one tap"),
+          pick("Готовый список покупок", "Ready-made shopping list")
+        ]
+      });
+      return;
+    }
+
+    // Запасной вариант, если единый paywall недоступен — ведём в подписку кнопкой.
+    panel.innerHTML =
+      '<section class="card plan-locked">' +
+      '<h2 class="plan-locked__title">🔒 ' + App.escapeHtml(pick("AI-план меню", "AI meal plan")) + "</h2>" +
+      '<p class="plan-locked__sub">' +
+      App.escapeHtml(pick("AI-планировщик меню доступен по подписке.", "The AI meal planner is available with a subscription.")) + "</p>" +
+      '<button type="button" class="btn btn--cta btn-block plan-locked__subscribe">' +
+      App.escapeHtml(pick("Оформить подписку", "Get subscription")) + "</button>" +
+      "</section>";
+    var subBtn = panel.querySelector(".plan-locked__subscribe");
+    if (subBtn) {
+      subBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (App && typeof App.navigate === "function") App.navigate("subscription");
+      });
+    }
+  }
+
+  /**
    * Подсвечивает активную кнопку действия в соответствии с открытой панелью.
    * Учитывает и базовые кнопки (.diary-actions__btn), и кнопки шаблонов
    * (.tpl-actions__btn). Панель "templates" подсвечивает кнопку «📋 Шаблоны».
@@ -694,6 +776,8 @@
     var buttons = content.querySelectorAll(".diary-actions__btn");
     for (var i = 0; i < buttons.length; i++) {
       var act = buttons[i].getAttribute("data-action");
+      // Кнопки шаблонов учитываем отдельным циклом ниже — их пропускаем здесь.
+      if (buttons[i].classList.contains("tpl-actions__btn")) continue;
       buttons[i].classList.toggle("is-active", act === state.panel);
     }
     // Кнопки шаблонов: активна только «📋 Шаблоны» (data-action="tpl-list"),
@@ -1012,7 +1096,7 @@
 
   /**
    * Добавляет произвольное блюдо в рацион выбранного приёма пищи.
-   * Используется и «Недавними», и рекомендациями.
+   * Используется «Недавними», рекомендациями и AI-планом меню.
    * @param {Object} food {dish_name, calories, proteins, fats, carbs}
    * @param {string} mealType
    * @param {HTMLElement} [trigger] кнопка-инициатор (для блокировки)
@@ -1054,18 +1138,46 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Рекомендации «Что съесть?».
+  // Рекомендации «Что съесть?» (Этап 5: умные предложения).
+  //
+  // Панель содержит:
+  //   - чипы выбора приёма пищи (Завтрак/Обед/Ужин/Перекус + «Весь день»);
+  //   - поле свободного ввода «Чего хочется?»;
+  //   - кнопку «Подобрать» -> App.api.suggestFood (если выбран приём/есть текст)
+  //     ИЛИ существующий App.api.recommendFood (фолбэк, общий случай);
+  //   - кнопку «🍬 Вкусняшки» -> App.api.getHealthySnacks.
+  // Результаты — карточки {dish_name,calories,...,reason} с добавлением в один тап.
+  // Префикс классов suggest-.
   // ---------------------------------------------------------------------------
 
   /**
-   * Открывает панель рекомендаций, считает остатки КБЖУ и запрашивает варианты.
+   * Открывает панель рекомендаций «Что съесть?» с управлением (приём пищи,
+   * свободный ввод, кнопки) и областью результатов.
    */
   function openRecommendPanel() {
     var panel = document.getElementById("diary-panel");
     if (!panel) return;
 
+    // Подпись «Весь день» как отдельный чип (meal_type=null -> общий подбор).
+    var allActive = state.suggestMeal == null ? " is-active" : "";
+    var chips = "";
+    for (var i = 0; i < MEAL_ORDER.length; i++) {
+      var t = MEAL_ORDER[i];
+      var active = state.suggestMeal === t ? " is-active" : "";
+      chips +=
+        '<button type="button" class="meal-chip' + active + '" ' +
+        'data-suggest-meal="' + t + '">' +
+        App.escapeHtml(App.mealLabel(t)) + "</button>";
+    }
+    var mealChips =
+      '<div class="meal-chips suggest-chips">' +
+      '<button type="button" class="meal-chip' + allActive + '" data-suggest-meal="all">' +
+      App.escapeHtml(pick("Весь день", "Whole day")) + "</button>" +
+      chips +
+      "</div>";
+
     panel.innerHTML =
-      '<section class="card diary-recommend">' +
+      '<section class="card diary-recommend suggest-panel">' +
       '<h2 class="diary-recommend__title">' +
       App.escapeHtml(pick("Что съесть?", "What to eat?")) + "</h2>" +
       '<p class="diary-recommend__sub">' +
@@ -1073,37 +1185,202 @@
         "Подбираем блюда под остаток дневной нормы.",
         "Suggesting dishes to fit your remaining daily allowance."
       )) + "</p>" +
-      '<div id="diary-recommend-body" class="diary-recommend__body">' +
-      // Скелетон на время запроса.
-      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
-      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
-      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      // Выбор приёма пищи.
+      '<div class="suggest-controls">' +
+      '<span class="field__label">' + App.escapeHtml(pick("Приём пищи", "Meal")) + "</span>" +
+      mealChips +
+      // Свободный ввод «Чего хочется?».
+      '<label class="field suggest-free">' +
+      '<span class="field__label">' + App.escapeHtml(pick("Чего хочется?", "What do you feel like?")) +
+      ' <span class="field__hint">' + App.escapeHtml(pick("(необязательно)", "(optional)")) + "</span></span>" +
+      '<input class="field__input suggest-free__input" type="text" maxlength="120" ' +
+      'value="' + App.escapeHtml(state.suggestText || "") + '" ' +
+      'placeholder="' + App.escapeHtml(pick("Например, что-то сладкое и белковое", "e.g. something sweet and high-protein")) + '">' +
+      "</label>" +
+      // Кнопки действий: подобрать + вкусняшки.
+      '<div class="suggest-buttons">' +
+      '<button type="button" class="btn btn--cta suggest-btn suggest-btn--go">' +
+      App.escapeHtml(pick("Подобрать", "Suggest")) + "</button>" +
+      '<button type="button" class="btn btn--ghost suggest-btn suggest-btn--snacks">' +
+      App.escapeHtml(pick("🍬 Вкусняшки", "🍬 Healthy snacks")) + "</button>" +
+      "</div>" +
+      "</div>" +
+      // Область результатов.
+      '<div id="diary-recommend-body" class="diary-recommend__body suggest-body">' +
+      '<p class="suggest-hint">' +
+      App.escapeHtml(pick(
+        "Выберите приём пищи или опишите, чего хочется, и нажмите «Подобрать».",
+        "Pick a meal or describe what you feel like, then tap “Suggest”."
+      )) + "</p>" +
       "</div>" +
       "</section>";
 
-    requestRecommendations();
+    // Переключение приёма пищи (включая «Весь день» -> null).
+    var chipsWrap = panel.querySelector(".suggest-chips");
+    if (chipsWrap) {
+      chipsWrap.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".meal-chip");
+        if (!btn) return;
+        var v = btn.getAttribute("data-suggest-meal");
+        if (!v) return;
+        state.suggestMeal = v === "all" ? null : v;
+        App.haptic && App.haptic("light");
+        var all = chipsWrap.querySelectorAll(".meal-chip");
+        for (var i = 0; i < all.length; i++) {
+          var av = all[i].getAttribute("data-suggest-meal");
+          var on = (av === "all" && state.suggestMeal == null) || av === state.suggestMeal;
+          all[i].classList.toggle("is-active", on);
+        }
+      });
+    }
+
+    // Сохраняем свободный ввод в состоянии (чтобы переживал перерисовку).
+    var freeInput = panel.querySelector(".suggest-free__input");
+    if (freeInput) {
+      freeInput.addEventListener("input", function () {
+        state.suggestText = freeInput.value || "";
+      });
+    }
+
+    // Кнопка «Подобрать».
+    var goBtn = panel.querySelector(".suggest-btn--go");
+    if (goBtn) {
+      goBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (freeInput) state.suggestText = freeInput.value || "";
+        requestSuggestions();
+      });
+    }
+
+    // Кнопка «🍬 Вкусняшки».
+    var snacksBtn = panel.querySelector(".suggest-btn--snacks");
+    if (snacksBtn) {
+      snacksBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        requestHealthySnacks();
+      });
+    }
   }
 
   /**
-   * Считает остатки КБЖУ и вызывает App.api.recommendFood.
+   * Считает остатки КБЖУ за текущий день относительно цели и target_* профиля.
+   * @returns {Object} {remainingCalories, remainingProteins, remainingFats,
+   *                     remainingCarbs}
    */
-  function requestRecommendations() {
+  function computeRemaining() {
     var day = state.day || {};
     var profile = (App.state && App.state.profile) || {};
 
     var goalKcal = Number(day.daily_goal_kcal) || 0;
     var eaten = Number(day.total_calories) || 0;
 
-    var remainingCalories = Math.max(0, goalKcal - eaten);
-    var remainingProteins = Math.max(0, (Number(profile.target_proteins) || 0) - (Number(day.total_proteins) || 0));
-    var remainingFats = Math.max(0, (Number(profile.target_fats) || 0) - (Number(day.total_fats) || 0));
-    var remainingCarbs = Math.max(0, (Number(profile.target_carbs) || 0) - (Number(day.total_carbs) || 0));
+    return {
+      remainingCalories: Math.max(0, goalKcal - eaten),
+      remainingProteins: Math.max(0, (Number(profile.target_proteins) || 0) - (Number(day.total_proteins) || 0)),
+      remainingFats: Math.max(0, (Number(profile.target_fats) || 0) - (Number(day.total_fats) || 0)),
+      remainingCarbs: Math.max(0, (Number(profile.target_carbs) || 0) - (Number(day.total_carbs) || 0))
+    };
+  }
+
+  /**
+   * Показывает скелетон в области результатов «Что съесть?».
+   */
+  function showSuggestSkeleton() {
+    var body = document.getElementById("diary-recommend-body");
+    if (!body) return;
+    body.innerHTML =
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
+      '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>';
+  }
+
+  /**
+   * Подбирает блюда по выбранному приёму/свободному вводу.
+   * Если выбран приём пищи ИЛИ есть свободный текст — используем умный
+   * App.api.suggestFood. Иначе (общий случай «весь день» без текста) —
+   * существующий App.api.recommendFood как фолбэк.
+   */
+  function requestSuggestions() {
+    var rem = computeRemaining();
+    var freeText = (state.suggestText || "").trim();
+    var mealType = state.suggestMeal || null;
+
+    showSuggestSkeleton();
+
+    // Решаем, какой эндпоинт использовать.
+    var useSuggest = !!mealType || !!freeText;
+
+    if (useSuggest && App.api && typeof App.api.suggestFood === "function") {
+      var payload = {
+        remaining_calories: Math.round(rem.remainingCalories),
+        remaining_proteins: Math.round(rem.remainingProteins),
+        remaining_fats: Math.round(rem.remainingFats),
+        remaining_carbs: Math.round(rem.remainingCarbs)
+      };
+      if (mealType) payload.meal_type = mealType;
+      if (freeText) payload.free_text = freeText;
+
+      App.api
+        .suggestFood(payload)
+        .then(function (res) {
+          var suggestions = (res && res.suggestions) || [];
+          renderRecommendations(suggestions, rem.remainingCalories);
+        })
+        .catch(function (err) {
+          renderRecommendError(
+            (err && err.message) ||
+            pick("Не удалось получить предложения.", "Failed to get suggestions.")
+          );
+        });
+      return;
+    }
+
+    // Фолбэк: общий подбор под остаток нормы (как раньше).
+    requestRecommendations(rem);
+  }
+
+  /**
+   * Запрашивает «вкусняшки» (полезные перекусы) через App.api.getHealthySnacks.
+   */
+  function requestHealthySnacks() {
+    var rem = computeRemaining();
+
+    showSuggestSkeleton();
+
+    if (!(App.api && typeof App.api.getHealthySnacks === "function")) {
+      renderRecommendError(
+        pick("Подсказки временно недоступны.", "Suggestions are temporarily unavailable.")
+      );
+      return;
+    }
+
+    App.api
+      .getHealthySnacks()
+      .then(function (res) {
+        var suggestions = (res && res.suggestions) || [];
+        renderRecommendations(suggestions, rem.remainingCalories);
+      })
+      .catch(function (err) {
+        renderRecommendError(
+          (err && err.message) ||
+          pick("Не удалось получить вкусняшки.", "Failed to get healthy snacks.")
+        );
+      });
+  }
+
+  /**
+   * Считает остатки КБЖУ и вызывает App.api.recommendFood (фолбэк-поток).
+   * @param {Object} [rem] заранее посчитанные остатки (иначе считаем сами)
+   */
+  function requestRecommendations(rem) {
+    rem = rem || computeRemaining();
+    var profile = (App.state && App.state.profile) || {};
 
     var payload = {
-      remaining_calories: Math.round(remainingCalories),
-      remaining_proteins: Math.round(remainingProteins),
-      remaining_fats: Math.round(remainingFats),
-      remaining_carbs: Math.round(remainingCarbs),
+      remaining_calories: Math.round(rem.remainingCalories),
+      remaining_proteins: Math.round(rem.remainingProteins),
+      remaining_fats: Math.round(rem.remainingFats),
+      remaining_carbs: Math.round(rem.remainingCarbs),
       time_of_day: timeOfDay()
     };
     if (profile.diet_goal) {
@@ -1114,7 +1391,7 @@
       .recommendFood(payload)
       .then(function (res) {
         var suggestions = (res && res.suggestions) || [];
-        renderRecommendations(suggestions, remainingCalories);
+        renderRecommendations(suggestions, rem.remainingCalories);
       })
       .catch(function (err) {
         renderRecommendError(
@@ -1139,6 +1416,8 @@
   /**
    * Рисует карточки-рекомендации. Каждую можно добавить в рацион в один тап.
    * Название и причина (dish_name, reason) приходят от API — не переводим.
+   * Если в панели «Что съесть?» выбран конкретный приём пищи — он становится
+   * приёмом по умолчанию для добавления.
    * @param {Array} suggestions [{dish_name,calories,proteins,fats,carbs,reason}]
    * @param {number} remainingCalories остаток калорий (для подсказки)
    */
@@ -1162,8 +1441,9 @@
       return;
     }
 
-    // Селектор приёма пищи для добавления рекомендации.
-    var recMeal = "breakfast";
+    // Приём пищи для добавления рекомендации: по умолчанию — выбранный в панели
+    // «Что съесть?» (если выбран), иначе завтрак.
+    var recMeal = state.suggestMeal || "breakfast";
 
     var kcal = pick("ккал", "kcal");
     var pLabel = pick("Б", "P");
@@ -1196,7 +1476,7 @@
     body.innerHTML =
       '<div class="diary-recommend__meal">' +
       '<span class="field__label">' + App.escapeHtml(pick("Добавить как", "Add as")) + "</span>" +
-      mealChipsHtml("breakfast", "rec-meal") +
+      mealChipsHtml(recMeal, "rec-meal") +
       "</div>" +
       '<div class="diary-recommend__list">' + cards + "</div>";
 
@@ -1251,11 +1531,417 @@
     if (retry) {
       retry.addEventListener("click", function () {
         App.haptic && App.haptic("light");
+        // Повторяем последнее действие через основной поток подбора.
+        requestSuggestions();
+      });
+    }
+  }
+
+  // ===========================================================================
+  // AI-ПЛАН МЕНЮ (Этап 5, ПРЕМИУМ).
+  //
+  // Панель .plan-panel:
+  //   - чипы выбора охвата (День / Неделя);
+  //   - поле предпочтений (текст);
+  //   - кнопка «Сгенерировать» -> App.api.generateMealPlan({scope, preferences});
+  //   - по дням: label дня + блюда по приёмам (App.mealLabel) с КБЖУ; у каждого
+  //     блюда кнопка «🔄 Заменить» -> App.api.regenerateMealItem -> замена в UI;
+  //   - список покупок (shopping_list) буллетами;
+  //   - кнопка «Сгенерировать заново».
+  // Префикс классов plan-.
+  // ===========================================================================
+
+  /**
+   * Открывает панель AI-плана меню: управление (охват + предпочтения + кнопка)
+   * и область результатов плана.
+   */
+  function openMealPlanPanel() {
+    var panel = document.getElementById("diary-panel");
+    if (!panel) return;
+
+    panel.innerHTML =
+      '<section class="card plan-panel">' +
+      '<h2 class="plan-panel__title">' +
+      App.escapeHtml(pick("AI-план меню", "AI meal plan")) + "</h2>" +
+      '<p class="plan-panel__sub">' +
+      App.escapeHtml(pick(
+        "Составим меню под вашу цель и соберём список покупок.",
+        "We'll compose a menu for your goal and build a shopping list."
+      )) + "</p>" +
+      // Управление.
+      '<div class="plan-controls">' +
+      '<span class="field__label">' + App.escapeHtml(pick("На сколько", "Scope")) + "</span>" +
+      planScopeChipsHtml() +
+      '<label class="field plan-prefs">' +
+      '<span class="field__label">' + App.escapeHtml(pick("Предпочтения", "Preferences")) +
+      ' <span class="field__hint">' + App.escapeHtml(pick("(необязательно)", "(optional)")) + "</span></span>" +
+      '<input class="field__input plan-prefs__input" type="text" maxlength="160" ' +
+      'value="' + App.escapeHtml(state.planPrefs || "") + '" ' +
+      'placeholder="' + App.escapeHtml(pick("Например, без свинины, больше рыбы", "e.g. no pork, more fish")) + '">' +
+      "</label>" +
+      '<button type="button" class="btn btn--cta btn-block plan-generate">' +
+      App.escapeHtml(pick("Сгенерировать", "Generate")) + "</button>" +
+      "</div>" +
+      // Область результата.
+      '<div id="plan-body" class="plan-body"></div>' +
+      "</section>";
+
+    // Чипы выбора охвата.
+    var scopeWrap = panel.querySelector(".plan-scope");
+    if (scopeWrap) {
+      scopeWrap.addEventListener("click", function (ev) {
+        var btn = ev.target.closest(".plan-scope__chip");
+        if (!btn) return;
+        var sc = btn.getAttribute("data-plan-scope");
+        if (!sc) return;
+        state.planScope = sc;
+        App.haptic && App.haptic("light");
+        var all = scopeWrap.querySelectorAll(".plan-scope__chip");
+        for (var i = 0; i < all.length; i++) {
+          all[i].classList.toggle(
+            "is-active",
+            all[i].getAttribute("data-plan-scope") === sc
+          );
+        }
+      });
+    }
+
+    // Поле предпочтений -> состояние.
+    var prefsInput = panel.querySelector(".plan-prefs__input");
+    if (prefsInput) {
+      prefsInput.addEventListener("input", function () {
+        state.planPrefs = prefsInput.value || "";
+      });
+    }
+
+    // Кнопка генерации.
+    var genBtn = panel.querySelector(".plan-generate");
+    if (genBtn) {
+      genBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        if (prefsInput) state.planPrefs = prefsInput.value || "";
+        requestMealPlan();
+      });
+    }
+
+    // Если план уже был сгенерирован ранее (в этой сессии панели) — показываем.
+    if (state.plan) {
+      renderMealPlan(state.plan);
+    } else {
+      var body = document.getElementById("plan-body");
+      if (body) {
         body.innerHTML =
-          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
-          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>' +
-          '<div class="skeleton skeleton-block diary-recommend__skeleton"></div>';
-        requestRecommendations();
+          '<p class="plan-hint">' +
+          App.escapeHtml(pick(
+            "Выберите охват и нажмите «Сгенерировать».",
+            "Pick a scope and tap “Generate”."
+          )) + "</p>";
+      }
+    }
+  }
+
+  /**
+   * Разметка чипов выбора охвата плана (День / Неделя).
+   * @returns {string}
+   */
+  function planScopeChipsHtml() {
+    var scopes = [
+      { v: "day", ru: "День", en: "Day" },
+      { v: "week", ru: "Неделя", en: "Week" }
+    ];
+    var chips = "";
+    for (var i = 0; i < scopes.length; i++) {
+      var sc = scopes[i];
+      var active = state.planScope === sc.v ? " is-active" : "";
+      chips +=
+        '<button type="button" class="meal-chip plan-scope__chip' + active + '" ' +
+        'data-plan-scope="' + sc.v + '">' +
+        App.escapeHtml(pick(sc.ru, sc.en)) + "</button>";
+    }
+    return '<div class="meal-chips plan-scope">' + chips + "</div>";
+  }
+
+  /**
+   * Запрашивает план меню у сервера и рисует его (или ошибку).
+   */
+  function requestMealPlan() {
+    var body = document.getElementById("plan-body");
+    if (body) {
+      body.innerHTML =
+        '<div class="skeleton skeleton-block plan-skeleton"></div>' +
+        '<div class="skeleton skeleton-block plan-skeleton"></div>' +
+        '<div class="skeleton skeleton-block plan-skeleton"></div>';
+    }
+
+    if (!(App.api && typeof App.api.generateMealPlan === "function")) {
+      renderMealPlanError(
+        pick("Планировщик меню временно недоступен.", "The meal planner is temporarily unavailable.")
+      );
+      return;
+    }
+
+    var payload = { scope: state.planScope === "week" ? "week" : "day" };
+    var prefs = (state.planPrefs || "").trim();
+    if (prefs) payload.preferences = prefs;
+
+    App.api
+      .generateMealPlan(payload)
+      .then(function (res) {
+        state.plan = res || { days: [], shopping_list: [] };
+        renderMealPlan(state.plan);
+      })
+      .catch(function (err) {
+        renderMealPlanError(
+          (err && err.message) ||
+          pick("Не удалось составить план меню.", "Failed to generate the meal plan.")
+        );
+      });
+  }
+
+  /**
+   * Рисует план меню: дни, приёмы пищи, блюда (с кнопкой замены) и список покупок.
+   * Названия блюд и подписи дней приходят от API — не переводим (только экранируем).
+   * @param {Object} plan {days:[{label, meals:{...}}], shopping_list:[str]}
+   */
+  function renderMealPlan(plan) {
+    var body = document.getElementById("plan-body");
+    if (!body) return;
+
+    plan = plan || {};
+    var days = plan.days || [];
+    var shopping = plan.shopping_list || [];
+
+    if (!days.length) {
+      body.innerHTML =
+        '<p class="plan-empty">' +
+        App.escapeHtml(pick(
+          "План пуст. Попробуйте сгенерировать ещё раз.",
+          "The plan is empty. Try generating again."
+        )) + "</p>";
+      return;
+    }
+
+    var html = "";
+    for (var d = 0; d < days.length; d++) {
+      var day = days[d] || {};
+      var meals = day.meals || {};
+      var label = day.label || (pick("День ", "Day ") + (d + 1));
+
+      var mealsHtml = "";
+      for (var m = 0; m < MEAL_ORDER.length; m++) {
+        var mealType = MEAL_ORDER[m];
+        var dishes = meals[mealType] || [];
+        if (!dishes.length) continue;
+
+        var dishesHtml = "";
+        for (var i = 0; i < dishes.length; i++) {
+          dishesHtml += planDishHtml(dishes[i], d, mealType, i);
+        }
+
+        mealsHtml +=
+          '<div class="plan-meal">' +
+          '<div class="plan-meal__head">' +
+          '<span class="plan-meal__icon" aria-hidden="true">' + (MEAL_ICONS[mealType] || "🍽️") + "</span> " +
+          '<span class="plan-meal__title">' + App.escapeHtml(App.mealLabel(mealType)) + "</span>" +
+          "</div>" +
+          '<div class="plan-meal__dishes">' + dishesHtml + "</div>" +
+          "</div>";
+      }
+
+      html +=
+        '<section class="plan-day" data-day="' + d + '">' +
+        '<h3 class="plan-day__title">' + App.escapeHtml(label) + "</h3>" +
+        mealsHtml +
+        "</section>";
+    }
+
+    // Список покупок.
+    var shoppingHtml = "";
+    if (shopping.length) {
+      var lis = "";
+      for (var s = 0; s < shopping.length; s++) {
+        lis += '<li class="plan-shopping__item">' + App.escapeHtml(shopping[s]) + "</li>";
+      }
+      shoppingHtml =
+        '<section class="plan-shopping card">' +
+        '<h3 class="plan-shopping__title">' +
+        App.escapeHtml(pick("🛒 Список покупок", "🛒 Shopping list")) + "</h3>" +
+        '<ul class="plan-shopping__list">' + lis + "</ul>" +
+        "</section>";
+    }
+
+    // Кнопка «Сгенерировать заново».
+    var regenHtml =
+      '<button type="button" class="btn btn--ghost btn-block plan-regenerate">' +
+      App.escapeHtml(pick("🔁 Сгенерировать заново", "🔁 Generate again")) + "</button>";
+
+    body.innerHTML =
+      '<div class="plan-days">' + html + "</div>" +
+      shoppingHtml +
+      regenHtml;
+
+    // Делегируем клики по кнопкам «Заменить».
+    var daysWrap = body.querySelector(".plan-days");
+    if (daysWrap) {
+      daysWrap.addEventListener("click", function (ev) {
+        var swapBtn = ev.target.closest(".plan-dish__swap");
+        if (!swapBtn) return;
+        var dIdx = parseInt(swapBtn.getAttribute("data-day"), 10);
+        var mealType = swapBtn.getAttribute("data-meal");
+        var iIdx = parseInt(swapBtn.getAttribute("data-idx"), 10);
+        if (isNaN(dIdx) || !mealType || isNaN(iIdx)) return;
+        regenerateDish(dIdx, mealType, iIdx, swapBtn);
+      });
+    }
+
+    // Кнопка повторной генерации.
+    var regenBtn = body.querySelector(".plan-regenerate");
+    if (regenBtn) {
+      regenBtn.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        requestMealPlan();
+      });
+    }
+  }
+
+  /**
+   * Разметка одного блюда в плане меню с кнопкой замены.
+   * Название блюда — данные от API, не переводим (экранируем).
+   * @param {Object} dish {dish_name, calories, proteins, fats, carbs}
+   * @param {number} dayIdx индекс дня
+   * @param {string} mealType тип приёма пищи
+   * @param {number} idx индекс блюда внутри приёма
+   * @returns {string}
+   */
+  function planDishHtml(dish, dayIdx, mealType, idx) {
+    dish = dish || {};
+    var kcal = pick("ккал", "kcal");
+    var pLabel = pick("Б", "P");
+    var fLabel = pick("Ж", "F");
+    var cLabel = pick("У", "C");
+
+    return (
+      '<div class="plan-dish" data-day="' + dayIdx + '" data-meal="' + mealType + '" data-idx="' + idx + '">' +
+      '<div class="plan-dish__info">' +
+      '<span class="plan-dish__name">' +
+      App.escapeHtml(dish.dish_name || pick("Блюдо", "Dish")) + "</span>" +
+      '<span class="plan-dish__macros">' +
+      App.fmt(dish.calories || 0) + " " + kcal + " · " +
+      pLabel + " " + App.fmt(dish.proteins || 0) + " · " +
+      fLabel + " " + App.fmt(dish.fats || 0) + " · " +
+      cLabel + " " + App.fmt(dish.carbs || 0) +
+      "</span>" +
+      "</div>" +
+      '<button type="button" class="plan-dish__swap" ' +
+      'data-day="' + dayIdx + '" data-meal="' + mealType + '" data-idx="' + idx + '" ' +
+      'title="' + App.escapeHtml(pick("Заменить блюдо", "Replace dish")) + '" ' +
+      'aria-label="' + App.escapeHtml(pick("Заменить блюдо", "Replace dish")) + '">🔄 ' +
+      App.escapeHtml(pick("Заменить", "Replace")) + "</button>" +
+      "</div>"
+    );
+  }
+
+  /**
+   * Заменяет одно блюдо в плане: запрашивает новое у сервера и обновляет UI
+   * на месте (без полного перезапроса плана).
+   * @param {number} dayIdx индекс дня
+   * @param {string} mealType тип приёма пищи
+   * @param {number} idx индекс блюда внутри приёма
+   * @param {HTMLElement} swapBtn кнопка-инициатор (для блокировки/спиннера)
+   */
+  function regenerateDish(dayIdx, mealType, idx, swapBtn) {
+    if (!state.plan || !state.plan.days || !state.plan.days[dayIdx]) return;
+    var meals = state.plan.days[dayIdx].meals || {};
+    var dishes = meals[mealType] || [];
+    var current = dishes[idx];
+    if (!current) return;
+
+    if (swapBtn) {
+      if (swapBtn.disabled) return; // защита от повторных кликов
+      swapBtn.disabled = true;
+      swapBtn.textContent = pick("Меняем…", "Swapping…");
+    }
+    App.haptic && App.haptic("light");
+
+    if (!(App.api && typeof App.api.regenerateMealItem === "function")) {
+      if (swapBtn) {
+        swapBtn.disabled = false;
+        swapBtn.textContent = "🔄 " + pick("Заменить", "Replace");
+      }
+      App.toast(pick("Замена временно недоступна.", "Replacing is temporarily unavailable."));
+      return;
+    }
+
+    var payload = {
+      meal_type: mealType,
+      around_calories: Math.round(Number(current.calories) || 0)
+    };
+    var prefs = (state.planPrefs || "").trim();
+    if (prefs) payload.preferences = prefs;
+
+    App.api
+      .regenerateMealItem(payload)
+      .then(function (newDish) {
+        if (!newDish || typeof newDish !== "object") {
+          throw new Error(pick("Пустой ответ сервера", "Empty server response"));
+        }
+        // Обновляем модель плана и перерисовываем конкретное блюдо в DOM.
+        state.plan.days[dayIdx].meals[mealType][idx] = newDish;
+        replaceDishInDom(dayIdx, mealType, idx, newDish);
+        App.haptic && App.haptic("success");
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        App.toast((err && err.message) || pick("Не удалось заменить блюдо", "Failed to replace dish"));
+        if (swapBtn) {
+          swapBtn.disabled = false;
+          swapBtn.textContent = "🔄 " + pick("Заменить", "Replace");
+        }
+      });
+  }
+
+  /**
+   * Заменяет разметку конкретного блюда в DOM новым блюдом (после замены).
+   * @param {number} dayIdx
+   * @param {string} mealType
+   * @param {number} idx
+   * @param {Object} newDish
+   */
+  function replaceDishInDom(dayIdx, mealType, idx, newDish) {
+    var body = document.getElementById("plan-body");
+    if (!body) return;
+    var selector =
+      '.plan-dish[data-day="' + dayIdx + '"][data-meal="' + mealType + '"][data-idx="' + idx + '"]';
+    var oldEl = body.querySelector(selector);
+    if (!oldEl) return;
+
+    var wrap = document.createElement("div");
+    wrap.innerHTML = planDishHtml(newDish, dayIdx, mealType, idx);
+    var newEl = wrap.firstChild;
+    if (newEl && oldEl.parentNode) {
+      oldEl.parentNode.replaceChild(newEl, oldEl);
+    }
+  }
+
+  /**
+   * Состояние ошибки внутри панели AI-плана меню с кнопкой «Повторить».
+   * @param {string} message
+   */
+  function renderMealPlanError(message) {
+    var body = document.getElementById("plan-body");
+    if (!body) return;
+    body.innerHTML =
+      '<div class="plan-error">' +
+      '<p class="plan-error__text">' + App.escapeHtml(message) + "</p>" +
+      '<button type="button" class="btn btn--ghost plan-error__retry">' +
+      App.escapeHtml(pick("Повторить", "Retry")) + "</button>" +
+      "</div>";
+
+    var retry = body.querySelector(".plan-error__retry");
+    if (retry) {
+      retry.addEventListener("click", function () {
+        App.haptic && App.haptic("light");
+        requestMealPlan();
       });
     }
   }
@@ -2004,6 +2690,12 @@
       // Панель действий при входе на страницу закрыта.
       state.panel = null;
       state.day = null;
+      // Сбрасываем состояние AI-панелей (план меню / умные предложения).
+      state.plan = null;
+      state.planScope = "day";
+      state.planPrefs = "";
+      state.suggestMeal = null;
+      state.suggestText = "";
 
       // Прокручиваем к началу при входе на страницу.
       App.scrollTop && App.scrollTop();
@@ -2038,6 +2730,11 @@
       state.loading = false;
       state.panel = null;
       state.day = null;
+      // Сбрасываем состояние AI-панелей.
+      state.plan = null;
+      state.planPrefs = "";
+      state.suggestMeal = null;
+      state.suggestText = "";
     }
   };
 

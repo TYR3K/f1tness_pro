@@ -70,6 +70,7 @@ except Exception:  # pragma: no cover - очень старый Python
     ZoneInfo = None
 
 from backend import adaptive
+from backend import subscription
 from backend.database import SessionLocal
 from backend.models import (
     DiaryEntry,
@@ -80,6 +81,8 @@ from backend.models import (
     SupplementReminderItem,
     TrainingReminder,
     User,
+    WeightLog,
+    Workout,
 )
 
 logger = logging.getLogger("notifications")
@@ -248,6 +251,35 @@ _TEXTS = {
             "Eaten: <b>{eaten}</b> kcal\n"
             "Calorie goal not set — set it in your profile 🎯"
         ),
+    },
+    # --- Недельный КОРОТКИЙ отчёт (Этап 5, БЕЗ AI) --------------------------- #
+    # Заголовок недельного пуша. Тело собирается из строк ниже динамически
+    # (показываем только те метрики, по которым есть данные), затем добавляется
+    # подсказка открыть полный AI-отчёт в приложении.
+    "weekreport_title": {
+        "ru": "📅 <b>Итоги недели</b>",
+        "en": "📅 <b>Your week in review</b>",
+    },
+    # Строка средних калорий за неделю. {value} — округлённое среднее.
+    "weekreport_avg_calories": {
+        "ru": "Средние калории: <b>{value}</b> ккал/день",
+        "en": "Average calories: <b>{value}</b> kcal/day",
+    },
+    # Изменение веса за неделю. {value} — модуль изменения с одним знаком, {sign}
+    # — "+"/"−"/"" (для нуля). Заполняется в _process_weekly_report.
+    "weekreport_weight": {
+        "ru": "Изменение веса: <b>{sign}{value}</b> кг",
+        "en": "Weight change: <b>{sign}{value}</b> kg",
+    },
+    # Количество тренировок за неделю. {value} — целое число.
+    "weekreport_workouts": {
+        "ru": "Тренировок: <b>{value}</b>",
+        "en": "Workouts: <b>{value}</b>",
+    },
+    # Подсказка-хвост: открыть полный отчёт в приложении.
+    "weekreport_hint": {
+        "ru": "Полный AI-отчёт по неделе — в приложении 📲",
+        "en": "Full AI weekly report — in the app 📲",
     },
 }
 
@@ -666,6 +698,183 @@ def _process_adaptive_recalc(db, user: "User", today: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Недельный КОРОТКИЙ отчёт раз в неделю (Этап 5, БЕЗ AI)
+# --------------------------------------------------------------------------- #
+def _iso_week_key(now: datetime) -> str:
+    """Ключ текущей ISO-недели вида "2026-W27" — используется как «дата» дедупа.
+
+    Раз в неделю недельный пуш должен уйти ровно один раз. NotificationLog
+    дедуплицирует по паре «вид + дата», поэтому в качестве «даты» подставляем
+    не календарный день, а номер ISO-недели — тогда повторный вызов в течение
+    той же недели отсеется. Любой сбой -> фолбэк на ISO-дату дня (безопасно:
+    в худшем случае пуш может уйти не более раза в день, а не раз в неделю).
+    """
+    try:
+        iso_year, iso_week, _ = now.isocalendar()
+        return f"{iso_year}-W{int(iso_week):02d}"
+    except Exception:
+        try:
+            return now.date().isoformat()
+        except Exception:
+            return "weekreport"
+
+
+def _collect_week_short_stats(db, tid: int, today: str) -> dict:
+    """Собрать КОРОТКУЮ статистику за последние 7 дней (без AI, без OpenAI).
+
+    Возвращает словарь с ключами:
+      * avg_calories (int|None) — среднее по дням, в которых ЕСТЬ записи дневника;
+      * weight_change_kg (float|None) — изменение веса (последний − первый замер
+        за период), знак сохраняем; None, если замеров меньше двух;
+      * workouts_count (int) — количество тренировок за период.
+
+    Период — 7 дней, включая сегодня (ISO-даты в диапазоне [start; today]).
+    Любая ошибка по конкретной метрике не должна срывать остальные: каждая
+    выборка в своём try/except, при сбое метрика трактуется как «нет данных».
+    """
+    stats = {"avg_calories": None, "weight_change_kg": None, "workouts_count": 0}
+
+    # Начало периода — 6 дней назад (итого 7 календарных дней вместе с сегодня).
+    try:
+        from datetime import date as _date, timedelta as _timedelta
+
+        today_date = _date.fromisoformat(today)
+        start_str = (today_date - _timedelta(days=6)).isoformat()
+    except Exception as exc:
+        logger.warning("_collect_week_short_stats: не удалось вычислить период (%s) tid=%s", exc, tid)
+        return stats
+
+    # --- Средние калории по дням с записями -------------------------------- #
+    try:
+        entries = (
+            db.query(DiaryEntry)
+            .filter(
+                DiaryEntry.telegram_id == tid,
+                DiaryEntry.date >= start_str,
+                DiaryEntry.date <= today,
+            )
+            .all()
+        )
+        per_day: dict = {}
+        for e in entries:
+            d = getattr(e, "date", None)
+            if not d:
+                continue
+            per_day[d] = per_day.get(d, 0) + (getattr(e, "calories", 0) or 0)
+        if per_day:
+            stats["avg_calories"] = int(round(sum(per_day.values()) / len(per_day)))
+    except Exception as exc:
+        logger.warning("_collect_week_short_stats: ошибка калорий (%s) tid=%s", exc, tid)
+
+    # --- Изменение веса (последний − первый замер за период) --------------- #
+    try:
+        weights = (
+            db.query(WeightLog)
+            .filter(
+                WeightLog.telegram_id == tid,
+                WeightLog.date >= start_str,
+                WeightLog.date <= today,
+            )
+            .order_by(WeightLog.date.asc())
+            .all()
+        )
+        valid = [w for w in weights if getattr(w, "weight", None) is not None]
+        if len(valid) >= 2:
+            stats["weight_change_kg"] = round(
+                float(valid[-1].weight) - float(valid[0].weight), 1
+            )
+    except Exception as exc:
+        logger.warning("_collect_week_short_stats: ошибка веса (%s) tid=%s", exc, tid)
+
+    # --- Количество тренировок -------------------------------------------- #
+    try:
+        workouts_count = (
+            db.query(Workout)
+            .filter(
+                Workout.telegram_id == tid,
+                Workout.date >= start_str,
+                Workout.date <= today,
+            )
+            .count()
+        )
+        stats["workouts_count"] = int(workouts_count or 0)
+    except Exception as exc:
+        logger.warning("_collect_week_short_stats: ошибка тренировок (%s) tid=%s", exc, tid)
+
+    return stats
+
+
+def _process_weekly_report(db, tid: int, today: str, now: datetime,
+                           user: "User", settings: "NotificationSettings") -> None:
+    """Раз в неделю — КОРОТКИЙ статус-пуш за 7 дней (БЕЗ AI, без OpenAI).
+
+    Шлём только премиум-пользователям с включённой вечерней сводкой
+    (daily_summary_enabled). Дедуп — по kind="weekreport" и текущей ISO-неделе
+    (см. _iso_week_key), поэтому за неделю уйдёт ровно один пуш. Время отправки
+    привязываем к summary_time (как у вечерней сводки), чтобы не будить ночью.
+
+    Текст собираем динамически из имеющихся метрик (средние калории, изменение
+    веса, количество тренировок) на языке пользователя и добавляем подсказку
+    открыть полный AI-отчёт в приложении. OpenAI здесь НЕ вызывается — чтобы не
+    нагружать минутный планировщик.
+    """
+    # Только при включённой ежедневной сводке (повторно используем тот же тумблер).
+    if not getattr(settings, "daily_summary_enabled", False):
+        return
+
+    # Только премиум (владелец/активная подписка). is_premium безопасен к None-полям.
+    try:
+        if not subscription.is_premium(user):
+            return
+    except Exception as exc:
+        logger.warning("_process_weekly_report: ошибка проверки премиума tid=%s: %s", tid, exc)
+        return
+
+    # Не отправляем раньше времени вечерней сводки (фолбэк "21:00").
+    if not _time_reached(now, getattr(settings, "summary_time", None) or "21:00"):
+        return
+
+    # Дедуп по ISO-неделе: «дата» = ключ недели, kind = "weekreport".
+    week_key = _iso_week_key(now)
+    if _was_sent(db, tid, "weekreport", week_key):
+        return
+
+    # Язык пользователя (объект User уже на руках).
+    lang = _norm_lang(getattr(user, "language", None))
+
+    # Короткая статистика за 7 дней (без AI).
+    stats = _collect_week_short_stats(db, tid, today)
+
+    # Собираем тело из доступных метрик (пропускаем те, по которым нет данных).
+    lines = [_msg("weekreport_title", lang)]
+
+    avg_cal = stats.get("avg_calories")
+    if avg_cal is not None:
+        lines.append(_msg("weekreport_avg_calories", lang, value=avg_cal))
+
+    weight_change = stats.get("weight_change_kg")
+    if weight_change is not None:
+        # Знак выводим явно: "+" набор, "−" снижение, "" если ровно ноль.
+        if weight_change > 0:
+            sign = "+"
+        elif weight_change < 0:
+            sign = "−"  # настоящий минус (U+2212) — аккуратнее в тексте
+        else:
+            sign = ""
+        lines.append(
+            _msg("weekreport_weight", lang, sign=sign, value=abs(weight_change))
+        )
+
+    lines.append(_msg("weekreport_workouts", lang, value=stats.get("workouts_count", 0)))
+    lines.append(_msg("weekreport_hint", lang))
+
+    text = "\n".join(part for part in lines if part)
+
+    if send_telegram(tid, text):
+        _mark_sent(db, tid, "weekreport", week_key)
+
+
+# --------------------------------------------------------------------------- #
 #  Главная функция проверки (вызывается планировщиком каждую минуту)
 # --------------------------------------------------------------------------- #
 def check_notifications() -> None:
@@ -737,6 +946,20 @@ def check_notifications() -> None:
 
                 # Вечерняя сводка дня (язык берётся из user внутри функции).
                 _process_daily_summary(db, tid, today, now, user, settings)
+
+                # Недельный КОРОТКИЙ отчёт (Этап 5, БЕЗ AI): раз в неделю, только
+                # премиум + включённая сводка. Полностью изолирован собственным
+                # try/except, чтобы новая логика не сорвала остальную рассылку.
+                try:
+                    _process_weekly_report(db, tid, today, now, user, settings)
+                except Exception as exc_wr:
+                    logger.warning(
+                        "check_notifications: сбой недельного отчёта tid=%s: %s", tid, exc_wr
+                    )
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
 
             except Exception as exc:
                 # Сбой по одному пользователю не должен прерывать рассылку.

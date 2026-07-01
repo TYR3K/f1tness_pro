@@ -408,6 +408,9 @@
       // ---- ПРЕМИУМ: Адаптивные калории (контейнер заполняется в renderAdaptive) ----
       '<section class="adapt-card card" id="accAdaptCard"></section>' +
 
+      // ---- ПРЕМИУМ: Недельный AI-отчёт (контейнер заполняется в renderReport) ----
+      '<section class="rep-card card" id="accReportCard"></section>' +
+
       // ---- Карточка «Вечерняя сводка» ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
@@ -1389,6 +1392,320 @@
   }
 
   /* =====================================================================
+   *  ПРЕМИУМ: НЕДЕЛЬНЫЙ AI-ОТЧЁТ / WEEKLY AI REPORT (Этап 5)
+   *  Кнопка «Сформировать отчёт» -> App.api.getWeeklyReport().
+   *  Показывает summary, список insights (буллеты), focus-совет (выделенный)
+   *  и компактные ключевые stats. Платный роут (для free — paywall в карточке).
+   *  Префикс CSS-классов: rep-.
+   * ===================================================================== */
+
+  /**
+   * Строит карточку «Недельный AI-отчёт». Для free вставляет paywall прямо в
+   * карточку (суб-контейнер, остальной аккаунт цел). Для премиум — заголовок,
+   * подсказка, кнопка генерации и пустой контейнер тела (заполняется по клику).
+   */
+  function renderReport() {
+    var card = els.reportCard;
+    if (!card) return;
+
+    if (!App.isPremium()) {
+      // Гейтинг: paywall показываем в саму карточку (суб-контейнер, не весь #view).
+      card.innerHTML = "";
+      card.classList.add("rep-gate");
+      App.paywall(card, {
+        icon: "🧠",
+        title: L("Недельный AI-отчёт", "Weekly AI report"),
+        desc: L(
+          "Краткий разбор недели: калории, БЖУ, тренировки и вес — с выводами и советом.",
+          "A weekly recap: calories, macros, workouts and weight — with insights and a focus tip."
+        ),
+        bullets: [
+          L("Сводка за неделю", "Weekly summary"),
+          L("Полезные выводы", "Actionable insights"),
+          L("Главный фокус недели", "Focus of the week")
+        ]
+      });
+      return;
+    }
+
+    // Снимаем класс-гейт, если он остался от прошлого рендера (когда статус
+    // подписки ещё не подтянулся): иначе карточка теряет фон/паддинг.
+    card.classList.remove("rep-gate");
+
+    card.innerHTML =
+      '<h2 class="acc-title">' +
+      App.escapeHtml(L("Недельный AI-отчёт", "Weekly AI report")) +
+      "</h2>" +
+      '<p class="rep-hint">' +
+      App.escapeHtml(
+        L(
+          "Сформируем краткий разбор вашей недели: калории, БЖУ, тренировки и вес.",
+          "We'll build a short recap of your week: calories, macros, workouts and weight."
+        )
+      ) +
+      "</p>" +
+      '<button type="button" class="btn btn--cta rep-gen-btn" id="accReportGen">🧠 ' +
+      App.escapeHtml(L("Сформировать отчёт", "Generate report")) +
+      "</button>" +
+      '<div class="rep-body" id="accReportBody"></div>';
+
+    var genBtn = card.querySelector("#accReportGen");
+    var body = card.querySelector("#accReportBody");
+    if (genBtn) {
+      genBtn.addEventListener("click", function () {
+        loadReport(genBtn, body);
+      });
+    }
+  }
+
+  /**
+   * Загружает недельный AI-отчёт и отрисовывает результат.
+   * Показывает состояние загрузки, обрабатывает ошибки (с кнопкой повтора).
+   */
+  function loadReport(genBtn, body) {
+    if (!body) return;
+    if (genBtn) genBtn.disabled = true;
+    App.haptic("light");
+
+    // Состояние загрузки (скелетон) прямо в теле отчёта.
+    body.innerHTML =
+      '<div class="rep-loading">' +
+      '<div class="skeleton skeleton--block"></div>' +
+      '<div class="rep-loading__text">' +
+      App.escapeHtml(L("Анализируем неделю…", "Analyzing your week…")) +
+      "</div>" +
+      "</div>";
+
+    App.api
+      .getWeeklyReport()
+      .then(function (res) {
+        renderReportResult(body, res || {});
+        App.haptic("success");
+      })
+      .catch(function (err) {
+        var reason = err && err.message ? err.message : L("Ошибка сети", "Network error");
+        body.innerHTML =
+          '<div class="rep-error">' +
+          "<p>" +
+          App.escapeHtml(
+            L("Не удалось сформировать отчёт.", "Failed to generate the report.")
+          ) +
+          "</p>" +
+          '<p class="rep-error__msg">' +
+          App.escapeHtml(reason) +
+          "</p>" +
+          '<button type="button" class="btn btn--ghost" id="accReportRetry">' +
+          App.escapeHtml(L("Повторить", "Retry")) +
+          "</button>" +
+          "</div>";
+        App.haptic("error");
+        var retry = body.querySelector("#accReportRetry");
+        if (retry) {
+          retry.addEventListener("click", function () {
+            loadReport(genBtn, body);
+          });
+        }
+      })
+      .finally(function () {
+        if (genBtn) {
+          genBtn.disabled = false;
+          // После первой генерации меняем подпись на «Обновить отчёт».
+          genBtn.textContent =
+            "🔄 " + L("Обновить отчёт", "Refresh report");
+        }
+      });
+  }
+
+  /**
+   * Отрисовывает результат недельного AI-отчёта.
+   * @param {HTMLElement} body — контейнер тела отчёта.
+   * @param {Object} res — {summary, insights:[str], focus:str|null, stats:{...}|null}.
+   */
+  function renderReportResult(body, res) {
+    if (!body) return;
+
+    var summary = res.summary ? String(res.summary).trim() : "";
+    var insights = Array.isArray(res.insights) ? res.insights : [];
+    var focus = res.focus ? String(res.focus).trim() : "";
+    var stats = res.stats && typeof res.stats === "object" ? res.stats : null;
+
+    // Пустой ответ — мягкое приглашение вести дневник.
+    if (!summary && !insights.length && !focus && !stats) {
+      body.innerHTML =
+        '<div class="rep-empty">' +
+        '<div class="rep-empty__icon" aria-hidden="true">📭</div>' +
+        '<div class="rep-empty__text">' +
+        App.escapeHtml(
+          L(
+            "Пока мало данных за неделю. Добавляйте приёмы пищи и тренировки — и отчёт станет точнее.",
+            "Not enough data this week yet. Log meals and workouts — the report will get sharper."
+          )
+        ) +
+        "</div>" +
+        "</div>";
+      return;
+    }
+
+    var html = "";
+
+    // ---- Сводка ----
+    if (summary) {
+      html +=
+        '<p class="rep-summary">' + App.escapeHtml(summary) + "</p>";
+    }
+
+    // ---- Список выводов (буллеты) ----
+    if (insights.length) {
+      var items = "";
+      for (var i = 0; i < insights.length; i++) {
+        var ins = insights[i];
+        if (ins == null || String(ins).trim() === "") continue;
+        items +=
+          '<li class="rep-insight">' +
+          '<span class="rep-insight__mark" aria-hidden="true">•</span>' +
+          '<span class="rep-insight__text">' +
+          App.escapeHtml(String(ins).trim()) +
+          "</span>" +
+          "</li>";
+      }
+      if (items) {
+        html +=
+          '<div class="rep-insights-title">' +
+          App.escapeHtml(L("Выводы", "Insights")) +
+          "</div>" +
+          '<ul class="rep-insights">' + items + "</ul>";
+      }
+    }
+
+    // ---- Главный фокус (выделенный совет) ----
+    if (focus) {
+      html +=
+        '<div class="rep-focus">' +
+        '<span class="rep-focus__icon" aria-hidden="true">🎯</span>' +
+        '<span class="rep-focus__body">' +
+        '<span class="rep-focus__label">' +
+        App.escapeHtml(L("Фокус недели", "Focus of the week")) +
+        "</span>" +
+        '<span class="rep-focus__text">' +
+        App.escapeHtml(focus) +
+        "</span>" +
+        "</span>" +
+        "</div>";
+    }
+
+    // ---- Компактные ключевые stats ----
+    if (stats) {
+      html += renderReportStats(stats);
+    }
+
+    body.innerHTML = html;
+  }
+
+  /**
+   * Формирует компактный блок ключевых метрик отчёта.
+   * Показываем только заполненные значения (средние калории/дефицит,
+   * тренировки, изменение веса и пр.).
+   * @param {Object} s — объект stats.
+   * @returns {string} HTML-разметка блока статистики.
+   */
+  function renderReportStats(s) {
+    var kcal = L("ккал", "kcal");
+    var cells = [];
+
+    // Хелпер добавления ячейки (значение + подпись). Пустые значения пропускаем.
+    function add(value, label, cls) {
+      if (value == null || value === "") return;
+      cells.push(
+        '<div class="rep-stat' +
+        (cls ? " " + cls : "") +
+        '">' +
+        '<span class="rep-stat__value">' +
+        App.escapeHtml(value) +
+        "</span>" +
+        '<span class="rep-stat__label">' +
+        App.escapeHtml(label) +
+        "</span>" +
+        "</div>"
+      );
+    }
+
+    // Средние калории (+ цель в скобках, если задана).
+    if (s.avg_calories != null && isFinite(Number(s.avg_calories))) {
+      var calVal = App.fmt(s.avg_calories) + " " + kcal;
+      add(calVal, L("Средние калории", "Avg calories"));
+    }
+
+    // Цель по калориям.
+    if (s.goal != null && isFinite(Number(s.goal))) {
+      add(App.fmt(s.goal) + " " + kcal, L("Цель", "Goal"));
+    }
+
+    // Средний дефицит (со знаком: дефицит/профицит).
+    if (s.avg_deficit != null && isFinite(Number(s.avg_deficit))) {
+      add(
+        fmtChange(s.avg_deficit) + " " + kcal,
+        L("Средний дефицит", "Avg deficit"),
+        Number(s.avg_deficit) < 0 ? "rep-stat--good" : ""
+      );
+    }
+
+    // Дни с записями.
+    if (s.days_logged != null && isFinite(Number(s.days_logged))) {
+      add(App.fmt(s.days_logged), L("Дней с записями", "Days logged"));
+    }
+
+    // Тренировки за неделю.
+    if (s.workouts_count != null && isFinite(Number(s.workouts_count))) {
+      add(App.fmt(s.workouts_count), L("Тренировок", "Workouts"));
+    }
+
+    // Сожжено калорий.
+    if (s.total_burned != null && isFinite(Number(s.total_burned))) {
+      add(App.fmt(s.total_burned) + " " + kcal, L("Сожжено", "Burned"));
+    }
+
+    // Изменение веса за неделю.
+    if (s.weight_change_kg != null && isFinite(Number(s.weight_change_kg))) {
+      var wNum = Number(s.weight_change_kg);
+      add(
+        fmtChange(s.weight_change_kg) + " " + L("кг", "kg"),
+        L("Изменение веса", "Weight change"),
+        wNum < 0 ? "rep-stat--down" : wNum > 0 ? "rep-stat--up" : ""
+      );
+    }
+
+    // Средние БЖУ (одной строкой в подписи).
+    var prot = s.avg_proteins;
+    var fat = s.avg_fats;
+    var carb = s.avg_carbs;
+    if (
+      (prot != null && isFinite(Number(prot))) ||
+      (fat != null && isFinite(Number(fat))) ||
+      (carb != null && isFinite(Number(carb)))
+    ) {
+      var g = L("г", "g");
+      var macroVal =
+        App.fmt(prot || 0) +
+        "/" +
+        App.fmt(fat || 0) +
+        "/" +
+        App.fmt(carb || 0) +
+        " " +
+        g;
+      add(macroVal, L("Б/Ж/У в среднем", "Avg P/F/C"));
+    }
+
+    if (!cells.length) return "";
+
+    return (
+      '<div class="rep-stats-title">' +
+      App.escapeHtml(L("Ключевые цифры", "Key numbers")) +
+      "</div>" +
+      '<div class="rep-stats">' + cells.join("") + "</div>"
+    );
+  }
+
+  /* =====================================================================
    *  ВЕЧЕРНЯЯ СВОДКА
    *  Только ежедневная сводка: тумблер daily_summary_enabled + время summary_time.
    *  Остальные напоминания вынесены в разделы Тренировки / Добавки / Рацион.
@@ -1717,6 +2034,7 @@
       saveBtn: viewEl.querySelector("#accSaveBtn"),
       weightCard: viewEl.querySelector("#accWeightCard"),
       adaptCard: viewEl.querySelector("#accAdaptCard"),
+      reportCard: viewEl.querySelector("#accReportCard"),
       summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
     };
@@ -1730,6 +2048,7 @@
     if (!els) return;
     renderWeight();
     renderAdaptive();
+    renderReport();
   }
 
   // ---- Контроллер страницы ----

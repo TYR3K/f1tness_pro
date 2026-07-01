@@ -50,9 +50,14 @@ from backend import (
 from backend.ai_service import (
     AIError,
     analyze_food_image,
+    generate_meal_plan,
+    generate_weekly_report,
+    healthy_snacks,
     parse_food_text,
     recommend_meals,
     recommend_supplements,
+    regenerate_meal_item,
+    suggest_food,
     suggest_supplements,
     transcribe_audio,
 )
@@ -78,11 +83,18 @@ from backend.schemas import (
     DiaryDayOut,
     DiaryEntryIn,
     DiaryEntryOut,
+    FoodSuggestIn,
+    FoodSuggestOut,
     GoalCalcIn,
     GoalCalcOut,
+    HealthySnacksOut,
     HistoryDay,
     HistoryOut,
     ManualFoodIn,
+    MealPlanDay,
+    MealPlanDish,
+    MealPlanIn,
+    MealPlanOut,
     MealsOut,
     NotificationSettingsIn,
     NotificationSettingsOut,
@@ -93,6 +105,8 @@ from backend.schemas import (
     RecommendIn,
     RecommendItem,
     RecommendOut,
+    RegenerateItemIn,
+    RegenerateItemOut,
     ScansRemainingOut,
     StarsInvoiceIn,
     StarsInvoiceOut,
@@ -118,6 +132,7 @@ from backend.schemas import (
     TrainingRemindersOut,
     VoiceFoodOut,
     VoiceItemOut,
+    WeeklyReportOut,
     WeightAddIn,
     WeightHistoryOut,
     WeightLogOut,
@@ -1847,6 +1862,390 @@ def diary_copy_yesterday(
 
     db.commit()
     return {"added": added}
+
+
+# --------------------------------------------------------------------------- #
+#  AI-функции (Этап 5) — ПРЕМИУМ
+#
+#  Недельный AI-отчёт с инсайтами, AI-планировщик меню (день/неделя) и умные
+#  предложения еды/перекусов. Все эндпоинты премиум (require_premium -> 402 без
+#  подписки) и объявлены ВЫШЕ app.mount. При сбое ИИ отдаём 502 (как в остальных
+#  AI-роутах); при включённом DEBUG_AI добавляем причину и «сырой» ответ модели.
+# --------------------------------------------------------------------------- #
+@app.get("/report/weekly", response_model=WeeklyReportOut)
+def report_weekly(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> WeeklyReportOut:
+    """Собрать статистику за последние 7 дней и сгенерировать AI-отчёт с инсайтами.
+
+    Статистику считаем на бэкенде (средние калории/БЖУ по дням с записями,
+    кол-во залогированных дней, тренировки и сожжённое, изменение веса, средний
+    дефицит и тренд калорий «первая половина недели против второй»), затем
+    передаём её в ai.generate_weekly_report. При сбое ИИ -> 502.
+    """
+    today = date_cls.today()
+    start = today - timedelta(days=6)  # 7 календарных дней включительно
+    start_str = start.isoformat()
+    end_str = today.isoformat()
+
+    # --- Питание: суммы по дням, затем средние по дням С ЗАПИСЯМИ ---
+    diary_rows = (
+        db.query(DiaryEntry)
+        .filter(
+            DiaryEntry.telegram_id == user.telegram_id,
+            DiaryEntry.date >= start_str,
+            DiaryEntry.date <= end_str,
+        )
+        .all()
+    )
+
+    # Накапливаем КБЖУ по каждой дате (чтобы усреднять именно по дням, а не записям).
+    per_day: dict[str, dict[str, float]] = {}
+    for r in diary_rows:
+        d = per_day.setdefault(
+            r.date, {"calories": 0.0, "proteins": 0.0, "fats": 0.0, "carbs": 0.0}
+        )
+        d["calories"] += r.calories or 0
+        d["proteins"] += r.proteins or 0.0
+        d["fats"] += r.fats or 0.0
+        d["carbs"] += r.carbs or 0.0
+
+    days_logged = len(per_day)
+    if days_logged > 0:
+        avg_calories = round(sum(v["calories"] for v in per_day.values()) / days_logged)
+        avg_proteins = round(sum(v["proteins"] for v in per_day.values()) / days_logged, 1)
+        avg_fats = round(sum(v["fats"] for v in per_day.values()) / days_logged, 1)
+        avg_carbs = round(sum(v["carbs"] for v in per_day.values()) / days_logged, 1)
+    else:
+        avg_calories = 0
+        avg_proteins = avg_fats = avg_carbs = 0.0
+
+    # Тренд калорий: средняя за первую половину недели против второй (по датам).
+    # Чёткая граница — середина 7-дневного окна (3 дня : 4 дня).
+    mid = start + timedelta(days=3)
+    mid_str = mid.isoformat()
+    first_half = [v["calories"] for d, v in per_day.items() if d < mid_str]
+    second_half = [v["calories"] for d, v in per_day.items() if d >= mid_str]
+    if first_half and second_half:
+        avg_first = sum(first_half) / len(first_half)
+        avg_second = sum(second_half) / len(second_half)
+        diff = avg_second - avg_first
+        # Небольшие колебания считаем стабильностью, чтобы не выдумывать тренд.
+        if diff > 75:
+            calories_trend = "up"
+        elif diff < -75:
+            calories_trend = "down"
+        else:
+            calories_trend = "stable"
+    else:
+        # Недостаточно данных в одной из половин — тренд неизвестен.
+        calories_trend = "unknown"
+
+    # --- Тренировки за неделю: количество и суммарно сожжено ---
+    workouts = (
+        db.query(Workout)
+        .filter(
+            Workout.telegram_id == user.telegram_id,
+            Workout.date >= start_str,
+            Workout.date <= end_str,
+        )
+        .all()
+    )
+    workouts_count = len(workouts)
+    total_burned = sum((w.calories_burned or 0) for w in workouts)
+
+    # --- Вес: изменение за период (последний минус первый замер) ---
+    weight_rows = (
+        db.query(WeightLog)
+        .filter(
+            WeightLog.telegram_id == user.telegram_id,
+            WeightLog.date >= start_str,
+            WeightLog.date <= end_str,
+        )
+        .order_by(WeightLog.date.asc(), WeightLog.id.asc())
+        .all()
+    )
+    weight_change_kg = (
+        round(weight_rows[-1].weight - weight_rows[0].weight, 1)
+        if len(weight_rows) >= 2
+        else None
+    )
+
+    # --- Цель и средний дефицит ---
+    goal = user.daily_goal_kcal
+    avg_deficit = (goal - avg_calories) if (goal and days_logged > 0) else None
+
+    # Собранную статистику кладём в stats (отдаётся клиенту) и передаём в ИИ.
+    stats = {
+        "avg_calories": avg_calories,
+        "goal": goal,
+        "calories_trend": calories_trend,
+        "avg_proteins": avg_proteins,
+        "avg_fats": avg_fats,
+        "avg_carbs": avg_carbs,
+        "days_logged": days_logged,
+        "workouts_count": workouts_count,
+        "total_burned": total_burned,
+        "weight_change_kg": weight_change_kg,
+        "avg_deficit": avg_deficit,
+    }
+
+    try:
+        result = generate_weekly_report(stats, lang=user.language or "ru")
+    except AIError as exc:
+        logger.warning(
+            "report/weekly: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось сформировать недельный отчёт. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("report/weekly: %s", exc)
+        detail = "Сервис отчётов временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    # insights нормализуем в список строк (на случай нестрогого ответа модели).
+    raw_insights = result.get("insights")
+    insights = [str(s) for s in raw_insights if str(s).strip()] if isinstance(raw_insights, list) else []
+
+    return WeeklyReportOut(
+        summary=str(result.get("summary") or ""),
+        insights=insights,
+        focus=result.get("focus"),
+        stats=stats,
+    )
+
+
+@app.post("/meal-plan/generate", response_model=MealPlanOut)
+def meal_plan_generate(
+    data: MealPlanIn,
+    user: User = Depends(subscription.require_premium),
+) -> MealPlanOut:
+    """Сгенерировать AI-план меню на день или неделю под цель калорий/БЖУ.
+
+    scope="day" — 1 день, "week" — 7 дней. Цель и целевые БЖУ берём из профиля
+    (если цель не задана — 2000 ккал как разумный дефолт). Предпочтения и бюджет
+    передаёт клиент. При сбое ИИ -> 502.
+    """
+    # Нормализуем scope: всё, кроме "week", трактуем как "day".
+    scope = "week" if str(data.scope or "").strip().lower() == "week" else "day"
+
+    try:
+        result = generate_meal_plan(
+            scope=scope,
+            daily_goal_kcal=user.daily_goal_kcal or 2000,
+            target_proteins=user.target_proteins,
+            target_fats=user.target_fats,
+            target_carbs=user.target_carbs,
+            diet_goal=getattr(user, "diet_goal", None),
+            preferences=data.preferences,
+            budget=data.budget,
+            lang=user.language or "ru",
+        )
+    except AIError as exc:
+        logger.warning(
+            "meal-plan/generate: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось составить план меню. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("meal-plan/generate: %s", exc)
+        detail = "Сервис планировщика меню временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    # Собираем дни плана; блюда группируем по приёмам пищи в той же форме.
+    days: list[MealPlanDay] = []
+    for d in result.get("days", []):
+        if not isinstance(d, dict):
+            continue
+        meals_in = d.get("meals") if isinstance(d.get("meals"), dict) else {}
+        meals_out: dict[str, list[MealPlanDish]] = {}
+        for meal_key, dishes in meals_in.items():
+            if not isinstance(dishes, list):
+                continue
+            dish_list: list[MealPlanDish] = []
+            for dish in dishes:
+                if not isinstance(dish, dict):
+                    continue
+                dish_list.append(
+                    MealPlanDish(
+                        dish_name=str(dish.get("dish_name") or ""),
+                        calories=int(dish.get("calories") or 0),
+                        proteins=float(dish.get("proteins") or 0.0),
+                        fats=float(dish.get("fats") or 0.0),
+                        carbs=float(dish.get("carbs") or 0.0),
+                    )
+                )
+            meals_out[str(meal_key)] = dish_list
+        days.append(MealPlanDay(label=str(d.get("label") or ""), meals=meals_out))
+
+    shopping_list = [
+        str(s) for s in result.get("shopping_list", []) if str(s).strip()
+    ]
+
+    return MealPlanOut(days=days, shopping_list=shopping_list)
+
+
+@app.post("/meal-plan/regenerate-item", response_model=RegenerateItemOut)
+def meal_plan_regenerate_item(
+    data: RegenerateItemIn,
+    user: User = Depends(subscription.require_premium),
+) -> RegenerateItemOut:
+    """Заменить одно блюдо в плане альтернативным под приём пищи и ~калории.
+
+    Удобно, когда конкретное блюдо не нравится: возвращаем ровно одну замену.
+    Цель диеты берём из профиля. При сбое ИИ -> 502.
+    """
+    try:
+        result = regenerate_meal_item(
+            meal_type=data.meal_type,
+            around_calories=data.around_calories,
+            diet_goal=getattr(user, "diet_goal", None),
+            preferences=data.preferences,
+            lang=user.language or "ru",
+        )
+    except AIError as exc:
+        logger.warning(
+            "meal-plan/regenerate-item: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось подобрать замену блюда. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("meal-plan/regenerate-item: %s", exc)
+        detail = "Сервис планировщика меню временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    return RegenerateItemOut(
+        dish_name=str(result.get("dish_name") or ""),
+        calories=int(result.get("calories") or 0),
+        proteins=float(result.get("proteins") or 0.0),
+        fats=float(result.get("fats") or 0.0),
+        carbs=float(result.get("carbs") or 0.0),
+    )
+
+
+@app.post("/food/suggest", response_model=FoodSuggestOut)
+def food_suggest(
+    data: FoodSuggestIn,
+    user: User = Depends(subscription.require_premium),
+) -> FoodSuggestOut:
+    """Умное предложение еды под остаток КБЖУ, приём пищи и/или пожелание.
+
+    Если задан meal_type — варианты под этот приём; если задан free_text —
+    учитываем пожелание пользователя. Все варианты должны влезать в остаток КБЖУ.
+    Цель диеты берём из профиля. При сбое ИИ -> 502.
+    """
+    try:
+        result = suggest_food(
+            meal_type=data.meal_type,
+            free_text=data.free_text,
+            remaining_calories=data.remaining_calories,
+            remaining_proteins=data.remaining_proteins,
+            remaining_fats=data.remaining_fats,
+            remaining_carbs=data.remaining_carbs,
+            diet_goal=getattr(user, "diet_goal", None),
+            lang=user.language or "ru",
+        )
+    except AIError as exc:
+        logger.warning(
+            "food/suggest: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось подобрать предложения еды. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("food/suggest: %s", exc)
+        detail = "Сервис предложений еды временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    suggestions = [
+        RecommendItem(
+            dish_name=s["dish_name"],
+            calories=s["calories"],
+            proteins=s["proteins"],
+            fats=s["fats"],
+            carbs=s["carbs"],
+            reason=s["reason"],
+        )
+        for s in result.get("suggestions", [])
+    ]
+    return FoodSuggestOut(suggestions=suggestions)
+
+
+@app.get("/food/healthy-snacks", response_model=HealthySnacksOut)
+def food_healthy_snacks(
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> HealthySnacksOut:
+    """Подобрать низкокалорийные перекусы-«вкусняшки» под остаток калорий на сегодня.
+
+    Остаток считаем как (дневная цель − съедено сегодня), не меньше нуля и целым.
+    Если цель не задана — берём разумный дефолт 2000 ккал. При сбое ИИ -> 502.
+    """
+    # Считаем съеденное за сегодня, чтобы вычислить остаток калорий.
+    today_str = date_cls.today().isoformat()
+    eaten_today = (
+        db.query(DiaryEntry)
+        .filter(
+            DiaryEntry.telegram_id == user.telegram_id,
+            DiaryEntry.date == today_str,
+        )
+        .all()
+    )
+    consumed = sum((e.calories or 0) for e in eaten_today)
+    goal = user.daily_goal_kcal or 2000
+    # Остаток — целое и не отрицательное (на крайний случай съели больше цели).
+    remaining = max(0, int(goal - consumed))
+
+    try:
+        result = healthy_snacks(remaining, lang=user.language or "ru")
+    except AIError as exc:
+        logger.warning(
+            "food/healthy-snacks: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось подобрать полезные перекусы. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("food/healthy-snacks: %s", exc)
+        detail = "Сервис подсказок временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    suggestions = [
+        RecommendItem(
+            dish_name=s["dish_name"],
+            calories=s["calories"],
+            proteins=s["proteins"],
+            fats=s["fats"],
+            carbs=s["carbs"],
+            reason=s["reason"],
+        )
+        for s in result.get("suggestions", [])
+    ]
+    return HealthySnacksOut(suggestions=suggestions)
 
 
 # --------------------------------------------------------------------------- #

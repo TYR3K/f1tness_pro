@@ -621,17 +621,18 @@ def _pick_prompt(prompt_ru: str, prompt_en: str, lang: str) -> str:
     return prompt_en if _normalize_lang(lang) == "en" else prompt_ru
 
 
-def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str):
+def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str, max_tokens: int | None = None):
     """
     Один текстовый вызов модели (без изображения) с принудительным JSON-ответом.
 
-    Возвращает (content, finish_reason, refusal). Используется и для подбора
-    блюд, и для подбора добавок — логика идентична вызову в analyze_food_image.
+    Возвращает (content, finish_reason, refusal). max_tokens можно переопределить
+    локально (например, для планировщика меню) — по умолчанию берётся MAX_TOKENS.
+    Так лимит токенов не приходится менять через глобал (потокобезопасно).
     """
     response = client.chat.completions.create(
         model=MODEL,
         response_format={"type": "json_object"},
-        max_tokens=MAX_TOKENS,
+        max_tokens=max_tokens or MAX_TOKENS,
         temperature=0.5,
         messages=[
             {"role": "system", "content": system_prompt},
@@ -644,7 +645,7 @@ def _call_text_model(client: "OpenAI", system_prompt: str, user_prompt: str):
     return content, choice.finish_reason, refusal
 
 
-def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str) -> tuple[dict, dict]:
+def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str, max_tokens: int | None = None) -> tuple[dict, dict]:
     """
     Общий «движок» текстовых AI-подсказок (подбор блюд/добавок).
 
@@ -664,7 +665,7 @@ def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str) -> 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             content, finish_reason, refusal = _call_text_model(
-                client, system_prompt, user_prompt
+                client, system_prompt, user_prompt, max_tokens=max_tokens
             )
             raw = content or ""
             logger.info(
@@ -1173,3 +1174,783 @@ def parse_food_text(text: str, lang: str = "ru") -> dict:
         )
 
     return {"meal_type": meal_type, "items": items}
+
+
+# --------------------------------------------------------------------------- #
+#  AI-функции (Этап 5): недельный отчёт, планировщик меню, умные предложения
+# --------------------------------------------------------------------------- #
+#
+# Все функции ниже используют тот же «движок» _run_text_completion, что и
+# предыдущие текстовые подсказки:
+#   * единый клиент OpenAI() (ключ из окружения);
+#   * response_format=json_object — модель обязана вернуть JSON-объект;
+#   * несколько попыток (MAX_ATTEMPTS) на случай пустого/битого ответа;
+#   * устойчивый разбор JSON через _extract_json;
+#   * нормализация чисел (_coerce_int/_coerce_float), пропуск мусора;
+#   * при неудаче (или пустом результате) — AIError (502 на уровне роута).
+#
+# Двуязычность: для каждого system-промпта есть английский аналог (..._EN) с
+# ТЕМИ ЖЕ ключами JSON, но значениями на английском. Выбор делает _pick_prompt.
+
+# Допустимые приёмы пищи для планировщика меню и предложений еды.
+_PLAN_MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
+
+
+# --------------------------------------------------------------------------- #
+#  1) Недельный AI-отчёт (инсайты, а не просто цифры)
+# --------------------------------------------------------------------------- #
+
+# Системный промпт недельного отчёта (RU).
+WEEKLY_REPORT_SYSTEM_PROMPT = (
+    "Ты — опытный тренер-нутрициолог. Тебе дают НЕДЕЛЬНУЮ статистику питания и "
+    "активности пользователя. Твоя задача — дать осмысленные ИНСАЙТЫ, а не просто "
+    "повторить цифры.\n\n"
+    "Анализируй и связывай между собой:\n"
+    "- тренд калорий (calories_trend: первая половина недели против второй);\n"
+    "- баланс БЖУ (средние белки/жиры/углеводы и хватает ли белка);\n"
+    "- связь калорий с тренировками (workouts_count, total_burned) и весом "
+    "(weight_change_kg);\n"
+    "- средний дефицит/профицит (avg_deficit = цель минус средние калории);\n"
+    "- регулярность ведения дневника (days_logged из 7).\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '  "summary"  — строка, 1-2 предложения общего вывода о неделе (на русском);\n'
+    '  "insights" — массив из 3-5 строк-инсайтов (на русском), каждый про связь '
+    "одного показателя с результатом (тренды, дефицит, белок, тренировки, вес);\n"
+    '  "focus"    — строка, ОДИН конкретный фокус-совет на следующую неделю '
+    "(на русском).\n\n"
+    "Правила:\n"
+    "- Опирайся на цифры, но объясняй, что они ЗНАЧАТ, а не просто перечисляй их.\n"
+    "- Если данных мало (days_logged маленький) — мягко отметь это и дай общий совет.\n"
+    "- Тон — поддерживающий, без медицинских обещаний и запугивания.\n"
+    "- insights — это массив строк (а не объектов)."
+)
+
+# Английский аналог WEEKLY_REPORT_SYSTEM_PROMPT (те же ключи, значения на английском).
+WEEKLY_REPORT_SYSTEM_PROMPT_EN = (
+    "You are an experienced coach and nutritionist. You are given the user's WEEKLY "
+    "nutrition and activity statistics. Your task is to give meaningful INSIGHTS, not "
+    "just repeat the numbers.\n\n"
+    "Analyze and connect together:\n"
+    "- the calorie trend (calories_trend: first half of the week vs the second);\n"
+    "- the macro balance (average protein/fat/carbs and whether protein is enough);\n"
+    "- the link between calories and workouts (workouts_count, total_burned) and weight "
+    "(weight_change_kg);\n"
+    "- the average deficit/surplus (avg_deficit = goal minus average calories);\n"
+    "- the consistency of logging (days_logged out of 7).\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '  "summary"  — string, 1-2 sentences with the overall conclusion about the week '
+    "(in English);\n"
+    '  "insights" — an array of 3-5 insight strings (in English), each about how one '
+    "metric relates to the result (trends, deficit, protein, workouts, weight);\n"
+    '  "focus"    — string, ONE concrete focus tip for the next week (in English).\n\n'
+    "Rules:\n"
+    "- Rely on the numbers, but explain what they MEAN, do not just list them.\n"
+    "- If there is little data (low days_logged) — gently note it and give a general tip.\n"
+    "- Tone — supportive, no medical promises and no scaring.\n"
+    "- insights is an array of strings (not objects)."
+)
+
+
+def generate_weekly_report(stats: dict, lang: str = "ru") -> dict:
+    """
+    Формирует недельный AI-отчёт (инсайты) по статистике пользователя.
+
+    stats — словарь со сводкой за 7 дней, который собирает роут:
+        avg_calories, goal, calories_trend, avg_proteins, avg_fats, avg_carbs,
+        days_logged, workouts_count, total_burned, weight_change_kg, avg_deficit.
+
+    Параметр lang ("ru" по умолчанию, либо "en") управляет языком текстов
+    summary/insights/focus. Ключи JSON не меняются.
+
+    Возвращает словарь:
+        {"summary": str, "insights": [str, ...], "focus": str}
+
+    При неудаче обращения к ИИ (или пустом результате) выбрасывает AIError
+    (502 на уровне роута).
+    """
+    lang = _normalize_lang(lang)
+
+    # На вход в промпт отдаём аккуратный JSON статистики — модели проще читать.
+    stats = stats if isinstance(stats, dict) else {}
+    try:
+        stats_json = json.dumps(stats, ensure_ascii=False)
+    except (TypeError, ValueError):
+        stats_json = "{}"
+
+    if lang == "en":
+        user_prompt = (
+            "Weekly statistics (JSON):\n" + stats_json
+            + "\n\nGive insights and one focus tip. "
+            "Return the result strictly in JSON format following the instructions."
+        )
+    else:
+        user_prompt = (
+            "Недельная статистика (JSON):\n" + stats_json
+            + "\n\nДай инсайты и один фокус-совет. "
+            "Верни результат строго в формате JSON по инструкции."
+        )
+
+    system_prompt = _pick_prompt(
+        WEEKLY_REPORT_SYSTEM_PROMPT, WEEKLY_REPORT_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="weekly_report"
+    )
+
+    # summary — строка вывода (обязательна, чтобы отчёт имел смысл).
+    summary = data.get("summary")
+    if not isinstance(summary, str):
+        summary = ""
+    summary = summary.strip()
+
+    # insights — массив строк; пропускаем пустые и не-строки.
+    raw_insights = data.get("insights")
+    if not isinstance(raw_insights, list):
+        raw_insights = []
+    insights: list[str] = []
+    for it in raw_insights:
+        if isinstance(it, str) and it.strip():
+            insights.append(it.strip())
+
+    # focus — один совет (может отсутствовать).
+    focus = data.get("focus")
+    if not isinstance(focus, str):
+        focus = ""
+    focus = focus.strip()
+
+    # Считаем результат непригодным, только если нет ни summary, ни инсайтов.
+    if not summary and not insights:
+        raise AIError(
+            "AI не вернул осмысленный недельный отчёт",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return {"summary": summary, "insights": insights, "focus": focus}
+
+
+# --------------------------------------------------------------------------- #
+#  2) AI-планировщик меню (день/неделя) + список покупок
+# --------------------------------------------------------------------------- #
+
+# Системный промпт планировщика меню (RU).
+MEAL_PLAN_SYSTEM_PROMPT = (
+    "Ты — опытный нутрициолог и шеф-повар. Составь пользователю план питания под "
+    "его дневную цель по калориям и БЖУ.\n\n"
+    "Учитывай:\n"
+    "- дневную цель калорий (daily_goal_kcal) и целевые БЖУ (target_proteins/"
+    "target_fats/target_carbs), если они заданы;\n"
+    "- цель диеты (diet_goal: loss — похудение, maintain — поддержание, "
+    "gain — набор массы);\n"
+    "- пожелания пользователя (preferences) и бюджет (budget), если указаны.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '  "days" — массив дней; для плана на 1 день — один элемент, для недели — 7. '
+    "Каждый день:\n"
+    '      {"label": строка-название дня (на русском, например "День 1" или '
+    '"Понедельник"),\n'
+    '       "meals": {"breakfast": [...], "lunch": [...], "dinner": [...], '
+    '"snack": [...]}};\n'
+    "      каждый приём пищи — массив блюд, блюдо: "
+    '{"dish_name": строка на русском, "calories": целое ккал, "proteins": число г, '
+    '"fats": число г, "carbs": число г};\n'
+    '  "shopping_list" — массив строк, список покупок на весь план (на русском).\n\n'
+    "Правила:\n"
+    "- Суммарные калории и БЖУ дня должны примерно соответствовать цели "
+    "(укладывайся в дневную норму, не превышай сильно).\n"
+    "- Блюда — реальные, разнообразные и простые в приготовлении.\n"
+    "- Учитывай пожелания и бюджет, если они заданы.\n"
+    "- Числа — реалистичные и положительные.\n"
+    "- Все текстовые значения — на русском языке."
+)
+
+# Английский аналог MEAL_PLAN_SYSTEM_PROMPT (те же ключи, значения на английском).
+MEAL_PLAN_SYSTEM_PROMPT_EN = (
+    "You are an experienced nutritionist and chef. Build a meal plan for the user "
+    "under their daily calorie and macro goal.\n\n"
+    "Consider:\n"
+    "- the daily calorie goal (daily_goal_kcal) and target macros (target_proteins/"
+    "target_fats/target_carbs) if provided;\n"
+    "- the diet goal (diet_goal: loss — weight loss, maintain — maintenance, "
+    "gain — muscle gain);\n"
+    "- the user's preferences and budget if provided.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '  "days" — an array of days; for a 1-day plan — one element, for a week — 7. '
+    "Each day:\n"
+    '      {"label": string day name (in English, e.g. "Day 1" or "Monday"),\n'
+    '       "meals": {"breakfast": [...], "lunch": [...], "dinner": [...], '
+    '"snack": [...]}};\n'
+    "      each meal is an array of dishes, a dish is: "
+    '{"dish_name": string in English, "calories": integer kcal, "proteins": number g, '
+    '"fats": number g, "carbs": number g};\n'
+    '  "shopping_list" — an array of strings, a shopping list for the whole plan '
+    "(in English).\n\n"
+    "Rules:\n"
+    "- The day's total calories and macros must roughly match the goal "
+    "(stay within the daily norm, do not overshoot much).\n"
+    "- Dishes must be real, varied and easy to cook.\n"
+    "- Consider preferences and budget if provided.\n"
+    "- Numbers must be realistic and positive.\n"
+    "- All text values must be in English."
+)
+
+
+def _normalize_plan_dish(item) -> dict | None:
+    """
+    Нормализует одно блюдо плана меню: чистит типы, отсекает мусор.
+
+    Возвращает словарь {dish_name, calories, proteins, fats, carbs} или None,
+    если у блюда нет валидного названия.
+    """
+    if not isinstance(item, dict):
+        return None
+    dish_name = item.get("dish_name")
+    if not isinstance(dish_name, str) or not dish_name.strip():
+        return None
+    return {
+        "dish_name": dish_name.strip(),
+        "calories": _coerce_int(item.get("calories")),
+        "proteins": _coerce_float(item.get("proteins")),
+        "fats": _coerce_float(item.get("fats")),
+        "carbs": _coerce_float(item.get("carbs")),
+    }
+
+
+def generate_meal_plan(
+    scope: str,
+    daily_goal_kcal: int,
+    target_proteins: float | None = None,
+    target_fats: float | None = None,
+    target_carbs: float | None = None,
+    diet_goal: str | None = None,
+    preferences: str | None = None,
+    budget: str | None = None,
+    lang: str = "ru",
+) -> dict:
+    """
+    Составляет план питания на день или на неделю под цель КБЖУ.
+
+    Параметры:
+        scope            — "day" (1 день) или "week" (7 дней);
+        daily_goal_kcal  — дневная цель по калориям;
+        target_*         — целевые БЖУ (необязательно);
+        diet_goal        — цель диеты (loss/maintain/gain);
+        preferences      — пожелания по еде (необязательно);
+        budget           — ограничение по бюджету (необязательно);
+        lang             — язык значений ("ru"/"en").
+
+    Возвращает словарь:
+        {
+            "days": [
+                {"label": str,
+                 "meals": {"breakfast": [dish, ...], "lunch": [...],
+                           "dinner": [...], "snack": [...]}},
+                ...
+            ],
+            "shopping_list": [str, ...]
+        }
+    где dish = {dish_name, calories, proteins, fats, carbs}.
+
+    При неудаче обращения к ИИ (или пустом результате) выбрасывает AIError.
+    """
+    lang = _normalize_lang(lang)
+
+    # Нормализуем scope: всё, что не "week", считаем планом на один день.
+    scope_norm = "week" if str(scope or "").strip().lower() == "week" else "day"
+    goal = _coerce_int(daily_goal_kcal, 2000)
+    if goal <= 0:
+        goal = 2000
+
+    # Собираем человекочитаемый запрос — на нужном языке.
+    if lang == "en":
+        parts = []
+        if scope_norm == "week":
+            parts.append("Make a meal plan for 7 days (a full week).")
+        else:
+            parts.append("Make a meal plan for 1 day.")
+        parts.append(f"Daily calorie goal: {goal} kcal.")
+        if target_proteins is not None:
+            parts.append(f"Target protein: {_coerce_float(target_proteins)} g/day.")
+        if target_fats is not None:
+            parts.append(f"Target fat: {_coerce_float(target_fats)} g/day.")
+        if target_carbs is not None:
+            parts.append(f"Target carbs: {_coerce_float(target_carbs)} g/day.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Diet goal: {str(diet_goal).strip()}.")
+        if preferences and str(preferences).strip():
+            parts.append(f"Preferences: {str(preferences).strip()}.")
+        if budget and str(budget).strip():
+            parts.append(f"Budget: {str(budget).strip()}.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = []
+        if scope_norm == "week":
+            parts.append("Составь план питания на 7 дней (полную неделю).")
+        else:
+            parts.append("Составь план питания на 1 день.")
+        parts.append(f"Дневная цель калорий: {goal} ккал.")
+        if target_proteins is not None:
+            parts.append(f"Целевой белок: {_coerce_float(target_proteins)} г/день.")
+        if target_fats is not None:
+            parts.append(f"Целевой жир: {_coerce_float(target_fats)} г/день.")
+        if target_carbs is not None:
+            parts.append(f"Целевые углеводы: {_coerce_float(target_carbs)} г/день.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+        if preferences and str(preferences).strip():
+            parts.append(f"Пожелания: {str(preferences).strip()}.")
+        if budget and str(budget).strip():
+            parts.append(f"Бюджет: {str(budget).strip()}.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    system_prompt = _pick_prompt(
+        MEAL_PLAN_SYSTEM_PROMPT, MEAL_PLAN_SYSTEM_PROMPT_EN, lang
+    )
+
+    # План на неделю длиннее обычного ответа — расширяем лимит токенов ЛОКАЛЬНО
+    # (параметром), не трогая глобальный MAX_TOKENS других функций (потокобезопасно).
+    plan_max_tokens = 3500 if scope_norm == "week" else 1500
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="meal_plan", max_tokens=plan_max_tokens
+    )
+
+    # Разбираем дни плана.
+    raw_days = data.get("days")
+    if not isinstance(raw_days, list):
+        raw_days = []
+
+    days: list[dict] = []
+    for idx, raw_day in enumerate(raw_days, start=1):
+        if not isinstance(raw_day, dict):
+            continue
+
+        label = raw_day.get("label")
+        if not isinstance(label, str) or not label.strip():
+            # Дефолтная метка дня, если модель её не дала.
+            label = (f"Day {idx}" if lang == "en" else f"День {idx}")
+        else:
+            label = label.strip()
+
+        raw_meals = raw_day.get("meals")
+        if not isinstance(raw_meals, dict):
+            raw_meals = {}
+
+        meals: dict[str, list] = {}
+        for meal_type in _PLAN_MEAL_TYPES:
+            raw_list = raw_meals.get(meal_type)
+            if not isinstance(raw_list, list):
+                raw_list = []
+            dishes: list[dict] = []
+            for it in raw_list:
+                dish = _normalize_plan_dish(it)
+                if dish is not None:
+                    dishes.append(dish)
+            meals[meal_type] = dishes
+
+        # День добавляем, только если в нём есть хотя бы одно блюдо.
+        if any(meals[mt] for mt in _PLAN_MEAL_TYPES):
+            days.append({"label": label, "meals": meals})
+
+    # Список покупок — массив строк (необязателен).
+    raw_shopping = data.get("shopping_list")
+    if not isinstance(raw_shopping, list):
+        raw_shopping = []
+    shopping_list: list[str] = []
+    for it in raw_shopping:
+        if isinstance(it, str) and it.strip():
+            shopping_list.append(it.strip())
+        elif isinstance(it, dict):
+            # На случай, если модель вернёт объект — берём поле name/item.
+            name = it.get("name") or it.get("item") or it.get("dish_name")
+            if isinstance(name, str) and name.strip():
+                shopping_list.append(name.strip())
+
+    if not days:
+        raise AIError(
+            "AI не вернул ни одного дня плана питания",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return {"days": days, "shopping_list": shopping_list}
+
+
+# --------------------------------------------------------------------------- #
+#  3) Замена одного блюда в плане (regenerate item)
+# --------------------------------------------------------------------------- #
+
+# Системный промпт замены одного блюда (RU).
+REGENERATE_ITEM_SYSTEM_PROMPT = (
+    "Ты — нутрициолог и повар. Пользователь хочет ЗАМЕНИТЬ одно блюдо в плане "
+    "питания на альтернативу для указанного приёма пищи.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) — ОДНО блюдо с полями:\n"
+    '  "dish_name" — строка, название блюда на русском;\n'
+    '  "calories"  — целое число, ккал порции;\n'
+    '  "proteins"  — число, белки в граммах;\n'
+    '  "fats"      — число, жиры в граммах;\n'
+    '  "carbs"     — число, углеводы в граммах.\n\n'
+    "Правила:\n"
+    "- Блюдо должно подходить под указанный приём пищи.\n"
+    "- Если задана примерная калорийность — держись близко к ней.\n"
+    "- Учитывай цель диеты и пожелания, если они указаны.\n"
+    "- Предложи реальное, простое в приготовлении блюдо; числа положительные."
+)
+
+# Английский аналог REGENERATE_ITEM_SYSTEM_PROMPT (те же ключи, значения на английском).
+REGENERATE_ITEM_SYSTEM_PROMPT_EN = (
+    "You are a nutritionist and cook. The user wants to REPLACE one dish in their meal "
+    "plan with an alternative for the specified meal.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) — ONE dish with the fields:\n"
+    '  "dish_name" — string, the dish name in English;\n'
+    '  "calories"  — integer, kcal of the portion;\n'
+    '  "proteins"  — number, protein in grams;\n'
+    '  "fats"      — number, fat in grams;\n'
+    '  "carbs"     — number, carbohydrates in grams.\n\n'
+    "Rules:\n"
+    "- The dish must fit the specified meal.\n"
+    "- If an approximate calorie value is given — stay close to it.\n"
+    "- Consider the diet goal and preferences if provided.\n"
+    "- Suggest a real, easy-to-cook dish; numbers must be positive."
+)
+
+
+def regenerate_meal_item(
+    meal_type: str,
+    around_calories: int | None = None,
+    diet_goal: str | None = None,
+    preferences: str | None = None,
+    lang: str = "ru",
+) -> dict:
+    """
+    Подбирает ОДНО альтернативное блюдо под приём пищи и примерную калорийность.
+
+    Параметры:
+        meal_type       — приём пищи (breakfast/lunch/dinner/snack);
+        around_calories — желаемая примерная калорийность (необязательно);
+        diet_goal       — цель диеты (необязательно);
+        preferences     — пожелания (необязательно);
+        lang            — язык значений ("ru"/"en").
+
+    Возвращает словарь {dish_name, calories, proteins, fats, carbs}.
+
+    При неудаче обращения к ИИ (или невалидном блюде) выбрасывает AIError.
+    """
+    lang = _normalize_lang(lang)
+
+    # Нормализуем приём пищи; если неизвестен — не настаиваем на нём в промпте.
+    mt = str(meal_type or "").strip().lower()
+    mt = mt if mt in _PLAN_MEAL_TYPES else ""
+
+    if lang == "en":
+        parts = ["Suggest one alternative dish to replace a dish in the meal plan."]
+        if mt:
+            parts.append(f"Meal: {mt}.")
+        if around_calories is not None:
+            parts.append(f"Approximate calories: {_coerce_int(around_calories)} kcal.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Diet goal: {str(diet_goal).strip()}.")
+        if preferences and str(preferences).strip():
+            parts.append(f"Preferences: {str(preferences).strip()}.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = ["Предложи одно альтернативное блюдо для замены в плане питания."]
+        if mt:
+            parts.append(f"Приём пищи: {mt}.")
+        if around_calories is not None:
+            parts.append(f"Примерная калорийность: {_coerce_int(around_calories)} ккал.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+        if preferences and str(preferences).strip():
+            parts.append(f"Пожелания: {str(preferences).strip()}.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    system_prompt = _pick_prompt(
+        REGENERATE_ITEM_SYSTEM_PROMPT, REGENERATE_ITEM_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="regenerate_item"
+    )
+
+    # Модель может вернуть блюдо как корень объекта или внутри ключа "dish".
+    candidate = data
+    if not (isinstance(data.get("dish_name"), str) and data.get("dish_name").strip()):
+        nested = data.get("dish")
+        if isinstance(nested, dict):
+            candidate = nested
+
+    dish = _normalize_plan_dish(candidate)
+    if dish is None:
+        raise AIError(
+            "AI не вернул корректное блюдо для замены",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return dish
+
+
+# --------------------------------------------------------------------------- #
+#  4) Умные предложения еды под остаток КБЖУ (с приёмом пищи / пожеланием)
+# --------------------------------------------------------------------------- #
+
+# Системный промпт умных предложений еды (RU).
+SUGGEST_FOOD_SYSTEM_PROMPT = (
+    "Ты — внимательный нутрициолог. Пользователь хочет добрать дневную норму и "
+    "просит 2-3 умных варианта еды под ОСТАТОК калорий и БЖУ.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полем:\n"
+    '  "suggestions" — массив из 2-3 объектов, каждый с полями:\n'
+    '      "dish_name" — строка, название блюда на русском;\n'
+    '      "calories"  — целое число, ккал порции;\n'
+    '      "proteins"  — число, белки в граммах;\n'
+    '      "fats"      — число, жиры в граммах;\n'
+    '      "carbs"     — число, углеводы в граммах;\n'
+    '      "reason"    — строка, почему это блюдо подходит '
+    "(коротко, на русском).\n\n"
+    "Правила:\n"
+    "- Блюдо должно ВПИСЫВАТЬСЯ в остаток калорий и помогать добрать БЖУ "
+    "(особенно белок).\n"
+    "- Если задан приём пищи (meal_type) — предлагай еду именно под него.\n"
+    "- Если есть пожелание пользователя (free_text) — учти его.\n"
+    "- Учитывай цель диеты (loss/maintain/gain), если она указана.\n"
+    "- Если остаток калорий маленький или отрицательный — предложи лёгкие "
+    "низкокалорийные варианты.\n"
+    "- Числа — реалистичные и положительные."
+)
+
+# Английский аналог SUGGEST_FOOD_SYSTEM_PROMPT (те же ключи, значения на английском).
+SUGGEST_FOOD_SYSTEM_PROMPT_EN = (
+    "You are an attentive nutritionist. The user wants to top up their daily goal and "
+    "asks for 2-3 smart food options for the REMAINING calories and macros.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
+    '  "suggestions" — an array of 2-3 objects, each with the fields:\n'
+    '      "dish_name" — string, the dish name in English;\n'
+    '      "calories"  — integer, kcal of the portion;\n'
+    '      "proteins"  — number, protein in grams;\n'
+    '      "fats"      — number, fat in grams;\n'
+    '      "carbs"     — number, carbohydrates in grams;\n'
+    '      "reason"    — string, why this dish is a good fit '
+    "(short, in English).\n\n"
+    "Rules:\n"
+    "- The dish must FIT within the remaining calories and help top up macros "
+    "(especially protein).\n"
+    "- If a meal is specified (meal_type) — suggest food exactly for it.\n"
+    "- If there is a user wish (free_text) — take it into account.\n"
+    "- Consider the diet goal (loss/maintain/gain) if provided.\n"
+    "- If the remaining calories are small or negative — suggest light "
+    "low-calorie options.\n"
+    "- Numbers must be realistic and positive."
+)
+
+
+def _normalize_recommend_items(raw_items, debug: dict, empty_error: str) -> list[dict]:
+    """
+    Нормализует массив предложений еды в форму RecommendItem.
+
+    Каждый элемент -> {dish_name, calories, proteins, fats, carbs, reason}.
+    Пропускает мусор и элементы без названия. Если ни одного валидного варианта —
+    выбрасывает AIError с переданным сообщением (502 на уровне роута).
+    """
+    if not isinstance(raw_items, list):
+        raw_items = []
+
+    suggestions: list[dict] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        dish_name = item.get("dish_name")
+        if not isinstance(dish_name, str) or not dish_name.strip():
+            continue
+        reason = item.get("reason")
+        if not isinstance(reason, str):
+            reason = ""
+        suggestions.append(
+            {
+                "dish_name": dish_name.strip(),
+                "calories": _coerce_int(item.get("calories")),
+                "proteins": _coerce_float(item.get("proteins")),
+                "fats": _coerce_float(item.get("fats")),
+                "carbs": _coerce_float(item.get("carbs")),
+                "reason": reason.strip(),
+            }
+        )
+
+    if not suggestions:
+        raise AIError(
+            empty_error,
+            raw=debug.get("raw", ""),
+            finish_reason=debug.get("finish_reason"),
+            refusal=debug.get("refusal"),
+        )
+
+    return suggestions
+
+
+def suggest_food(
+    meal_type: str | None = None,
+    free_text: str | None = None,
+    remaining_calories: int = 0,
+    remaining_proteins: float = 0.0,
+    remaining_fats: float = 0.0,
+    remaining_carbs: float = 0.0,
+    diet_goal: str | None = None,
+    lang: str = "ru",
+) -> dict:
+    """
+    Умные предложения еды (2-3 варианта) под остаток КБЖУ на день.
+
+    Параметры:
+        meal_type          — приём пищи (если задан, еда подбирается под него);
+        free_text          — свободное пожелание пользователя (необязательно);
+        remaining_calories — остаток калорий, ккал;
+        remaining_proteins/fats/carbs — остаток БЖУ, г;
+        diet_goal          — цель диеты (необязательно);
+        lang               — язык значений ("ru"/"en").
+
+    Возвращает словарь:
+        {"suggestions": [
+            {dish_name, calories, proteins, fats, carbs, reason}, ...]}
+
+    При неудаче обращения к ИИ (или пустом результате) выбрасывает AIError.
+    """
+    lang = _normalize_lang(lang)
+
+    mt = str(meal_type or "").strip().lower()
+    mt = mt if mt in _PLAN_MEAL_TYPES else ""
+
+    if lang == "en":
+        parts = ["Suggest 2-3 smart food options for the remaining daily calories/macros."]
+        parts.append(f"Calories remaining: {_coerce_int(remaining_calories)} kcal.")
+        parts.append(f"Protein remaining: {_coerce_float(remaining_proteins)} g.")
+        parts.append(f"Fat remaining: {_coerce_float(remaining_fats)} g.")
+        parts.append(f"Carbs remaining: {_coerce_float(remaining_carbs)} g.")
+        if mt:
+            parts.append(f"Meal: {mt}.")
+        if free_text and str(free_text).strip():
+            parts.append(f"User wish: {str(free_text).strip()}.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Diet goal: {str(diet_goal).strip()}.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = ["Подбери 2-3 умных варианта еды под оставшиеся калории и БЖУ."]
+        parts.append(f"Осталось калорий: {_coerce_int(remaining_calories)} ккал.")
+        parts.append(f"Осталось белков: {_coerce_float(remaining_proteins)} г.")
+        parts.append(f"Осталось жиров: {_coerce_float(remaining_fats)} г.")
+        parts.append(f"Осталось углеводов: {_coerce_float(remaining_carbs)} г.")
+        if mt:
+            parts.append(f"Приём пищи: {mt}.")
+        if free_text and str(free_text).strip():
+            parts.append(f"Пожелание пользователя: {str(free_text).strip()}.")
+        if diet_goal and str(diet_goal).strip():
+            parts.append(f"Цель диеты: {str(diet_goal).strip()}.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    system_prompt = _pick_prompt(
+        SUGGEST_FOOD_SYSTEM_PROMPT, SUGGEST_FOOD_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="suggest_food"
+    )
+
+    suggestions = _normalize_recommend_items(
+        data.get("suggestions"),
+        _debug,
+        "AI не вернул ни одного корректного варианта еды",
+    )
+    return {"suggestions": suggestions}
+
+
+# --------------------------------------------------------------------------- #
+#  5) Здоровые перекусы-«вкусняшки» под остаток калорий
+# --------------------------------------------------------------------------- #
+
+# Системный промпт здоровых перекусов (RU).
+HEALTHY_SNACKS_SYSTEM_PROMPT = (
+    "Ты — нутрициолог. Пользователь хочет «вкусняшку», которую можно съесть и не "
+    "поправиться. Подбери 3-4 НИЗКОКАЛОРИЙНЫХ перекуса, влезающих в остаток калорий "
+    "на сегодня.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полем:\n"
+    '  "suggestions" — массив из 3-4 объектов, каждый с полями:\n'
+    '      "dish_name" — строка, название перекуса на русском;\n'
+    '      "calories"  — целое число, ккал порции (НИЗКОЕ);\n'
+    '      "proteins"  — число, белки в граммах;\n'
+    '      "fats"      — число, жиры в граммах;\n'
+    '      "carbs"     — число, углеводы в граммах;\n'
+    '      "reason"    — строка, почему это вкусно и не навредит фигуре '
+    "(коротко, на русском).\n\n"
+    "Правила:\n"
+    "- Это должны быть именно вкусные перекусы-«вкусняшки», а не полноценные блюда.\n"
+    "- Калорийность каждого — НИЗКАЯ и вписывается в остаток калорий.\n"
+    "- Отдавай предпочтение белку/клетчатке и сытным низкокалорийным вариантам.\n"
+    "- Числа — реалистичные и положительные."
+)
+
+# Английский аналог HEALTHY_SNACKS_SYSTEM_PROMPT (те же ключи, значения на английском).
+HEALTHY_SNACKS_SYSTEM_PROMPT_EN = (
+    "You are a nutritionist. The user wants a «treat» they can eat without gaining "
+    "weight. Suggest 3-4 LOW-CALORIE snacks that fit within today's remaining "
+    "calories.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
+    '  "suggestions" — an array of 3-4 objects, each with the fields:\n'
+    '      "dish_name" — string, the snack name in English;\n'
+    '      "calories"  — integer, kcal of the portion (LOW);\n'
+    '      "proteins"  — number, protein in grams;\n'
+    '      "fats"      — number, fat in grams;\n'
+    '      "carbs"     — number, carbohydrates in grams;\n'
+    '      "reason"    — string, why it is tasty and won\'t hurt the figure '
+    "(short, in English).\n\n"
+    "Rules:\n"
+    "- These must be tasty «treat»-style snacks, not full meals.\n"
+    "- Each one's calories must be LOW and fit within the remaining calories.\n"
+    "- Prefer protein/fiber and filling low-calorie options.\n"
+    "- Numbers must be realistic and positive."
+)
+
+
+def healthy_snacks(remaining_calories: int, lang: str = "ru") -> dict:
+    """
+    Подбирает 3-4 низкокалорийных перекуса-«вкусняшки» под остаток калорий.
+
+    Параметры:
+        remaining_calories — остаток калорий на сегодня, ккал;
+        lang               — язык значений ("ru"/"en").
+
+    Возвращает словарь:
+        {"suggestions": [
+            {dish_name, calories, proteins, fats, carbs, reason}, ...]}
+
+    При неудаче обращения к ИИ (или пустом результате) выбрасывает AIError.
+    """
+    lang = _normalize_lang(lang)
+    remaining = _coerce_int(remaining_calories)
+
+    if lang == "en":
+        user_prompt = (
+            "Suggest 3-4 low-calorie tasty snacks.\n"
+            f"Calories remaining today: {remaining} kcal.\n"
+            "Return the result strictly in JSON format following the instructions."
+        )
+    else:
+        user_prompt = (
+            "Подбери 3-4 низкокалорийных вкусных перекуса.\n"
+            f"Осталось калорий на сегодня: {remaining} ккал.\n"
+            "Верни результат строго в формате JSON по инструкции."
+        )
+
+    system_prompt = _pick_prompt(
+        HEALTHY_SNACKS_SYSTEM_PROMPT, HEALTHY_SNACKS_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="healthy_snacks"
+    )
+
+    suggestions = _normalize_recommend_items(
+        data.get("suggestions"),
+        _debug,
+        "AI не вернул ни одного корректного перекуса",
+    )
+    return {"suggestions": suggestions}

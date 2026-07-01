@@ -5440,3 +5440,612 @@ select.field__input {
   opacity: .55;
   cursor: default;
 }
+
+/* ============================================================
+   ЭТАП 5 — AI-ФУНКЦИИ (пастельная палитра)
+   Недельный AI-отчёт (rep-*), AI-планировщик меню (plan-*),
+   улучшенные умные предложения «Что съесть?» (suggest-*).
+   Кнопки — min-height 52px. Не ломает существующие стили.
+   ============================================================ */
+
+/* ------------------------------------------------------------
+   1) НЕДЕЛЬНЫЙ AI-ОТЧЁТ (page-account.js, префикс rep-)
+   Карточка отчёта: подсказка, кнопка генерации, тело (summary,
+   буллеты-инсайты, выделенный фокус недели, плитки ключевых цифр).
+   ------------------------------------------------------------ */
+
+/* Карточка отчёта — обычная card. Когда внутри paywall (rep-gate),
+   убираем фон/паддинг, чтобы блок paywall выглядел самостоятельно. */
+.rep-card {
+  display: block;
+}
+
+.rep-card.rep-gate {
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* Подсказка над кнопкой генерации. */
+.rep-hint {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+/* Кнопка «Сформировать/Обновить отчёт» (CTA, единый размер 52px). */
+.rep-gen-btn {
+  min-height: 52px;
+}
+
+/* Тело отчёта — контейнер под результат/загрузку/ошибку. */
+.rep-body {
+  margin-top: 16px;
+}
+
+.rep-body:empty {
+  margin-top: 0;
+}
+
+/* ---- Состояние загрузки отчёта ---- */
+.rep-loading {
+  text-align: center;
+}
+
+.rep-loading__text {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---- Состояние ошибки отчёта ---- */
+.rep-error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 18px 16px;
+}
+
+.rep-error p {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.rep-error__msg {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  margin-bottom: 12px;
+}
+
+/* ---- Пустое состояние отчёта (мало данных) ---- */
+.rep-empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 28px 16px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+}
+
+.rep-empty__icon {
+  font-size: 38px;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.rep-empty__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---- Сводка недели (крупный вводный абзац) ---- */
+.rep-summary {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+/* ---- Список выводов (буллеты) ---- */
+.rep-insights-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 8px;
+}
+
+.rep-insights {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rep-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.rep-insight__mark {
+  flex-shrink: 0;
+  color: var(--cta);
+  font-weight: 800;
+  line-height: 1.5;
+}
+
+.rep-insight__text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* ---- Главный фокус недели (выделенный совет) ---- */
+.rep-focus {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(125, 155, 118, .14);
+  border: 1.5px solid var(--cta);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.rep-focus__icon {
+  font-size: 22px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+
+.rep-focus__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.rep-focus__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--cta-press);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+
+.rep-focus__text {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+/* ---- Ключевые цифры (плитки статистики) ---- */
+.rep-stats-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 8px;
+}
+
+.rep-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.rep-stat {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 12px 10px;
+  text-align: center;
+}
+
+.rep-stat__value {
+  display: block;
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+.rep-stat__label {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.3;
+}
+
+/* Смысловая подсветка значений плиток. */
+.rep-stat--good .rep-stat__value {
+  color: var(--cta);
+}
+
+.rep-stat--down .rep-stat__value {
+  color: var(--cta);
+}
+
+.rep-stat--up .rep-stat__value {
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------------
+   2) AI-ПЛАНИРОВЩИК МЕНЮ (page-diary.js, префикс plan-)
+   Кнопка действия, paywall-заглушка, панель (охват + предпочтения),
+   карточки дней с блюдами по приёмам (КБЖУ + «Заменить»),
+   список покупок, кнопка повторной генерации, ошибка.
+   ------------------------------------------------------------ */
+
+/* Кнопка «🍴 AI-план меню» в панели действий. Базовый вид берёт из
+   .diary-actions__btn; здесь лишь единый минимальный размер. */
+.plan-actions__btn {
+  min-height: 52px;
+}
+
+/* ---- Заглушка-фолбэк (если App.paywall недоступен) ---- */
+.plan-locked {
+  text-align: center;
+  background: var(--white);
+}
+
+.plan-locked__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.plan-locked__sub {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.plan-locked__subscribe {
+  margin-top: 4px;
+  min-height: 52px;
+}
+
+/* ---- Панель планировщика ---- */
+.plan-panel {
+  display: block;
+  background: var(--white);
+}
+
+.plan-panel__title {
+  font-size: 17px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.plan-panel__sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+/* Блок управления: охват + предпочтения + кнопка. */
+.plan-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+/* Чипы выбора охвата (День/Неделя) — на базе .meal-chips/.meal-chip. */
+.plan-scope {
+  margin-bottom: 2px;
+}
+
+.plan-scope__chip {
+  /* Наследует .meal-chip (48% ширины, 44px, рамка, is-active). */
+}
+
+/* Поле предпочтений. */
+.plan-prefs {
+  margin: 0;
+}
+
+.plan-prefs__input {
+  width: 100%;
+}
+
+/* Кнопка «Сгенерировать» (CTA, полная ширина, 52px). */
+.plan-generate {
+  min-height: 52px;
+  margin-top: 4px;
+}
+
+/* Область результата плана. */
+.plan-body {
+  margin-top: 16px;
+}
+
+.plan-body:empty {
+  margin-top: 0;
+}
+
+/* Подсказка/пустое состояние области результата. */
+.plan-hint,
+.plan-empty {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
+
+/* Скелетон загрузки плана. */
+.plan-skeleton {
+  height: 96px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+}
+
+/* Контейнер карточек дней. */
+.plan-days {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Карточка одного дня плана. */
+.plan-day {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  animation: fadeIn .28s ease;
+}
+
+.plan-day__title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+/* Блок одного приёма пищи внутри дня. */
+.plan-meal {
+  margin-bottom: 12px;
+}
+
+.plan-meal:last-child {
+  margin-bottom: 0;
+}
+
+.plan-meal__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.plan-meal__icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.plan-meal__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .3px;
+}
+
+/* Список блюд приёма пищи. */
+.plan-meal__dishes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Одно блюдо: слева название+КБЖУ, справа кнопка «Заменить». */
+.plan-dish {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--white);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.plan-dish__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-dish__name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.plan-dish__macros {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Кнопка «🔄 Заменить» — компактная, мягкий акцент. */
+.plan-dish__swap {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1.5px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .08s ease;
+}
+
+.plan-dish__swap:active {
+  transform: scale(.96);
+  background: var(--accent);
+}
+
+.plan-dish__swap:disabled {
+  opacity: .6;
+  cursor: default;
+}
+
+/* ---- Список покупок ---- */
+.plan-shopping {
+  margin-top: 14px;
+  background: var(--white);
+}
+
+.plan-shopping__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.plan-shopping__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-shopping__item {
+  position: relative;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.plan-shopping__item::before {
+  content: "•";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  color: var(--cta);
+  font-weight: 800;
+}
+
+/* Кнопка «🔁 Сгенерировать заново». */
+.plan-regenerate {
+  margin-top: 14px;
+  min-height: 52px;
+}
+
+/* ---- Состояние ошибки планировщика ---- */
+.plan-error {
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 18px 16px;
+}
+
+.plan-error__text {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.plan-error__retry {
+  min-height: 52px;
+}
+
+/* ------------------------------------------------------------
+   3) УЛУЧШЕННЫЕ УМНЫЕ ПРЕДЛОЖЕНИЯ «Что съесть?»
+   (page-diary.js, префикс suggest-)
+   Панель наследует .diary-recommend (заголовок/подзаголовок/тело
+   и карточки результата — diary-recommend-item). Здесь — только
+   надстройка управления: чипы приёма, поле ввода, кнопки.
+   ------------------------------------------------------------ */
+
+/* Панель «Что съесть?» = .diary-recommend + suggest-panel. */
+.suggest-panel {
+  display: block;
+}
+
+/* Блок управления над областью результатов. */
+.suggest-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Чипы выбора приёма пищи («Весь день» + приёмы) — на базе .meal-chips. */
+.suggest-chips {
+  margin-bottom: 2px;
+}
+
+/* Поле свободного ввода «Чего хочется?». */
+.suggest-free {
+  margin: 0;
+}
+
+.suggest-free__input {
+  width: 100%;
+}
+
+/* Кнопки действий: «Подобрать» (CTA) + «🍬 Вкусняшки» (ghost). */
+.suggest-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.suggest-btn {
+  flex: 1 1 calc(50% - 5px);
+  min-height: 52px;
+  font-size: 15px;
+}
+
+.suggest-btn--go {
+  /* Наследует .btn--cta (зелёный). */
+}
+
+.suggest-btn--snacks {
+  /* Наследует .btn--ghost. */
+  white-space: nowrap;
+}
+
+/* Область результатов «Что съесть?». Карточки вариантов рисуются
+   через существующие .diary-recommend-item (название, КБЖУ, reason,
+   кнопка «Добавить в рацион»). */
+.suggest-body {
+  display: block;
+}
+
+/* Стартовая подсказка в области результатов. */
+.suggest-hint {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: center;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 16px 14px;
+}
