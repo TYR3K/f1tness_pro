@@ -565,6 +565,12 @@
       return request("/subscription/trial", { method: "POST" });
     },
 
+    // Полное удаление всех данных пользователя и профиля (необратимо).
+    // Ответ: {ok, deleted}. После успеха фронт перезапускает приложение.
+    deleteAccountData: function () {
+      return request("/account/data", { method: "DELETE" });
+    },
+
     // Создание инвойса Telegram Stars для оплаты подписки.
     // Тело: {tariff:"monthly"|"yearly"|"lifetime"}.
     // Ответ: {invoice_link}.

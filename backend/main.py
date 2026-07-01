@@ -79,6 +79,7 @@ from backend.models import (
     DiaryEntry,
     FavoriteFood,
     MealTemplate,
+    NotificationLog,
     ProgressPhoto,
     NotificationSettings,
     Supplement,
@@ -2872,6 +2873,79 @@ def progress_delete(
     db.delete(photo)
     db.commit()
     return {"deleted": 1}
+
+
+# --------------------------------------------------------------------------- #
+#  Удаление данных пользователя (право на забвение / «начать заново»)
+# --------------------------------------------------------------------------- #
+@app.delete("/account/data")
+def account_delete_data(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Полностью удалить персональные данные текущего пользователя.
+
+    Удаляются ВСЕ записи пользователя (дневник, тренировки, спортпит, напоминания,
+    вес, шаблоны, цикл, фото-прогресс) и сам профиль. Операция НЕОБРАТИМА; активная
+    подписка при этом прекращается (возврат средств не выполняется).
+
+    Финансовые записи (payments / pro_grants) НЕ удаляются: они нужны для
+    бухгалтерского учёта и разбора спорных платежей и не содержат данных о здоровье.
+
+    После удаления при следующем входе создаётся чистый профиль (онбординг заново).
+    """
+    tid = user.telegram_id
+
+    # 1. Файлы фото-прогресса удаляем с диска (записи в БД чистим ниже).
+    photos = db.query(ProgressPhoto).filter(ProgressPhoto.telegram_id == tid).all()
+    pdir = _progress_dir()
+    for ph in photos:
+        try:
+            fp = pdir / ph.photo_path
+            if fp.exists():
+                fp.unlink()
+        except OSError as exc:
+            logger.warning(
+                "account/delete: не удалось удалить файл %s: %s", ph.photo_path, exc
+            )
+
+    # 2. Связи напоминаний спортпита привязаны к reminder_id, а не к telegram_id —
+    #    удаляем их по идентификаторам напоминаний текущего пользователя.
+    rem_ids = [
+        r.id
+        for r in db.query(SupplementReminder.id)
+        .filter(SupplementReminder.telegram_id == tid)
+        .all()
+    ]
+    if rem_ids:
+        db.query(SupplementReminderItem).filter(
+            SupplementReminderItem.reminder_id.in_(rem_ids)
+        ).delete(synchronize_session=False)
+
+    # 3. Все таблицы, привязанные к telegram_id пользователя.
+    for model in (
+        DiaryEntry,
+        Workout,
+        Supplement,
+        FavoriteFood,
+        NotificationSettings,
+        NotificationLog,
+        TrainingReminder,
+        SupplementReminder,
+        WeightLog,
+        MealTemplate,
+        CycleLog,
+        ProgressPhoto,
+    ):
+        db.query(model).filter(model.telegram_id == tid).delete(
+            synchronize_session=False
+        )
+
+    # 4. Сам профиль пользователя. При следующем входе будет создан заново (чистый).
+    db.query(User).filter(User.telegram_id == tid).delete(synchronize_session=False)
+
+    db.commit()
+    return {"ok": True, "deleted": True}
 
 
 # --------------------------------------------------------------------------- #

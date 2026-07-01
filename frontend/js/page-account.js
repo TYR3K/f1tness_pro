@@ -566,6 +566,20 @@
           "</div>" +
           "</section>"
       ) +
+      accSetGroupHtml(
+        L("Данные", "Data"),
+        '<p class="acc-danger-hint">' +
+          App.escapeHtml(
+            L(
+              "Полностью удалить все ваши данные (дневник, тренировки, вес, напоминания, фото) и профиль. Действие необратимо; активная подписка прекратится.",
+              "Permanently delete all your data (diary, workouts, weight, reminders, photos) and profile. This cannot be undone; any active subscription will end."
+            )
+          ) +
+          "</p>" +
+          '<button type="button" class="btn btn--danger btn-block acc-delete-btn" id="accDeleteData">' +
+          App.escapeHtml(L("Удалить мои данные", "Delete my data")) +
+          "</button>"
+      ) +
       "</div>";
 
     host.appendChild(sheet);
@@ -588,6 +602,14 @@
     if (els && els.langEn) {
       els.langEn.addEventListener("click", function () {
         onPickLang("en");
+      });
+    }
+
+    // Кнопка удаления всех данных (право на забвение / «начать заново»).
+    var delBtn = sheet.querySelector("#accDeleteData");
+    if (delBtn) {
+      delBtn.addEventListener("click", function () {
+        onDeleteData(delBtn);
       });
     }
 
@@ -657,6 +679,61 @@
         if (dy > 80) closeSettingsSheet();
       });
     }
+  }
+
+  /**
+   * Диалог подтверждения опасного действия. Использует нативный Telegram
+   * showConfirm, если доступен, иначе — window.confirm. cb вызывается при «да».
+   * @param {string} message
+   * @param {Function} cb
+   */
+  function confirmDanger(message, cb) {
+    if (App.tg && typeof App.tg.showConfirm === "function") {
+      try {
+        App.tg.showConfirm(message, function (ok) {
+          if (ok) cb();
+        });
+        return;
+      } catch (e) {
+        /* упадём в фолбэк ниже */
+      }
+    }
+    if (window.confirm(message)) cb();
+  }
+
+  /**
+   * Обработчик кнопки «Удалить мои данные». Спрашивает подтверждение, затем
+   * зовёт бэкенд-удаление и перезапускает приложение (чистый онбординг с нуля).
+   * @param {HTMLElement} btn
+   */
+  function onDeleteData(btn) {
+    var msg = L(
+      "Удалить все ваши данные и профиль? Это действие необратимо, а активная подписка прекратится.",
+      "Delete all your data and profile? This cannot be undone and any active subscription will end."
+    );
+    confirmDanger(msg, function () {
+      if (btn) btn.disabled = true;
+      App.showLoading();
+      App.api
+        .deleteAccountData()
+        .then(function () {
+          App.haptic("success");
+          App.toast(L("Данные удалены", "Data deleted"));
+          // Перезапуск приложения: сбросить кэш/состояние и пройти онбординг заново.
+          setTimeout(function () {
+            window.location.reload();
+          }, 600);
+        })
+        .catch(function (err) {
+          App.haptic("error");
+          var reason = err && err.message ? err.message : L("ошибка", "error");
+          App.toast(
+            L("Не удалось удалить: " + reason, "Failed to delete: " + reason)
+          );
+          if (btn) btn.disabled = false;
+          App.hideLoading();
+        });
+    });
   }
 
   /**
