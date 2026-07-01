@@ -7917,3 +7917,16 @@ select.onb-field__input {
   font-size: 12px;
   font-weight: 700;
 }
+
+/* Пробный период + «истёкшая» подписка (экран подписки). */
+.sub-status__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sub-status--expired {
+  border: 1.5px solid var(--danger);
+}
+.sub-trial {
+  margin-top: 12px;
+}

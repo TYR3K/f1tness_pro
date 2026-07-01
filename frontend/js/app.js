@@ -560,6 +560,11 @@
       return request("/scans/remaining");
     },
 
+    // Активировать одноразовый пробный период. Ответ: тот же SubscriptionStatusOut.
+    startTrial: function () {
+      return request("/subscription/trial", { method: "POST" });
+    },
+
     // Создание инвойса Telegram Stars для оплаты подписки.
     // Тело: {tariff:"monthly"|"yearly"|"lifetime"}.
     // Ответ: {invoice_link}.
@@ -930,13 +935,12 @@
         if (App.tg && typeof App.tg.openInvoice === "function") {
           App.tg.openInvoice(link, function (status) {
             if (status === "paid") {
-              App.refreshSubscription().then(function () {
-                App.toast(App.pick("Подписка активна!", "Subscription is active!"));
-                // Переоткрываем текущий экран, чтобы UI отразил новый статус.
-                if (App._current) {
-                  App.navigate(App._current);
-                }
-              });
+              // 'paid' часто приходит РАНЬШЕ, чем вебхук успел активировать
+              // премиум на бэкенде. Поэтому опрашиваем статус несколько раз,
+              // пока is_premium не станет true (иначе UI покажет «активна» на
+              // ещё бесплатном аккаунте).
+              App.toast(App.pick("Оплата получена, активируем доступ…", "Payment received, activating…"));
+              App._pollPremium(6, 1500);
             } else if (status === "failed") {
               App.toast(App.pick("Оплата не прошла", "Payment failed"));
             }
@@ -954,6 +958,33 @@
           err && err.message ? err.message : App.pick("Ошибка оплаты", "Payment error")
         );
       });
+  };
+
+  /**
+   * Опрашивает статус подписки, пока не появится премиум (после оплаты).
+   * @param {number} attempts сколько попыток осталось
+   * @param {number} delay задержка между попытками, мс
+   */
+  App._pollPremium = function (attempts, delay) {
+    App.refreshSubscription().then(function () {
+      if (App.isPremium()) {
+        App.toast(App.pick("Подписка активна!", "Subscription is active!"));
+        if (App._current) App.navigate(App._current);
+        return;
+      }
+      if (attempts > 1) {
+        setTimeout(function () {
+          App._pollPremium(attempts - 1, delay);
+        }, delay);
+      } else {
+        // Не дождались — вебхук активирует чуть позже; успокаиваем пользователя.
+        App.toast(App.pick(
+          "Доступ появится в течение минуты.",
+          "Access will appear within a minute."
+        ));
+        if (App._current) App.navigate(App._current);
+      }
+    });
   };
 
   /* =====================================================================

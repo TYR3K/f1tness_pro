@@ -122,7 +122,10 @@
       is_premium: !!s.is_premium,
       is_owner: !!s.is_owner,
       tariffs: s.tariffs || {},
-      tribute_url: s.tribute_url || null
+      tribute_url: s.tribute_url || null,
+      is_trial_available: !!s.is_trial_available,
+      trial_days: Number(s.trial_days) || 0,
+      is_expired: !!s.is_expired
     };
   }
 
@@ -320,24 +323,73 @@
         untilLine +
         "</div>";
     } else {
-      // Бесплатный доступ.
-      box.className = "card sub-status sub-status--free";
+      // Не премиум: «истекла» (была платная) или обычный free.
+      var expired = s.is_expired;
+      var icon = expired ? "⏳" : "🔓";
+      var title = expired
+        ? pick("Подписка истекла", "Subscription expired")
+        : pick("Бесплатный доступ", "Free access");
+      var subtitle = expired
+        ? pick("Продлите, чтобы вернуть премиум-доступ.", "Renew to get your premium access back.")
+        : pick("Оформите подписку, чтобы открыть все возможности", "Subscribe to unlock every feature");
+
+      // Кнопка пробного периода — если доступен (одноразово).
+      var trialHtml = "";
+      if (s.is_trial_available && s.trial_days > 0) {
+        trialHtml =
+          '<button type="button" class="btn btn--cta btn-block sub-trial" id="subTrial">' +
+          esc(pick(
+            "🎁 Попробовать " + s.trial_days + " дней бесплатно",
+            "🎁 Try " + s.trial_days + " days free"
+          )) +
+          "</button>";
+      }
+
+      box.className = "card sub-status " + (expired ? "sub-status--expired" : "sub-status--free");
       box.innerHTML =
-        '<div class="sub-status__icon" aria-hidden="true">🔓</div>' +
+        '<div class="sub-status__row">' +
+        '<div class="sub-status__icon" aria-hidden="true">' + icon + "</div>" +
         '<div class="sub-status__body">' +
-        '<div class="sub-status__title">' +
-        esc(pick("Бесплатный доступ", "Free access")) +
+        '<div class="sub-status__title">' + esc(title) + "</div>" +
+        '<div class="sub-status__until">' + esc(subtitle) + "</div>" +
         "</div>" +
-        '<div class="sub-status__until">' +
-        esc(
-          pick(
-            "Оформите подписку, чтобы открыть все возможности",
-            "Subscribe to unlock every feature"
-          )
-        ) +
         "</div>" +
-        "</div>";
+        trialHtml;
+
+      var trialBtn = box.querySelector("#subTrial");
+      if (trialBtn) {
+        trialBtn.addEventListener("click", onTrial);
+      }
     }
+  }
+
+  /**
+   * Активирует одноразовый бесплатный пробный период.
+   */
+  function onTrial(e) {
+    var btn = e && e.currentTarget;
+    haptic("light");
+    if (!(App.api && App.api.startTrial)) return;
+    if (btn) btn.disabled = true;
+    App.showLoading();
+    App.api
+      .startTrial()
+      .then(function (status) {
+        if (status && typeof status === "object") {
+          App.subscription = status;
+        }
+        haptic("success");
+        toast(pick("Пробный период активирован!", "Free trial activated!"));
+        renderAll();
+      })
+      .catch(function (err) {
+        haptic("error");
+        toast((err && err.message) ? err.message : pick("Не удалось активировать пробный период", "Could not activate trial"));
+        if (btn) btn.disabled = false;
+      })
+      .finally(function () {
+        App.hideLoading();
+      });
   }
 
   /**
