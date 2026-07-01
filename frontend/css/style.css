@@ -597,6 +597,16 @@ h1, h2, h3 {
   flex: 1;
   text-align: center;
   line-height: 1.2;
+  /* Это <button> (открывает календарь) — гасим «кнопочный» вид, чтобы выглядел
+     как обычная подпись даты (не серая плашка). */
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .diary-datebar__date {
@@ -1422,6 +1432,15 @@ select.field__input {
   flex: 1;
   text-align: center;
   line-height: 1.2;
+  /* <button> открытия календаря — гасим «кнопочный» вид (не серая плашка). */
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .wk-datebar__date {
@@ -6768,6 +6787,8 @@ button.cal-cell--selected:active {
   background: rgba(58, 53, 47, .38);
   opacity: 0;
   transition: opacity .22s ease;
+  /* Тап/перетаскивание по фону не должны прокручивать страницу под листом. */
+  touch-action: none;
 }
 
 .diary-sheet--open .diary-sheet__backdrop {
@@ -6786,6 +6807,12 @@ button.cal-cell--selected:active {
   padding: 8px 16px calc(var(--safe-bottom) + 20px);
   transform: translateY(100%);
   transition: transform .24s cubic-bezier(.22, .61, .36, 1);
+  /* Высокое содержимое (лист настроек) прокручивается ВНУТРИ панели, а не тянет
+     фон под листом. Прокрутка идёт по самой панели. */
+  max-height: 88vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .diary-sheet--open .diary-sheet__panel {
@@ -7396,7 +7423,9 @@ body::-webkit-scrollbar-thumb:hover {
 /* Компактная шапка аккаунта: меньше аватар и подписи (модификатор .acc-header--compact). */
 .acc-header--compact {
   gap: 12px;
-  margin-bottom: 4px;
+  /* margin-bottom НЕ переопределяем — используем стандартный отступ карточки
+     (.card margin-bottom:16px), чтобы промежуток был такой же, как между
+     остальными блоками (подписка/параметры и т.д.). */
 }
 .acc-header--compact .acc-avatar {
   width: 44px;

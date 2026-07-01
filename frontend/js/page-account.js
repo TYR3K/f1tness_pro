@@ -265,7 +265,7 @@
       '<section class="card acc-fold" id="accFoldProfile">' +
       '<button type="button" class="acc-fold__head">' +
       '<span class="acc-fold__title">' +
-      App.escapeHtml(L("Мои параметры", "My parameters")) +
+      App.escapeHtml(L("Мои параметры и цель", "My parameters & goal")) +
       "</span>" +
       '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
       "</button>" +
@@ -449,7 +449,20 @@
     fab.type = "button";
     fab.className = "acc-fab";
     fab.setAttribute("aria-label", L("Настройки", "Settings"));
-    fab.textContent = "⚙";
+    // Минималистичная иконка-шестерёнка (обводка, как у иконки камеры).
+    fab.innerHTML =
+      '<svg class="acc-fab__icon" width="26" height="26" viewBox="0 0 24 24" ' +
+      'fill="none" stroke="#FFFDFA" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round" aria-hidden="true">' +
+      '<circle cx="12" cy="12" r="3"></circle>' +
+      '<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06' +
+      'a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4' +
+      'a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3' +
+      'a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06' +
+      'a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33' +
+      'l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09' +
+      'a1.65 1.65 0 0 0-1.51 1z"></path>' +
+      "</svg>";
     fab.addEventListener("click", function () {
       App.haptic && App.haptic("light");
       openSettingsSheet();
@@ -590,6 +603,55 @@
         closeSettingsSheet();
       });
     }
+
+    // Блокируем прокрутку фона под листом (иначе тянется аккаунт, а не лист).
+    try {
+      document.documentElement.style.overflow = "hidden";
+      document.body.style.overflow = "hidden";
+    } catch (e) {}
+
+    // Свайп вниз по панели закрывает лист (когда её содержимое прокручено вверх).
+    var panel = sheet.querySelector(".diary-sheet__panel");
+    if (panel) {
+      var startY = 0;
+      var curY = 0;
+      var dragging = false;
+      panel.addEventListener(
+        "touchstart",
+        function (e) {
+          // Если содержимое прокручено вниз — не перехватываем (даём скроллить).
+          if (panel.scrollTop > 0) {
+            dragging = false;
+            return;
+          }
+          startY = e.touches[0].clientY;
+          curY = startY;
+          dragging = true;
+        },
+        { passive: true }
+      );
+      panel.addEventListener(
+        "touchmove",
+        function (e) {
+          if (!dragging) return;
+          curY = e.touches[0].clientY;
+          var dy = curY - startY;
+          if (dy > 0) {
+            // Визуально «тянем» панель вниз за пальцем.
+            panel.style.transform = "translateY(" + dy + "px)";
+          }
+        },
+        { passive: true }
+      );
+      panel.addEventListener("touchend", function () {
+        if (!dragging) return;
+        dragging = false;
+        var dy = curY - startY;
+        panel.style.transform = "";
+        // Достаточный свайп вниз — закрываем лист.
+        if (dy > 80) closeSettingsSheet();
+      });
+    }
   }
 
   /**
@@ -599,6 +661,11 @@
    */
   function closeSettingsSheet(immediate) {
     var sheet = document.getElementById("acc-settings-sheet");
+    // Возвращаем прокрутку фона (снимаем блокировку, поставленную при открытии).
+    try {
+      document.documentElement.style.overflow = "";
+      document.body.style.overflow = "";
+    } catch (e) {}
     if (els) {
       els.adaptCard = null;
       els.reportCard = null;
@@ -966,8 +1033,8 @@
         '<div class="wt-empty__text">' +
         App.escapeHtml(
           L(
-            "Укажите вес в разделе «Мои параметры», чтобы увидеть динамику.",
-            "Set your weight in «My parameters» to see the trend."
+            "Укажите вес в разделе «Мои параметры и цель», чтобы увидеть динамику.",
+            "Set your weight in «My parameters & goal» to see the trend."
           )
         ) +
         "</div>" +

@@ -1251,16 +1251,50 @@ PARSE_FOOD_SYSTEM_PROMPT_EN = (
 )
 
 
+# Модель распознавания речи. По умолчанию gpt-4o-transcribe — заметно точнее
+# whisper-1 (и на русском, и на английском). Можно переопределить через env.
+# При сбое основной модели делаем фолбэк на whisper-1, чтобы голос всегда работал.
+TRANSCRIBE_MODEL = os.getenv("TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+
+# Контекст-подсказка (prompt) распознавания: смещает модель к «пищевой» лексике —
+# так она гораздо точнее слышит названия продуктов, блюда, количество и вес.
+_TRANSCRIBE_PROMPT_RU = (
+    "Пользователь диктует, что он съел: перечисляет продукты, блюда, их количество "
+    "и вес. Например: два варёных яйца, сто грамм хлеба, тарелка гречки с курицей, "
+    "банан, стакан молока, ложка мёда, порция творога, овсянка на молоке."
+)
+_TRANSCRIBE_PROMPT_EN = (
+    "The user dictates what they ate: foods, dishes, their quantity and weight. "
+    "For example: two boiled eggs, one hundred grams of bread, a bowl of buckwheat "
+    "with chicken, a banana, a glass of milk, a spoon of honey, a portion of cottage cheese."
+)
+
+
+def _transcribe_once(client, model: str, audio_bytes: bytes, filename: str, norm: str | None) -> str:
+    """Одна попытка распознавания заданной моделью (с языком и пищевым prompt-контекстом)."""
+    kwargs = {
+        "model": model,
+        "file": (filename or "audio.ogg", audio_bytes),
+        # Пищевой контекст резко повышает точность на названиях еды.
+        "prompt": _TRANSCRIBE_PROMPT_EN if norm == "en" else _TRANSCRIBE_PROMPT_RU,
+    }
+    if norm:
+        kwargs["language"] = norm
+    resp = client.audio.transcriptions.create(**kwargs)
+    return (getattr(resp, "text", "") or "").strip()
+
+
 def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg", lang: str | None = None) -> str:
     """
-    Распознаёт речь в тексте через OpenAI Whisper (whisper-1).
+    Распознаёт речь в тексте через OpenAI (по умолчанию gpt-4o-transcribe,
+    фолбэк — whisper-1).
 
     audio_bytes — байты аудио (ogg/webm/mp3/m4a/wav и т.п.);
-    filename    — имя файла с расширением (важно для определения формата Whisper);
-    lang        — подсказка языка ("ru"/"en"); если не задан — Whisper определит сам.
+    filename    — имя файла с расширением (важно для определения формата);
+    lang        — подсказка языка ("ru"/"en"); если не задан — модель определит сама.
 
     Возвращает распознанный текст (без крайних пробелов). При пустом аудио,
-    пустом результате или ошибке Whisper выбрасывает AIError.
+    пустом результате или ошибке распознавания выбрасывает AIError.
     """
     if not audio_bytes:
         raise AIError("Пустое аудио — нечего распознавать")
@@ -1274,23 +1308,32 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.ogg", lang: str 
         norm = "en"
 
     client = OpenAI()
+
+    # 1) Основная (более точная) модель. 2) Фолбэк на whisper-1 при любом сбое
+    #    (например, если у аккаунта нет доступа к новой модели).
+    text = ""
+    used_model = TRANSCRIBE_MODEL
     try:
-        kwargs = {
-            "model": "whisper-1",
-            "file": (filename or "audio.ogg", audio_bytes),
-        }
-        if norm:
-            kwargs["language"] = norm
-        resp = client.audio.transcriptions.create(**kwargs)
-        text = (getattr(resp, "text", "") or "").strip()
-    except Exception as exc:  # сеть, ключ, неверный формат и т.п.
-        logger.warning("transcribe_audio: ошибка Whisper: %s", exc)
-        raise AIError(f"Не удалось распознать речь: {exc}")
+        text = _transcribe_once(client, TRANSCRIBE_MODEL, audio_bytes, filename, norm)
+    except Exception as exc:  # сеть, ключ, нет доступа к модели, формат и т.п.
+        logger.warning(
+            "transcribe_audio: модель %s не сработала (%s) — фолбэк на whisper-1",
+            TRANSCRIBE_MODEL, exc,
+        )
+        used_model = "whisper-1"
+        try:
+            text = _transcribe_once(client, "whisper-1", audio_bytes, filename, norm)
+        except Exception as exc2:
+            logger.warning("transcribe_audio: ошибка распознавания: %s", exc2)
+            raise AIError(f"Не удалось распознать речь: {exc2}")
 
     if not text:
-        raise AIError("Whisper вернул пустой текст")
+        raise AIError("Распознавание вернуло пустой текст")
 
-    logger.info("transcribe_audio: распознано символов=%d, lang=%s", len(text), norm or "auto")
+    logger.info(
+        "transcribe_audio: распознано символов=%d, model=%s, lang=%s",
+        len(text), used_model, norm or "auto",
+    )
     return text
 
 
