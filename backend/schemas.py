@@ -169,6 +169,8 @@ class WorkoutIn(BaseModel):
     type: str               # cardio | strength | walking | yoga | other
     duration_min: int       # длительность, мин
     calories_burned: int    # сожжено калорий, ккал
+    # Свободное описание активности для type="other" (или None).
+    description: Optional[str] = None
 
 
 class WorkoutOut(BaseModel):
@@ -181,6 +183,8 @@ class WorkoutOut(BaseModel):
     type: str
     duration_min: int
     calories_burned: int
+    # Свободное описание активности для type="other" (или None).
+    description: Optional[str] = None
 
 
 class WorkoutDayOut(BaseModel):
@@ -196,6 +200,8 @@ class WorkoutEstimateIn(BaseModel):
 
     type: str               # cardio | strength | walking | yoga | other
     duration_min: int       # длительность, мин
+    # Свободное описание активности для type="other" (или None) — для AI-оценки.
+    description: Optional[str] = None
 
 
 class WorkoutEstimateOut(BaseModel):

@@ -454,7 +454,6 @@
         '<div class="card scan-cam-card">' +
           '<div class="scan-cam-window">' +
             '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>' +
-            '<span class="scan-cam-badge">' + esc(L("В эфире", "Live")) + "</span>" +
           "</div>" +
           '<p class="scan-cam-hint">' +
             esc(L(

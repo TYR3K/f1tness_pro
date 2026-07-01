@@ -1276,6 +1276,177 @@
     }
   };
 
+  /* =====================================================================
+   *  МИНИ-КАЛЕНДАРЬ (общий хелпер для дневника и тренировок)
+   *
+   *  Компактный попап-календарь, встраиваемый в переданный контейнер.
+   *  Переиспользует существующие CSS-классы cal-* (не изобретаем новых).
+   *  Сетка Пн-первая; будущие даты недоступны; месяц навигации хранится в
+   *  containerEl.dataset.calMonth и меняется стрелками ‹ › БЕЗ вызова onPick.
+   * ===================================================================== */
+
+  // Названия месяцев для заголовка календаря (RU именительный падеж + EN).
+  var CAL_MONTHS_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+  ];
+  var CAL_MONTHS_EN = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+  ];
+  // Заголовки дней недели (Пн-первый).
+  var CAL_DOW_RU = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+  var CAL_DOW_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  /**
+   * Возвращает "YYYY-MM" месяца для заданной ISO-даты.
+   * @param {string} isoDate "YYYY-MM-DD"
+   * @returns {string} "YYYY-MM"
+   */
+  function calMonthOf(isoDate) {
+    var parts = String(isoDate).split("-");
+    return parts[0] + "-" + parts[1];
+  }
+
+  /**
+   * Рисует попап мини-календаря для месяца containerEl.dataset.calMonth.
+   * @param {HTMLElement} containerEl контейнер попапа
+   * @param {string} selectedIso выбранная дата "YYYY-MM-DD"
+   * @param {Function} onPick колбэк выбора дня (iso)
+   */
+  function calRender(containerEl, selectedIso, onPick) {
+    var parts = String(containerEl.dataset.calMonth).split("-");
+    var year = parseInt(parts[0], 10);
+    var month = parseInt(parts[1], 10) - 1; // 0-based
+    if (isNaN(year) || isNaN(month)) {
+      var now = new Date();
+      year = now.getFullYear();
+      month = now.getMonth();
+      containerEl.dataset.calMonth =
+        year + "-" + String(month + 1).padStart(2, "0");
+    }
+
+    var todayStr = App.todayStr();
+    var todayMonth = calMonthOf(todayStr);
+    var viewMonth = containerEl.dataset.calMonth;
+
+    // Заголовок «Месяц ГОД» (RU именительный падеж).
+    var title = App.pick(CAL_MONTHS_RU[month], CAL_MONTHS_EN[month]) + " " + year;
+
+    // Следующий месяц целиком в будущем? -> отключаем стрелку «›».
+    var nextDisabled = viewMonth >= todayMonth;
+
+    // Заголовки дней недели (Пн-первый).
+    var dowHtml = "";
+    for (var w = 0; w < 7; w++) {
+      dowHtml +=
+        '<span class="cal-dow">' +
+        App.escapeHtml(App.pick(CAL_DOW_RU[w], CAL_DOW_EN[w])) +
+        "</span>";
+    }
+
+    // Первый день месяца и число дней в месяце (полдень — защита от сдвига суток).
+    var first = new Date(year, month, 1, 12, 0, 0, 0);
+    // getDay(): 0=Вс..6=Сб. Приводим к Пн-первому: (getDay()+6)%7.
+    var lead = (first.getDay() + 6) % 7;
+    var daysInMonth = new Date(year, month + 1, 0, 12, 0, 0, 0).getDate();
+
+    var cells = "";
+    // Ведущие пустые ячейки.
+    for (var e = 0; e < lead; e++) {
+      cells += '<span class="cal-cell cal-cell--empty"></span>';
+    }
+    // Дни месяца.
+    for (var d = 1; d <= daysInMonth; d++) {
+      var iso =
+        year + "-" +
+        String(month + 1).padStart(2, "0") + "-" +
+        String(d).padStart(2, "0");
+      var cls = "cal-cell";
+      var future = iso > todayStr;
+      if (future) cls += " cal-cell--disabled";
+      if (iso === todayStr) cls += " cal-cell--today";
+      if (iso === selectedIso) cls += " cal-cell--selected";
+      if (future) {
+        cells += '<span class="' + cls + '">' + d + "</span>";
+      } else {
+        cells +=
+          '<button type="button" class="' + cls + '" data-cal-day="' + iso + '">' + d + "</button>";
+      }
+    }
+
+    containerEl.innerHTML =
+      '<div class="cal-pop">' +
+      '<div class="cal-head">' +
+      '<button type="button" class="cal-nav" data-cal-nav="prev" ' +
+      'aria-label="' + App.escapeHtml(App.pick("Предыдущий месяц", "Previous month")) + '">‹</button>' +
+      '<span class="cal-title">' + App.escapeHtml(title) + "</span>" +
+      '<button type="button" class="cal-nav" data-cal-nav="next"' +
+      (nextDisabled ? " disabled" : "") + " " +
+      'aria-label="' + App.escapeHtml(App.pick("Следующий месяц", "Next month")) + '">›</button>' +
+      "</div>" +
+      '<div class="cal-grid">' + dowHtml + cells + "</div>" +
+      "</div>";
+
+    // Навигация по месяцам (меняет ТОЛЬКО просматриваемый месяц, не onPick).
+    var navs = containerEl.querySelectorAll(".cal-nav");
+    for (var n = 0; n < navs.length; n++) {
+      navs[n].addEventListener("click", function (ev) {
+        var btn = ev.currentTarget;
+        if (btn.disabled) return;
+        var dir = btn.getAttribute("data-cal-nav");
+        App.haptic && App.haptic("selection");
+        var mp = String(containerEl.dataset.calMonth).split("-");
+        var my = parseInt(mp[0], 10);
+        var mm = parseInt(mp[1], 10) - 1;
+        var dt = new Date(my, mm + (dir === "next" ? 1 : -1), 1, 12, 0, 0, 0);
+        containerEl.dataset.calMonth =
+          dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
+        calRender(containerEl, selectedIso, onPick);
+      });
+    }
+
+    // Выбор дня: очищаем контейнер и вызываем onPick(iso).
+    var grid = containerEl.querySelector(".cal-grid");
+    if (grid) {
+      grid.addEventListener("click", function (ev) {
+        var cell = ev.target.closest(".cal-cell[data-cal-day]");
+        if (!cell) return;
+        var iso = cell.getAttribute("data-cal-day");
+        if (!iso) return;
+        App.miniCalendarClose(containerEl);
+        if (typeof onPick === "function") {
+          onPick(iso);
+        }
+      });
+    }
+  }
+
+  /**
+   * Переключает мини-календарь в контейнере: если попап уже открыт — закрывает,
+   * иначе рисует его для месяца выбранной даты.
+   * @param {HTMLElement} containerEl контейнер попапа
+   * @param {string} selectedIso выбранная дата "YYYY-MM-DD"
+   * @param {Function} onPick колбэк выбора (не-будущего) дня: onPick(iso)
+   */
+  App.miniCalendarToggle = function (containerEl, selectedIso, onPick) {
+    if (!containerEl) return;
+    if (containerEl.innerHTML.trim() !== "") {
+      App.miniCalendarClose(containerEl);
+      return;
+    }
+    containerEl.dataset.calMonth = calMonthOf(selectedIso);
+    calRender(containerEl, selectedIso, onPick);
+  };
+
+  /**
+   * Закрывает мини-календарь (очищает контейнер).
+   * @param {HTMLElement} containerEl
+   */
+  App.miniCalendarClose = function (containerEl) {
+    if (containerEl) containerEl.innerHTML = "";
+  };
+
   /**
    * Экранирует HTML-спецсимволы для безопасной вставки текста в разметку.
    * @param {string} s

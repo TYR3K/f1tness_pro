@@ -548,7 +548,7 @@ RECOMMEND_SYSTEM_PROMPT_EN = (
 # Системный промпт для подбора спортивных добавок.
 SUPPLEMENT_SYSTEM_PROMPT = (
     "Ты — консультант по спортивному питанию. Пользователь просит подсказать "
-    "базовые спортивные добавки под его цель.\n\n"
+    "спортивные добавки под его цель и тренировки.\n\n"
     "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полем:\n"
     '  "suggestions" — массив из 3-5 объектов, каждый с полями:\n'
     '      "name"    — строка, название добавки на русском '
@@ -557,17 +557,22 @@ SUPPLEMENT_SYSTEM_PROMPT = (
     '(например: "3-5 г в день");\n'
     '      "note"    — строка, кратко зачем нужна и как принимать.\n\n'
     "Правила:\n"
-    "- Предлагай только распространённые, безопасные базовые добавки.\n"
+    "- АКТИВНО предлагай реальные СПОРТИВНЫЕ добавки, а не только витамины и "
+    "минералы. Уместно и приветствуется рекомендовать (под цель и тренировки): "
+    "креатин моногидрат, протеин/сывороточный (whey), BCAA/EAA (аминокислоты), "
+    "бета-аланин, цитруллин, L-карнитин, глютамин, кофеин/предтреник (умеренно), "
+    "электролиты, а также омега-3, магний, витамин D и подобные.\n"
     "- Учитывай цель (loss — похудение, maintain — поддержание, "
-    "gain — набор массы), если она указана.\n"
-    "- НЕ предлагай рецептурные препараты, гормоны и любые запрещённые вещества.\n"
+    "gain — набор массы), если она указана, и привязывай выбор к тренировкам.\n"
+    "- НЕ предлагай рецептурные препараты, ГОРМОНЫ, анаболические СТЕРОИДЫ и "
+    "любые ЗАПРЕЩЁННЫЕ/допинговые вещества.\n"
     "- Формулировки — общие и осторожные, без медицинских обещаний."
 )
 
 # Английский аналог SUPPLEMENT_SYSTEM_PROMPT (те же ключи, значения на английском).
 SUPPLEMENT_SYSTEM_PROMPT_EN = (
     "You are a sports nutrition consultant. The user asks you to suggest "
-    "basic sports supplements for their goal.\n\n"
+    "sports supplements for their goal and training.\n\n"
     "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
     '  "suggestions" — an array of 3-5 objects, each with the fields:\n'
     '      "name"    — string, the supplement name in English '
@@ -576,10 +581,16 @@ SUPPLEMENT_SYSTEM_PROMPT_EN = (
     '(for example: "3-5 g per day");\n'
     '      "note"    — string, briefly what it is for and how to take it.\n\n'
     "Rules:\n"
-    "- Suggest only common, safe basic supplements.\n"
+    "- ACTIVELY suggest real SPORTS supplements, not just vitamins and minerals. "
+    "It is appropriate and encouraged to recommend (tied to the goal and "
+    "training): creatine monohydrate, protein/whey, BCAA/EAA (amino acids), "
+    "beta-alanine, citrulline, L-carnitine, glutamine, caffeine/pre-workout "
+    "(in moderation), electrolytes, as well as omega-3, magnesium, vitamin D "
+    "and similar.\n"
     "- Consider the goal (loss — weight loss, maintain — maintenance, "
-    "gain — muscle gain) if it is provided.\n"
-    "- Do NOT suggest prescription drugs, hormones or any banned substances.\n"
+    "gain — muscle gain) if it is provided, and tie the choice to training.\n"
+    "- Do NOT suggest prescription drugs, HORMONES, anabolic STEROIDS or any "
+    "BANNED/doping substances.\n"
     "- Keep wording general and cautious, with no medical promises."
 )
 
@@ -598,23 +609,32 @@ SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT = (
     "gain — набор массы).\n\n"
     "Примеры логики (ориентир, не жёсткое правило):\n"
     "- цель «сон» -> магний, глицин;\n"
-    "- цель «восстановление» + частые тренировки -> протеин, омега-3, магний;\n"
-    "- цель «сила» + частые силовые тренировки -> креатин моногидрат, протеин;\n"
-    "- цель «энергия» -> кофеин/L-карнитин в умеренных дозах, витамины группы B;\n"
-    "- цель «иммунитет» -> витамин D, витамин C, цинк.\n\n"
+    "- цель «восстановление» + частые тренировки -> протеин, BCAA/EAA, "
+    "омега-3, глютамин, магний;\n"
+    "- цель «сила» + частые силовые тренировки -> креатин моногидрат, протеин, "
+    "бета-аланин;\n"
+    "- цель «выносливость/пампинг» -> цитруллин, бета-аланин, электролиты;\n"
+    "- цель «энергия» -> кофеин/предтреник умеренно, L-карнитин, витамины "
+    "группы B;\n"
+    "- цель «иммунитет» -> витамин D, витамин C, цинк, омега-3.\n\n"
     "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полем:\n"
     '  "suggestions" — массив из 2-4 объектов, каждый с полями:\n'
     '      "name"    — строка, название добавки на русском '
-    '(например: "Креатин моногидрат", "Магний", "Омега-3");\n'
+    '(например: "Креатин моногидрат", "Протеин", "Цитруллин");\n'
     '      "dosage"  — строка, типичная суточная дозировка '
     '(например: "3-5 г в день");\n'
     '      "note"    — строка, кратко зачем нужна именно под цель/тренировки '
     "и как принимать.\n\n"
     "Правила:\n"
-    "- Предлагай только распространённые, безопасные базовые добавки "
+    "- АКТИВНО предлагай реальные СПОРТИВНЫЕ добавки, а не только витамины и "
+    "минералы. Уместно и приветствуется рекомендовать (под цель и тренировки): "
+    "креатин моногидрат, протеин/сывороточный (whey), BCAA/EAA (аминокислоты), "
+    "бета-аланин, цитруллин, L-карнитин, глютамин, кофеин/предтреник (умеренно), "
+    "электролиты, а также омега-3, магний, витамин D и подобные "
     "(2-4 штуки, без воды).\n"
     "- Связывай выбор с целью улучшения и тренировками пользователя.\n"
-    "- НЕ предлагай рецептурные препараты, гормоны и любые запрещённые вещества.\n"
+    "- НЕ предлагай рецептурные препараты, ГОРМОНЫ, анаболические СТЕРОИДЫ и "
+    "любые ЗАПРЕЩЁННЫЕ/допинговые вещества.\n"
     "- Формулировки — общие и осторожные, без медицинских обещаний."
 )
 
@@ -631,23 +651,32 @@ SUPPLEMENT_RECOMMEND_SYSTEM_PROMPT_EN = (
     "gain — muscle gain).\n\n"
     "Examples of the logic (guideline, not a strict rule):\n"
     "- goal «sleep» -> magnesium, glycine;\n"
-    "- goal «recovery» + frequent workouts -> protein, omega-3, magnesium;\n"
-    "- goal «strength» + frequent strength training -> creatine monohydrate, protein;\n"
-    "- goal «energy» -> caffeine/L-carnitine in moderate doses, B vitamins;\n"
-    "- goal «immunity» -> vitamin D, vitamin C, zinc.\n\n"
+    "- goal «recovery» + frequent workouts -> protein, BCAA/EAA, omega-3, "
+    "glutamine, magnesium;\n"
+    "- goal «strength» + frequent strength training -> creatine monohydrate, "
+    "protein, beta-alanine;\n"
+    "- goal «endurance/pump» -> citrulline, beta-alanine, electrolytes;\n"
+    "- goal «energy» -> caffeine/pre-workout in moderation, L-carnitine, "
+    "B vitamins;\n"
+    "- goal «immunity» -> vitamin D, vitamin C, zinc, omega-3.\n\n"
     "Return STRICTLY a valid JSON object (and NOTHING else) with the field:\n"
     '  "suggestions" — an array of 2-4 objects, each with the fields:\n'
     '      "name"    — string, the supplement name in English '
-    '(for example: "Creatine monohydrate", "Magnesium", "Omega-3");\n'
+    '(for example: "Creatine monohydrate", "Protein", "Citrulline");\n'
     '      "dosage"  — string, the typical daily dosage '
     '(for example: "3-5 g per day");\n'
     '      "note"    — string, briefly why it fits the goal/training '
     "and how to take it.\n\n"
     "Rules:\n"
-    "- Suggest only common, safe basic supplements "
-    "(2-4 items, no padding).\n"
+    "- ACTIVELY suggest real SPORTS supplements, not just vitamins and minerals. "
+    "It is appropriate and encouraged to recommend (tied to the goal and "
+    "training): creatine monohydrate, protein/whey, BCAA/EAA (amino acids), "
+    "beta-alanine, citrulline, L-carnitine, glutamine, caffeine/pre-workout "
+    "(in moderation), electrolytes, as well as omega-3, magnesium, vitamin D "
+    "and similar (2-4 items, no padding).\n"
     "- Tie the choice to the user's improvement goal and training.\n"
-    "- Do NOT suggest prescription drugs, hormones or any banned substances.\n"
+    "- Do NOT suggest prescription drugs, HORMONES, anabolic STEROIDS or any "
+    "BANNED/doping substances.\n"
     "- Keep wording general and cautious, with no medical promises."
 )
 
@@ -750,6 +779,103 @@ def _run_text_completion(system_prompt: str, user_prompt: str, log_tag: str, max
         finish_reason=finish_reason,
         refusal=refusal,
     )
+
+
+# Системный промпт для AI-оценки калорий по свободному описанию активности
+# (для тренировок типа "other", когда нет MET-коэффициента в таблице).
+WORKOUT_ESTIMATE_SYSTEM_PROMPT = (
+    "Ты — эксперт по физиологии нагрузок. По свободному описанию активности, "
+    "её длительности (минуты) и, если задан, весу тела (кг) оцени реалистичный "
+    "ИТОГОВЫЙ расход калорий и примерный MET-коэффициент активности.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '      "calories" — целое число, суммарно сожжённые калории (ккал);\n'
+    '      "met"      — число, примерный MET-коэффициент активности.\n\n'
+    "Правила:\n"
+    "- Значения реалистичные и положительные.\n"
+    "- Если вес не задан — прими средний около 70 кг.\n"
+    "- Никакого текста вне JSON."
+)
+
+# Английский аналог WORKOUT_ESTIMATE_SYSTEM_PROMPT (те же ключи).
+WORKOUT_ESTIMATE_SYSTEM_PROMPT_EN = (
+    "You are an exercise physiology expert. From a free-text activity "
+    "description, its duration (minutes) and, if given, body weight (kg), "
+    "estimate a realistic TOTAL calories burned and an approximate MET value "
+    "of the activity.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with the fields:\n"
+    '      "calories" — integer, total calories burned (kcal);\n'
+    '      "met"      — number, approximate MET of the activity.\n\n'
+    "Rules:\n"
+    "- Values must be realistic and positive.\n"
+    "- If weight is not given, assume an average of about 70 kg.\n"
+    "- No text outside the JSON."
+)
+
+
+def estimate_workout_calories(
+    description: str,
+    duration_min: int,
+    weight_kg: float | None = None,
+    lang: str = "ru",
+) -> dict:
+    """
+    Оценить сожжённые калории и MET по свободному описанию активности (ИИ).
+
+    Используется для тренировок типа "other", когда нет готового MET-коэффициента.
+    Параметр lang ("ru" по умолчанию, либо "en") влияет только на язык промпта.
+
+    Возвращает словарь:
+        {"calories": int, "met": float}
+
+    При пустом/непригодном описании или неудаче обращения к ИИ выбрасывает
+    AIError (502 на уровне роута).
+    """
+    lang = _normalize_lang(lang)
+
+    # Без внятного описания оценивать нечего — сразу сигналим ошибкой.
+    text = (description or "").strip()
+    if not text:
+        raise AIError("estimate_workout: пустое описание активности")
+
+    duration = _coerce_int(duration_min)
+
+    # Формируем запрос пользователя на нужном языке.
+    if lang == "en":
+        parts = [
+            "Estimate the calories burned for the following activity.",
+            f"Activity: {text}.",
+            f"Duration: {duration} minutes.",
+        ]
+        if weight_kg:
+            parts.append(f"Body weight: {_coerce_float(weight_kg)} kg.")
+        parts.append("Return the result strictly in JSON format following the instructions.")
+    else:
+        parts = [
+            "Оцени сожжённые калории для следующей активности.",
+            f"Активность: {text}.",
+            f"Длительность: {duration} минут.",
+        ]
+        if weight_kg:
+            parts.append(f"Вес тела: {_coerce_float(weight_kg)} кг.")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+    user_prompt = "\n".join(parts)
+
+    system_prompt = _pick_prompt(
+        WORKOUT_ESTIMATE_SYSTEM_PROMPT, WORKOUT_ESTIMATE_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, user_prompt, log_tag="workout_estimate"
+    )
+
+    # Нормализуем числа: калории — целое положительное, MET — положительное число.
+    calories = _coerce_int(data.get("calories"))
+    met = _coerce_float(data.get("met"))
+    if calories <= 0:
+        raise AIError("estimate_workout: модель вернула непригодные калории")
+    if met <= 0:
+        met = 4.0
+
+    return {"calories": max(0, calories), "met": met}
 
 
 def recommend_meals(

@@ -197,6 +197,10 @@ class Workout(Base):
     # Сожжённые калории, ккал.
     calories_burned = Column(Integer)
 
+    # Свободное описание активности для type="other" (например, "скалолазание").
+    # Используется AI-оценкой сожжённых калорий; для остальных типов обычно None.
+    description = Column(String, nullable=True)
+
     # Дата создания записи (UTC).
     created_at = Column(DateTime, default=datetime.utcnow)
 

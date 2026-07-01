@@ -115,11 +115,6 @@
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
   ];
-  // Именительный падеж месяцев (для заголовка календаря «Июнь 2026»).
-  var MONTHS_RU_NOM = [
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
-  ];
 
   /**
    * Человеко-читаемая подпись даты для переключателя.
@@ -607,158 +602,17 @@
   // ===========================================================================
   // МИНИ-КАЛЕНДАРЬ (block, тап по подписи даты).
   //
-  // Компактный попап под баром датой (класс cal-pop). Показывает месяц
-  // просматриваемой даты (state.calMonth), позволяет переключать месяцы
-  // стрелками ‹ › без смены выбранной даты, выбирать день (не в будущем).
+  // Компактный попап под баром датой (класс cal-pop). Реализация вынесена в
+  // общий хелпер App.miniCalendarToggle / App.miniCalendarClose (см. app.js),
+  // который переиспользуется дневником и тренировками. Здесь остаётся только
+  // тонкая обвязка: колбэк выбора дня и закрытие календаря.
   // ===========================================================================
 
   /**
-   * Возвращает "YYYY-MM" месяца для заданной ISO-даты.
-   * @param {string} isoDate "YYYY-MM-DD"
-   * @returns {string} "YYYY-MM"
-   */
-  function monthOf(isoDate) {
-    var parts = String(isoDate).split("-");
-    return parts[0] + "-" + parts[1];
-  }
-
-  /**
-   * Переключает видимость мини-календаря. Если он открыт — закрывает,
-   * иначе рисует его для месяца выбранной даты.
-   */
-  function toggleCalendar() {
-    var box = document.getElementById("diary-cal");
-    if (!box) return;
-    if (box.innerHTML.trim() !== "") {
-      closeCalendar();
-      return;
-    }
-    state.calMonth = monthOf(state.date);
-    renderCalendar();
-  }
-
-  /**
-   * Закрывает мини-календарь (очищает контейнер).
+   * Закрывает мини-календарь (делегирует общему хелперу).
    */
   function closeCalendar() {
-    var box = document.getElementById("diary-cal");
-    if (box) box.innerHTML = "";
-  }
-
-  /**
-   * Рисует мини-календарь для месяца state.calMonth: заголовок с навигацией
-   * ‹ › и сетку дней (Пн-первый). Будущие даты недоступны.
-   */
-  function renderCalendar() {
-    var box = document.getElementById("diary-cal");
-    if (!box) return;
-
-    var parts = String(state.calMonth).split("-");
-    var year = parseInt(parts[0], 10);
-    var month = parseInt(parts[1], 10) - 1; // 0-based
-    if (isNaN(year) || isNaN(month)) {
-      year = new Date().getFullYear();
-      month = new Date().getMonth();
-    }
-
-    var todayStr = App.todayStr();
-    var todayMonth = monthOf(todayStr);
-
-    // Заголовок «Месяц ГОД» (RU именительный падеж).
-    var title = pick(MONTHS_RU_NOM[month], MONTHS_EN[month]) + " " + year;
-
-    // Следующий месяц целиком в будущем? -> отключаем стрелку «›».
-    var nextDisabled = state.calMonth >= todayMonth;
-
-    // Заголовки дней недели (Пн-первый).
-    var dowRu = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
-    var dowEn = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    var dowHtml = "";
-    for (var w = 0; w < 7; w++) {
-      dowHtml += '<span class="cal-dow">' + App.escapeHtml(pick(dowRu[w], dowEn[w])) + "</span>";
-    }
-
-    // Первый день месяца и число дней в месяце.
-    var first = new Date(year, month, 1, 12, 0, 0, 0);
-    // getDay(): 0=Вс..6=Сб. Приводим к Пн-первому: (getDay()+6)%7.
-    var lead = (first.getDay() + 6) % 7;
-    var daysInMonth = new Date(year, month + 1, 0, 12, 0, 0, 0).getDate();
-
-    var cells = "";
-    // Ведущие пустые ячейки.
-    for (var e = 0; e < lead; e++) {
-      cells += '<span class="cal-cell cal-cell--empty"></span>';
-    }
-    // Дни месяца.
-    for (var d = 1; d <= daysInMonth; d++) {
-      var iso =
-        year + "-" +
-        String(month + 1).padStart(2, "0") + "-" +
-        String(d).padStart(2, "0");
-      var cls = "cal-cell";
-      var future = iso > todayStr;
-      if (future) cls += " cal-cell--disabled";
-      if (iso === todayStr) cls += " cal-cell--today";
-      if (iso === state.date) cls += " cal-cell--selected";
-      if (future) {
-        cells += '<span class="' + cls + '">' + d + "</span>";
-      } else {
-        cells +=
-          '<button type="button" class="' + cls + '" data-cal-day="' + iso + '">' + d + "</button>";
-      }
-    }
-
-    box.innerHTML =
-      '<div class="cal-pop">' +
-      '<div class="cal-head">' +
-      '<button type="button" class="cal-nav" data-cal-nav="prev" ' +
-      'aria-label="' + App.escapeHtml(pick("Предыдущий месяц", "Previous month")) + '">‹</button>' +
-      '<span class="cal-title">' + App.escapeHtml(title) + "</span>" +
-      '<button type="button" class="cal-nav" data-cal-nav="next"' +
-      (nextDisabled ? " disabled" : "") + " " +
-      'aria-label="' + App.escapeHtml(pick("Следующий месяц", "Next month")) + '">›</button>' +
-      "</div>" +
-      '<div class="cal-grid">' + dowHtml + cells + "</div>" +
-      "</div>";
-
-    // Навигация по месяцам (не меняет выбранную дату).
-    var navs = box.querySelectorAll(".cal-nav");
-    for (var n = 0; n < navs.length; n++) {
-      navs[n].addEventListener("click", function (ev) {
-        var btn = ev.currentTarget;
-        if (btn.disabled) return;
-        var dir = btn.getAttribute("data-cal-nav");
-        App.haptic && App.haptic("selection");
-        shiftCalendarMonth(dir === "next" ? 1 : -1);
-      });
-    }
-
-    // Выбор дня.
-    var grid = box.querySelector(".cal-grid");
-    if (grid) {
-      grid.addEventListener("click", function (ev) {
-        var cell = ev.target.closest(".cal-cell[data-cal-day]");
-        if (!cell) return;
-        var iso = cell.getAttribute("data-cal-day");
-        if (!iso) return;
-        pickCalendarDay(iso);
-      });
-    }
-  }
-
-  /**
-   * Сдвигает просматриваемый месяц календаря на delta месяцев (без смены
-   * выбранной даты) и перерисовывает попап.
-   * @param {number} delta
-   */
-  function shiftCalendarMonth(delta) {
-    var parts = String(state.calMonth).split("-");
-    var year = parseInt(parts[0], 10);
-    var month = parseInt(parts[1], 10) - 1;
-    var dt = new Date(year, month + delta, 1, 12, 0, 0, 0);
-    state.calMonth =
-      dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0");
-    renderCalendar();
+    App.miniCalendarClose(document.getElementById("diary-cal"));
   }
 
   /**
@@ -2779,7 +2633,11 @@
       if (calToggle) {
         calToggle.addEventListener("click", function () {
           App.haptic && App.haptic("light");
-          toggleCalendar();
+          App.miniCalendarToggle(
+            document.getElementById("diary-cal"),
+            state.date,
+            pickCalendarDay
+          );
         });
       }
 

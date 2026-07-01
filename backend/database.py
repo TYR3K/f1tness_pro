@@ -155,6 +155,12 @@ def run_migrations():
     ]
     _migrate_table("diary_entries", diary_columns)
 
+    # --- Таблица workouts: свободное описание активности для type="other". ---
+    workout_columns = [
+        ("description", "TEXT", None),  # текст активности для AI-оценки калорий
+    ]
+    _migrate_table("workouts", workout_columns)
+
 
 def init_db():
     """

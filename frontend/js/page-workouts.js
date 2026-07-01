@@ -281,15 +281,18 @@
    */
   function dateBarHtml() {
     return (
+      '<div class="wk-datebar-wrap">' +
       '<div class="wk-datebar card">' +
       '<button class="wk-datebar__nav" type="button" data-nav="prev" ' +
       'aria-label="' + esc(pick("Предыдущий день", "Previous day")) + '">◀</button>' +
-      '<div class="wk-datebar__label">' +
+      '<button class="wk-datebar__label" type="button" data-open-cal>' +
       '<span class="wk-datebar__date">' + esc(humanDate(state.date)) + "</span>" +
       '<span class="wk-datebar__iso">' + esc(state.date) + "</span>" +
-      "</div>" +
+      "</button>" +
       '<button class="wk-datebar__nav" type="button" data-nav="next" ' +
       'aria-label="' + esc(pick("Следующий день", "Next day")) + '">▶</button>' +
+      "</div>" +
+      '<div id="wk-cal" class="wk-datebar__cal"></div>' +
       "</div>"
     );
   }
@@ -307,6 +310,12 @@
       '<select class="field__input" id="wkType">' +
       workoutTypeOptionsHtml() +
       "</select>" +
+      "</label>" +
+
+      '<label class="field wk-desc" id="wkDescField" hidden>' +
+      '<span class="field__label">' + esc(pick("Что вы делали?", "What did you do?")) + "</span>" +
+      '<input class="field__input" id="wkDesc" type="text" maxlength="120" ' +
+      'placeholder="' + esc(pick("напр. катание на сноуборде", "e.g. snowboarding")) + '">' +
       "</label>" +
 
       '<div class="wk-form__grid">' +
@@ -453,6 +462,10 @@
   function workoutRowHtml(w) {
     var icon = WORKOUT_ICONS[w.type] || "🏋️";
     var label = workoutLabel(w.type);
+    // Для типа «Другое» с описанием показываем само описание как заголовок.
+    if (w.type === "other" && w.description) {
+      label = w.description;
+    }
     var dur = Number(w.duration_min) || 0;
     var kcal = fmt(w.calories_burned || 0);
     return (
@@ -728,6 +741,7 @@
     var typeEl = byId("wkType");
     var durEl = byId("wkDuration");
     var calEl = byId("wkCalories");
+    var descEl = byId("wkDesc");
     var btn = byId("wkEstimateBtn");
     if (!typeEl || !durEl || !calEl) return;
 
@@ -741,6 +755,18 @@
 
     var type = typeEl.value;
 
+    // Для типа «Другое» описание обязательно — по нему AI оценивает калории.
+    var description = descEl ? (descEl.value || "").trim() : "";
+    if (type === "other" && !description) {
+      toast(pick("Опишите, что вы делали", "Describe what you did"));
+      haptic("error");
+      if (descEl) descEl.focus();
+      return;
+    }
+
+    var estimatePayload = { type: type, duration_min: duration };
+    if (type === "other") estimatePayload.description = description;
+
     if (btn) {
       btn.disabled = true;
       btn.textContent = pick("Оцениваем…", "Estimating…");
@@ -748,7 +774,7 @@
     App.showLoading();
 
     App.api
-      .estimateWorkout({ type: type, duration_min: duration })
+      .estimateWorkout(estimatePayload)
       .then(function (res) {
         var kcal = res && res.calories_burned != null ? res.calories_burned : null;
         if (kcal == null) {
@@ -782,9 +808,11 @@
     var typeEl = byId("wkType");
     var durEl = byId("wkDuration");
     var calEl = byId("wkCalories");
+    var descEl = byId("wkDesc");
     var btn = byId("wkAddBtn");
     if (!typeEl || !durEl || !calEl) return;
 
+    var type = typeEl.value;
     var duration = readPositiveInt(durEl);
     var calories = readPositiveInt(calEl);
 
@@ -794,6 +822,16 @@
       durEl.focus();
       return;
     }
+
+    // Для типа «Другое» описание обязательно.
+    var description = descEl ? (descEl.value || "").trim() : "";
+    if (type === "other" && !description) {
+      toast(pick("Опишите, что вы делали", "Describe what you did"));
+      haptic("error");
+      if (descEl) descEl.focus();
+      return;
+    }
+
     if (calories == null) {
       toast(pick("Укажите калории или нажмите «Оценить»", "Enter calories or tap “Estimate”"));
       haptic("error");
@@ -803,10 +841,11 @@
 
     var payload = {
       date: state.date,
-      type: typeEl.value,
+      type: type,
       duration_min: duration,
       calories_burned: calories
     };
+    if (type === "other") payload.description = description;
 
     if (btn) btn.disabled = true;
     App.showLoading();
@@ -819,6 +858,7 @@
         // Сбрасываем числовые поля формы, тип оставляем.
         durEl.value = "";
         calEl.value = "";
+        if (descEl) descEl.value = "";
         // Инвалидируем кэш дневника за эту дату: net_calories мог измениться.
         if (App.state && App.state.diaryByDate) {
           delete App.state.diaryByDate[state.date];
@@ -1026,12 +1066,41 @@
       });
     }
 
+    // Кнопка открытия мини-календаря под датой.
+    var openCalBtn = state.viewEl.querySelector("[data-open-cal]");
+    if (openCalBtn && App && typeof App.miniCalendarToggle === "function") {
+      openCalBtn.addEventListener("click", function () {
+        App.miniCalendarToggle(byId("wk-cal"), state.date, function (iso) {
+          state.date = iso;
+          App.miniCalendarClose(byId("wk-cal"));
+          updateDateLabel();
+          loadWorkouts();
+        });
+      });
+    }
+
     // Форма и кнопки тренировок.
     var wkForm = byId("wkForm");
     if (wkForm) wkForm.addEventListener("submit", onWorkoutSubmit);
 
     var estimateBtn = byId("wkEstimateBtn");
     if (estimateBtn) estimateBtn.addEventListener("click", onEstimate);
+
+    // Поле «Что вы делали?» видно только для типа «Другое».
+    var typeSelect = byId("wkType");
+    if (typeSelect) {
+      typeSelect.addEventListener("change", function () {
+        var descField = byId("wkDescField");
+        var descInput = byId("wkDesc");
+        if (!descField) return;
+        if (typeSelect.value === "other") {
+          descField.hidden = false;
+        } else {
+          descField.hidden = true;
+          if (descInput) descInput.value = "";
+        }
+      });
+    }
 
     // Чипы дней недели в форме напоминания.
     var dayChips = state.viewEl.querySelectorAll(".wk-rem-day");

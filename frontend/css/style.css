@@ -6730,13 +6730,13 @@ button.cal-cell--selected:active {
   right: 16px;
   bottom: calc(var(--tabbar-height) + var(--safe-bottom) + 16px);
   z-index: 60;
-  width: 56px;
-  height: 56px;
+  width: 62px;
+  height: 62px;
   border: none;
   border-radius: 50%;
   background: var(--cta);
   color: var(--white);
-  font-size: 30px;
+  font-size: 33px;
   line-height: 1;
   font-weight: 400;
   cursor: pointer;
@@ -7011,4 +7011,101 @@ button.cal-cell--selected:active {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* ============================================================
+   #6) АККОРДЕОН аккаунта (.acc-fold) — сворачиваемые карточки.
+   Добавляется к существующему .card; шапка-кнопка + тело.
+   Тело скрыто атрибутом [hidden]; открытое состояние — .acc-fold--open.
+   ============================================================ */
+
+/* Карточка-аккордеон: .card + .acc-fold. Убираем внутренний padding
+   у самой карточки, чтобы шапка/тело сами управляли отступами. */
+.acc-fold {
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Шапка — во всю ширину, тап-таргет, без «кнопочного» вида. */
+.acc-fold__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 16px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: background .15s ease;
+}
+
+.acc-fold__head:active {
+  background: rgba(122, 107, 90, .08);
+}
+
+/* Заголовок — как у карточек (.acc-title). */
+.acc-fold__title {
+  flex: 1;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Шеврон — приглушённый, плавно вращается при раскрытии. */
+.acc-fold__chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform .2s ease;
+}
+
+.acc-fold--open .acc-fold__chevron {
+  transform: rotate(180deg);
+}
+
+/* Тело — контент под шапкой; когда показано, без лишних верхних отступов. */
+.acc-fold__body {
+  padding: 0 16px 16px;
+}
+
+/* Убираем нижний margin у первого/последнего вложенного элемента,
+   чтобы тело не «плавало» после раскрытия. */
+.acc-fold__body > .acc-title:first-child {
+  margin-top: 0;
+}
+
+/* Внутренний заголовок карточки дублирует шапку аккордеона (его рисуют
+   JS-рендеры премиум-карточек: Вес/Адаптивные/Отчёт/Цикл/Фото). Прячем —
+   заголовок уже несёт шапка .acc-fold__head. */
+.acc-fold__body .acc-title {
+  display: none;
+}
+
+/* ============================================================
+   #1) Контейнер календаря на странице тренировок (wk-).
+   Зеркалит .diary-datebar-wrap / .diary-datebar__cal, чтобы общий
+   попап .cal-pop корректно позиционировался под баром даты.
+   ============================================================ */
+
+/* Обёртка бара даты тренировок — якорь для абсолютного попапа. */
+.wk-datebar-wrap {
+  position: relative;
+}
+
+/* Контейнер попапа: под баром даты, по центру. */
+.wk-datebar__cal {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: center;
 }

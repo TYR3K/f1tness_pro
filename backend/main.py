@@ -53,6 +53,7 @@ from backend.ai_service import (
     AIError,
     analyze_food_image,
     calculate_food,
+    estimate_workout_calories,
     generate_meal_plan,
     generate_weekly_report,
     healthy_snacks,
@@ -346,6 +347,37 @@ def update_profile(
         # Умножаем BMR на коэффициент активности (по умолчанию 1.375).
         activity = user.activity_level if user.activity_level else 1.375
         user.daily_goal_kcal = round(bmr * activity)
+
+    # #7: единый ввод веса. Если в запросе пришёл валидный положительный вес —
+    # дублируем его в замер веса за сегодня (upsert по user+date, как /weight/add),
+    # чтобы тренд и адаптивный расчёт питались тем же единственным вводом.
+    if "weight" in payload:
+        try:
+            weight_val = float(payload["weight"])
+        except (TypeError, ValueError):
+            weight_val = None
+        if weight_val is not None and weight_val > 0:
+            today_iso = date_cls.today().isoformat()
+            existing = (
+                db.query(WeightLog)
+                .filter(
+                    WeightLog.telegram_id == user.telegram_id,
+                    WeightLog.date == today_iso,
+                )
+                .first()
+            )
+            if existing is not None:
+                # Запись за сегодня уже есть — обновляем вес.
+                existing.weight = weight_val
+            else:
+                # Замера за сегодня ещё не было — создаём новый.
+                db.add(
+                    WeightLog(
+                        telegram_id=user.telegram_id,
+                        date=today_iso,
+                        weight=weight_val,
+                    )
+                )
 
     db.commit()
     db.refresh(user)
@@ -662,6 +694,7 @@ def workout_add(
         type=data.type,
         duration_min=data.duration_min,
         calories_burned=data.calories_burned,
+        description=data.description,
     )
     db.add(db_workout)
     db.commit()
@@ -711,9 +744,39 @@ def workout_estimate(
 ) -> WorkoutEstimateOut:
     """Оценить расход калорий за тренировку по типу и длительности.
 
-    Расчёт ведётся по таблице MET с учётом веса пользователя (если он указан
-    в профиле, иначе берётся усреднённое значение внутри fitness-модуля).
+    Для типа "other" со свободным описанием расчёт ведёт ИИ по тексту
+    активности (реалистичные калории + MET). Для остальных типов (и для
+    "other" без описания) — по таблице MET с учётом веса пользователя (если он
+    указан в профиле, иначе берётся усреднённое значение внутри fitness-модуля).
     """
+    # Для произвольной активности с описанием — AI-оценка калорий по тексту.
+    if data.type == "other" and (data.description or "").strip():
+        try:
+            result = estimate_workout_calories(
+                data.description,
+                data.duration_min,
+                user.weight,
+                lang=user.language or "ru",
+            )
+        except AIError as exc:
+            logger.warning(
+                "workout/estimate: %s | finish=%s raw=%s",
+                exc, exc.finish_reason, (exc.raw or "")[:600],
+            )
+            detail = "Не удалось оценить калории. Попробуйте позже."
+            if DEBUG_AI:
+                detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+            raise HTTPException(status_code=502, detail=detail)
+        except RuntimeError as exc:
+            logger.warning("workout/estimate: %s", exc)
+            detail = "Сервис оценки калорий временно недоступен. Попробуйте позже."
+            if DEBUG_AI:
+                detail = str(exc)
+            raise HTTPException(status_code=502, detail=detail)
+        return WorkoutEstimateOut(
+            calories_burned=result["calories"], met=result["met"]
+        )
+
     kcal, met = fitness.estimate_calories_burned(
         data.type, data.duration_min, user.weight
     )

@@ -285,11 +285,16 @@
       "</div>" +
       "</section>" +
 
-      // ---- Форма профиля ----
-      '<form class="acc-form card" id="accForm" novalidate>' +
-      '<h2 class="acc-title">' +
+      // ---- Форма профиля (в аккордеоне) ----
+      '<section class="card acc-fold" id="accFoldProfile">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
       App.escapeHtml(L("Мои параметры", "My parameters")) +
-      "</h2>" +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<form class="acc-form" id="accForm" novalidate>' +
 
       '<div class="acc-grid">' +
       '<label class="field">' +
@@ -401,29 +406,86 @@
       ) +
       "</p>" +
       "</form>" +
+      "</div>" + // .acc-fold__body (Параметры)
+      "</section>" + // .acc-fold (Параметры)
 
       // ---- ПРЕМИУМ: Вес / Weight (контейнер заполняется в renderWeight) ----
-      '<section class="wt-card card" id="accWeightCard"></section>' +
+      '<section class="card acc-fold" id="accFoldWeight">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
+      App.escapeHtml(L("Вес", "Weight")) +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="wt-card" id="accWeightCard"></section>' +
+      "</div>" +
+      "</section>" +
 
       // ---- ПРЕМИУМ: Адаптивные калории (контейнер заполняется в renderAdaptive) ----
-      '<section class="adapt-card card" id="accAdaptCard"></section>' +
+      '<section class="card acc-fold" id="accFoldAdapt">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
+      App.escapeHtml(L("Адаптивные калории", "Adaptive calories")) +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="adapt-card" id="accAdaptCard"></section>' +
+      "</div>" +
+      "</section>" +
 
       // ---- ПРЕМИУМ: Недельный AI-отчёт (контейнер заполняется в renderReport) ----
-      '<section class="rep-card card" id="accReportCard"></section>' +
+      '<section class="card acc-fold" id="accFoldReport">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
+      App.escapeHtml(L("Недельный AI-отчёт", "Weekly AI report")) +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="rep-card" id="accReportCard"></section>' +
+      "</div>" +
+      "</section>" +
 
       // ---- ПРЕМИУМ: Трекинг цикла (контейнер заполняется в renderCycle) ----
-      '<section class="cyc-card card" id="accCycleCard"></section>' +
+      '<section class="card acc-fold" id="accFoldCycle">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
+      App.escapeHtml(L("Трекинг цикла", "Cycle tracking")) +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="cyc-card" id="accCycleCard"></section>' +
+      "</div>" +
+      "</section>" +
 
       // ---- ПРЕМИУМ: Фото-прогресс (контейнер заполняется в renderProgress) ----
-      '<section class="prog-card card" id="accProgressCard"></section>' +
+      '<section class="card acc-fold" id="accFoldProgress">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
+      App.escapeHtml(L("Фото-прогресс", "Progress photos")) +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="prog-card" id="accProgressCard"></section>' +
+      "</div>" +
+      "</section>" +
 
-      // ---- Карточка «Вечерняя сводка» ----
+      // ---- Карточка «Вечерняя сводка» (в аккордеоне) ----
       // Здесь остаётся ТОЛЬКО ежедневная вечерняя сводка. Напоминания о приёмах
       // пищи, тренировках и добавках перенесены в соответствующие разделы.
-      '<section class="acc-summary card" id="accSummary">' +
-      '<h2 class="acc-title">' +
+      '<section class="card acc-fold" id="accFoldSummary">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
       App.escapeHtml(L("Вечерняя сводка", "Evening summary")) +
-      "</h2>" +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="acc-summary" id="accSummary">' +
       '<p class="acc-summary-hint">' +
       App.escapeHtml(
         L(
@@ -436,14 +498,23 @@
       '<div class="skeleton skeleton--block"></div>' +
       "</div>" +
       "</section>" +
+      "</div>" +
+      "</section>" +
 
-      // ---- История за 30 дней ----
-      '<section class="acc-history card">' +
-      '<h2 class="acc-title">' +
+      // ---- История за 30 дней (в аккордеоне) ----
+      '<section class="card acc-fold" id="accFoldHistory">' +
+      '<button type="button" class="acc-fold__head">' +
+      '<span class="acc-fold__title">' +
       App.escapeHtml(L("История за 30 дней", "Last 30 days")) +
-      "</h2>" +
+      "</span>" +
+      '<span class="acc-fold__chevron" aria-hidden="true">▾</span>' +
+      "</button>" +
+      '<div class="acc-fold__body" hidden>' +
+      '<section class="acc-history" id="accSummaryHistoryWrap">' +
       '<div id="accHistory" class="acc-history__body">' +
       '<div class="skeleton skeleton--block"></div>' +
+      "</div>" +
+      "</section>" +
       "</div>" +
       "</section>" +
       "</section>"
@@ -727,6 +798,9 @@
     // подписки ещё не подтянулся): иначе карточка теряет фон/паддинг.
     card.classList.remove("wt-gate");
 
+    // Вес вводится ТОЛЬКО в форме «Мои параметры» (это единственное поле веса,
+    // нужное для формулы BMR). Здесь остаётся лишь визуализация тренда:
+    // SVG-график динамики + текущий вес и изменение (App.api.getWeightHistory).
     card.innerHTML =
       '<h2 class="acc-title">' +
       App.escapeHtml(L("Вес", "Weight")) +
@@ -734,78 +808,19 @@
       '<p class="wt-hint">' +
       App.escapeHtml(
         L(
-          "Записывайте вес регулярно — по динамике строится тренд и адаптивная норма.",
-          "Log your weight regularly — the trend and adaptive goal are built from it."
+          "Обновляйте вес в разделе «Мои параметры» — по динамике строится тренд и адаптивная норма.",
+          "Update your weight in «My parameters» — the trend and adaptive goal are built from it."
         )
       ) +
       "</p>" +
-      '<div class="wt-input-row">' +
-      '<label class="field wt-input-field">' +
-      '<span class="field__label">' +
-      App.escapeHtml(L("Вес сегодня, кг", "Weight today, kg")) +
-      "</span>" +
-      '<input class="field__input wt-input" id="accWeightInput" type="number" inputmode="decimal" min="0" step="0.1" placeholder="70.0">' +
-      "</label>" +
-      "</div>" +
-      '<button type="button" class="btn btn--cta wt-save-btn" id="accWeightSave">' +
-      App.escapeHtml(L("Сохранить вес", "Save weight")) +
-      "</button>" +
       '<div class="wt-chart-wrap" id="accWeightChart">' +
       '<div class="skeleton skeleton--block"></div>' +
       "</div>";
 
-    var input = card.querySelector("#accWeightInput");
-    var saveBtn = card.querySelector("#accWeightSave");
     var chart = card.querySelector("#accWeightChart");
-
-    // Предзаполняем поле последним известным весом из профиля (удобно).
-    if (App.state.profile && App.state.profile.weight != null) {
-      input.value = App.state.profile.weight;
-    }
-
-    if (saveBtn) {
-      saveBtn.addEventListener("click", function () {
-        onSaveWeight(input, saveBtn, chart);
-      });
-    }
 
     // Загружаем историю и рисуем график.
     loadWeight(chart);
-  }
-
-  /**
-   * Сохраняет замер веса (upsert по сегодняшней дате) и перезагружает график.
-   */
-  function onSaveWeight(input, saveBtn, chart) {
-    var weight = readNum(input);
-    if (weight == null || weight <= 0) {
-      App.toast(L("Введите корректный вес", "Enter a valid weight"));
-      App.haptic("error");
-      return;
-    }
-
-    if (saveBtn) saveBtn.disabled = true;
-    App.showLoading();
-
-    App.api
-      .addWeight({ date: App.todayStr(), weight: weight })
-      .then(function () {
-        App.haptic("success");
-        App.toast(L("Вес сохранён", "Weight saved"));
-        // Перезагружаем график динамики после нового замера.
-        loadWeight(chart);
-      })
-      .catch(function (err) {
-        App.haptic("error");
-        var reason = err && err.message ? err.message : L("ошибка", "error");
-        App.toast(
-          L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
-        );
-      })
-      .finally(function () {
-        if (saveBtn) saveBtn.disabled = false;
-        App.hideLoading();
-      });
   }
 
   /**
@@ -864,8 +879,8 @@
         '<div class="wt-empty__text">' +
         App.escapeHtml(
           L(
-            "Пока нет замеров. Добавьте первый замер веса выше.",
-            "No measurements yet. Add your first weight above."
+            "Пока нет замеров. Укажите вес в разделе «Мои параметры».",
+            "No measurements yet. Set your weight in «My parameters»."
           )
         ) +
         "</div>" +
@@ -1825,12 +1840,15 @@
     if (!card) return;
 
     // Женская фича: для явно мужского профиля скрываем карточку целиком.
+    // Прячем весь сворачиваемый блок (fold-обёртку), а не только контейнер.
     var gender = App.state.profile && App.state.profile.gender;
     if (gender === "male") {
+      if (els.cycleFold) els.cycleFold.style.display = "none";
       card.style.display = "none";
       card.innerHTML = "";
       return;
     }
+    if (els.cycleFold) els.cycleFold.style.display = "";
     card.style.display = "";
 
     if (!App.isPremium()) {
@@ -3034,6 +3052,32 @@
     }
   }
 
+  /* =====================================================================
+   *  АККОРДЕОН / ACCORDION (#6)
+   *  Тяжёлые/редкие карточки свёрнуты по умолчанию и раскрываются по тапу.
+   *  Одна делегированная навеска обработчика на всё представление.
+   * ===================================================================== */
+
+  /**
+   * Вешает ОДИН делегированный обработчик на клики по заголовкам сворачиваемых
+   * карточек. Тап по .acc-fold__head переключает класс acc-fold--open на
+   * карточке и атрибут hidden у тела. Данные внутри могут грузиться в фоне,
+   * даже пока карточка свёрнута (это допустимо).
+   */
+  function bindFolds(viewEl) {
+    if (!viewEl) return;
+    viewEl.addEventListener("click", function (e) {
+      var head = e.target.closest(".acc-fold__head");
+      if (!head) return;
+      var card = head.closest(".acc-fold");
+      if (!card) return;
+      var body = card.querySelector(".acc-fold__body");
+      var open = card.classList.toggle("acc-fold--open");
+      if (body) body.hidden = !open;
+      App.haptic("selection");
+    });
+  }
+
   /**
    * Находит и кэширует ссылки на элементы формы внутри представления.
    */
@@ -3061,6 +3105,7 @@
       adaptCard: viewEl.querySelector("#accAdaptCard"),
       reportCard: viewEl.querySelector("#accReportCard"),
       cycleCard: viewEl.querySelector("#accCycleCard"),
+      cycleFold: viewEl.querySelector("#accFoldCycle"),
       progressCard: viewEl.querySelector("#accProgressCard"),
       summaryBody: viewEl.querySelector("#accSummaryBody"),
       history: viewEl.querySelector("#accHistory")
@@ -3089,6 +3134,9 @@
     onShow: function (viewEl) {
       viewEl.innerHTML = template();
       bindElements(viewEl);
+
+      // Аккордеон: одна делегированная навеска на все сворачиваемые карточки.
+      bindFolds(viewEl);
 
       // Прокручиваем к началу при входе в раздел.
       App.scrollTop();
