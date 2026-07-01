@@ -2997,7 +2997,7 @@
     var time = timeValue(s.summary_time) || DEFAULT_SUMMARY_TIME;
 
     // Кнопка-тумблер (Активировать/Деактивировать) вместо чекбокса. Ниже —
-    // поле времени сводки (сохраняется вместе с тумблером или по «Сохранить»).
+    // поле времени сводки: сохраняется САМО при изменении (без отдельной кнопки).
     box.innerHTML =
       '<button type="button" class="tgl-btn' +
       (enabled ? " tgl-btn--on" : "") +
@@ -3017,12 +3017,7 @@
       '<input class="field__input acc-summary-time__input" type="time" id="accSummaryTime" value="' +
       App.escapeHtml(time) +
       '" placeholder="21:00">' +
-      "</label>" +
-      '<button type="button" class="btn btn--ghost acc-summary-save" id="accSummarySave"' +
-      (enabled ? "" : " hidden") +
-      ">" +
-      App.escapeHtml(L("Сохранить время", "Save time")) +
-      "</button>";
+      "</label>";
 
     var toggle = box.querySelector("#accSummaryToggle");
     if (toggle) {
@@ -3031,10 +3026,10 @@
       });
     }
 
-    var saveBtn = box.querySelector("#accSummarySave");
-    if (saveBtn) {
-      // Кнопка «Сохранить время» сохраняет время, не меняя флаг включения.
-      saveBtn.addEventListener("click", onSaveSummary);
+    // Время сохраняем автоматически при изменении (сводка уже включена).
+    var timeInput = box.querySelector("#accSummaryTime");
+    if (timeInput) {
+      timeInput.addEventListener("change", onSaveSummaryTime);
     }
   }
 
@@ -3085,40 +3080,28 @@
   }
 
   /**
-   * Сохраняет ТОЛЬКО время сводки (сводка уже включена). Отправляем поля
-   * сводки, чтобы не затронуть остальные напоминания.
+   * Автосохранение ТОЛЬКО времени сводки при изменении поля (сводка включена).
+   * Отдельной кнопки «Сохранить» нет — сохраняем молча по событию change,
+   * НЕ перерисовывая карточку (чтобы не сбрасывать фокус/состояние поля).
    */
-  function onSaveSummary() {
+  function onSaveSummaryTime() {
     var box = els.summaryBody;
     if (!box) return;
 
     var timeInput = box.querySelector("#accSummaryTime");
-    // Сводка включена, если тумблер в состоянии «on».
     var toggle = box.querySelector("#accSummaryToggle");
     var enabled = !!(toggle && toggle.classList.contains("tgl-btn--on"));
-    var payload = { daily_summary_enabled: enabled };
 
-    // Время отправляем только когда сводка включена и поле заполнено.
-    if (enabled && timeInput) {
-      var tVal = (timeInput.value || "").trim();
-      if (tVal) {
-        payload.summary_time = tVal;
-      }
-    }
+    var tVal = timeInput ? (timeInput.value || "").trim() : "";
+    if (!tVal) return; // пустое время не сохраняем
 
-    var saveBtn = box.querySelector("#accSummarySave");
-    if (saveBtn) saveBtn.disabled = true;
-    App.showLoading();
+    var payload = { daily_summary_enabled: enabled, summary_time: tVal };
 
     App.api
       .saveNotificationSettings(payload)
-      .then(function (settings) {
-        // Перерисовываем карточку актуальными данными от сервера.
-        renderSummary(settings || payload);
+      .then(function () {
         App.haptic("success");
-        App.toast(
-          L("Настройки сводки сохранены", "Summary settings saved")
-        );
+        App.toast(L("Время сводки сохранено", "Summary time saved"));
       })
       .catch(function (err) {
         App.haptic("error");
@@ -3126,10 +3109,6 @@
         App.toast(
           L("Не удалось сохранить: " + reason, "Failed to save: " + reason)
         );
-        if (saveBtn) saveBtn.disabled = false;
-      })
-      .finally(function () {
-        App.hideLoading();
       });
   }
 
