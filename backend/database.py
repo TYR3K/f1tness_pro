@@ -18,16 +18,30 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 logger = logging.getLogger(__name__)
 
 # URL подключения к БД. По умолчанию — локальный файл SQLite в корне проекта.
+# В продакшене задаётся через переменную окружения DATABASE_URL (например,
+# PostgreSQL от Railway). Код одинаково работает и с SQLite, и с PostgreSQL.
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
 
-# Для SQLite требуется отключить проверку потока, т.к. FastAPI работает
-# с несколькими потоками, а соединение по умолчанию привязано к одному.
-connect_args = {}
+# Некоторые платформы (Railway/Heroku) отдают устаревшую схему "postgres://",
+# а SQLAlchemy 2.x понимает только "postgresql://". Аккуратно нормализуем.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+
+# Параметры движка зависят от СУБД.
+connect_args: dict = {}
+engine_kwargs: dict = {}
 if DATABASE_URL.startswith("sqlite"):
+    # Для SQLite отключаем проверку потока: FastAPI работает в нескольких потоках,
+    # а соединение по умолчанию привязано к одному.
     connect_args = {"check_same_thread": False}
+else:
+    # Внешняя СУБД (PostgreSQL): pool_pre_ping проверяет «живость» соединения
+    # перед выдачей из пула, pool_recycle пересоздаёт его раз в 30 минут —
+    # чтобы не ловить обрыв простаивающих соединений (Railway их со временем закрывает).
+    engine_kwargs = {"pool_pre_ping": True, "pool_recycle": 1800}
 
 # Движок SQLAlchemy — точка подключения к базе данных.
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_kwargs)
 
 # Фабрика сессий. autoflush/autocommit выключены для явного контроля транзакций.
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -70,12 +84,19 @@ def _migrate_table(table_name, new_columns):
         logger.warning("Не удалось проинспектировать таблицу %s: %s", table_name, exc)
         return
 
+    # Некоторые типы называются по-разному в разных СУБД. Для не-SQLite
+    # (PostgreSQL) приводим SQL-тип к переносимому варианту: DATETIME -> TIMESTAMP.
+    # Так будущие миграции безопасно применяются и на PostgreSQL.
+    dialect = engine.dialect.name
+    type_map = {} if dialect == "sqlite" else {"DATETIME": "TIMESTAMP"}
+
     for name, sql_type, default in new_columns:
         # Колонка уже существует — пропускаем (идемпотентность).
         if name in existing_columns:
             continue
 
-        ddl = f"ALTER TABLE {table_name} ADD COLUMN {name} {sql_type}"
+        col_type = type_map.get(sql_type.upper(), sql_type)
+        ddl = f"ALTER TABLE {table_name} ADD COLUMN {name} {col_type}"
         if default is not None:
             ddl += f" DEFAULT {default}"
 
