@@ -118,6 +118,20 @@ class DiaryEntryOut(BaseModel):
     unit: Optional[str] = None
 
 
+class DiaryEntryPatchIn(BaseModel):
+    """Частичное редактирование записи дневника. Все поля опциональны —
+    обновляются только переданные (exclude_unset на стороне эндпоинта)."""
+
+    meal_type: Optional[str] = None
+    dish_name: Optional[str] = None
+    calories: Optional[int] = None
+    proteins: Optional[float] = None
+    fats: Optional[float] = None
+    carbs: Optional[float] = None
+    quantity: Optional[float] = None
+    unit: Optional[str] = None
+
+
 class MealsOut(BaseModel):
     """Записи дня, сгруппированные по типу приёма пищи."""
 
@@ -157,6 +171,14 @@ class HistoryOut(BaseModel):
 
     goal: Optional[int] = None
     days: List[HistoryDay] = []
+
+
+class StreakOut(BaseModel):
+    """Серия дней подряд с записями в дневнике («стрик»)."""
+
+    current: int = 0        # текущая серия (дней подряд, заканчивая сегодня/вчера)
+    longest: int = 0        # самая длинная серия за всё время
+    logged_today: bool = False  # есть ли запись за сегодня
 
 
 # --------------------------------------------------------------------------- #

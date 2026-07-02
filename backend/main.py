@@ -99,6 +99,7 @@ from backend.schemas import (
     DiaryDayOut,
     DiaryEntryIn,
     DiaryEntryOut,
+    DiaryEntryPatchIn,
     FoodCalculateIn,
     FoodCalculateOut,
     FoodSuggestIn,
@@ -128,6 +129,7 @@ from backend.schemas import (
     RegenerateItemIn,
     RegenerateItemOut,
     ScansRemainingOut,
+    StreakOut,
     StarsInvoiceIn,
     StarsInvoiceOut,
     SubscriptionStatusOut,
@@ -581,6 +583,22 @@ def diary_add(
         unit=entry.unit,
     )
     db.add(db_entry)
+
+    # Сохраняем блюдо в «недавние» (FavoriteFood), чтобы фото/голос-добавления
+    # тоже попадали в быстрый повтор. Дедуп по названию делается при чтении
+    # (/food/recent). Без названия — не сохраняем.
+    if (entry.dish_name or "").strip():
+        db.add(
+            FavoriteFood(
+                telegram_id=user.telegram_id,
+                dish_name=entry.dish_name,
+                calories=entry.calories,
+                proteins=entry.proteins,
+                fats=entry.fats,
+                carbs=entry.carbs,
+            )
+        )
+
     db.commit()
     db.refresh(db_entry)
     return db_entry
@@ -657,6 +675,114 @@ def diary_delete(
     db.delete(entry)
     db.commit()
     return {"ok": True}
+
+
+@app.patch("/diary/{entry_id}", response_model=DiaryEntryOut)
+def diary_update(
+    entry_id: int,
+    patch: DiaryEntryPatchIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DiaryEntry:
+    """Частично отредактировать запись дневника (только свою).
+
+    Обновляются лишь переданные поля (exclude_unset). Числовые значения
+    приводятся к неотрицательным; meal_type проверяется по списку допустимых.
+    """
+    entry = db.query(DiaryEntry).filter(DiaryEntry.id == entry_id).first()
+    if entry is None or entry.telegram_id != user.telegram_id:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+
+    data = patch.model_dump(exclude_unset=True)
+
+    # Тип приёма пищи — только из допустимого набора.
+    if "meal_type" in data:
+        if data["meal_type"] not in MEAL_TYPES:
+            raise HTTPException(status_code=400, detail="Некорректный приём пищи")
+        entry.meal_type = data["meal_type"]
+
+    # Название — не затираем пустым.
+    if "dish_name" in data and (data["dish_name"] or "").strip():
+        entry.dish_name = data["dish_name"].strip()
+
+    # Калории — целые, неотрицательные.
+    if "calories" in data and data["calories"] is not None:
+        entry.calories = max(0, int(data["calories"]))
+
+    # Макросы и количество — неотрицательные вещественные.
+    for f in ("proteins", "fats", "carbs", "quantity"):
+        if f in data and data[f] is not None:
+            setattr(entry, f, max(0.0, float(data[f])))
+
+    # Единица измерения (может быть сброшена в None).
+    if "unit" in data:
+        entry.unit = data["unit"]
+
+    db.commit()
+    db.refresh(entry)
+    return entry
+
+
+@app.get("/stats/streak", response_model=StreakOut)
+def stats_streak(
+    today: str | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StreakOut:
+    """Серия дней подряд с записями в дневнике («стрик»).
+
+    Текущая серия считается от «сегодня» (или от вчера, если сегодня ещё нет
+    записей — чтобы не сбрасывать огонёк в течение дня). «Сегодня» берётся из
+    параметра ?today=YYYY-MM-DD (локальная дата клиента), иначе — серверная.
+    """
+    rows = (
+        db.query(DiaryEntry.date)
+        .filter(DiaryEntry.telegram_id == user.telegram_id)
+        .distinct()
+        .all()
+    )
+    dates = {r[0] for r in rows if r[0]}
+
+    try:
+        anchor_today = date_cls.fromisoformat(today) if today else date_cls.today()
+    except (ValueError, TypeError):
+        anchor_today = date_cls.today()
+
+    today_s = anchor_today.isoformat()
+    logged_today = today_s in dates
+
+    # Опорный день для текущей серии: сегодня, либо вчера (если сегодня пусто).
+    if today_s in dates:
+        cur_anchor = anchor_today
+    else:
+        y = anchor_today - timedelta(days=1)
+        cur_anchor = y if y.isoformat() in dates else None
+
+    current = 0
+    if cur_anchor is not None:
+        d = cur_anchor
+        while d.isoformat() in dates:
+            current += 1
+            d = d - timedelta(days=1)
+
+    # Самая длинная серия за всё время.
+    parsed = []
+    for s in dates:
+        try:
+            parsed.append(date_cls.fromisoformat(s))
+        except ValueError:
+            continue
+    parsed.sort()
+    longest = 0
+    run = 0
+    prev = None
+    for d in parsed:
+        run = run + 1 if (prev is not None and (d - prev).days == 1) else 1
+        prev = d
+        if run > longest:
+            longest = run
+
+    return StreakOut(current=current, longest=longest, logged_today=logged_today)
 
 
 # --------------------------------------------------------------------------- #

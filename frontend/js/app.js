@@ -335,6 +335,24 @@
       return request("/diary/" + encodeURIComponent(id), { method: "DELETE" });
     },
 
+    // Частичное редактирование записи дневника. patch — только изменяемые поля
+    // (dish_name, meal_type, calories, proteins, fats, carbs, quantity, unit).
+    // Ответ: обновлённый DiaryEntryOut.
+    updateEntry: function (id, patch) {
+      return request("/diary/" + encodeURIComponent(id), {
+        method: "PATCH",
+        body: patch
+      });
+    },
+
+    // Серия дней подряд с записями («стрик»). today — локальная дата клиента.
+    // Ответ: {current, longest, logged_today}.
+    getStreak: function (today) {
+      return request(
+        "/stats/streak" + (today ? "?today=" + encodeURIComponent(today) : "")
+      );
+    },
+
     // Получение профиля пользователя.
     getProfile: function () {
       return request("/profile");

@@ -7949,3 +7949,46 @@ select.onb-field__input {
   line-height: 1.45;
   color: var(--muted);
 }
+
+/* Шапка дневника: заголовок + счётчик серии («стрик») в одну строку. */
+.diary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.diary-head .page__title {
+  margin-bottom: 0;
+}
+
+/* Счётчик серии дней подряд. Тёплый эмодзи-огонёк несёт цвет; фон — из палитры. */
+.diary-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+}
+/* «Остывающий» вид, если сегодня ещё нет записей (серия под угрозой). */
+.diary-streak--cold {
+  opacity: .6;
+  filter: grayscale(.35);
+}
+
+/* Строка записи дневника теперь тапабельна — открывает редактирование. */
+.diary-entry {
+  cursor: pointer;
+}
+.diary-entry:active {
+  background: rgba(201, 184, 168, .18);
+}
+/* Кнопка удаления не должна наследовать «палец» строки. */
+.diary-entry__del {
+  cursor: pointer;
+}
