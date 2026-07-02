@@ -230,6 +230,12 @@ _TEXTS = {
             "{tail}"
         ),
     },
+    # Дополнительная строка вечерней сводки: серия дней подряд («стрик»).
+    # Добавляется к сводке, если серия ≥ 2 дней. {n} — число дней.
+    "summary_streak": {
+        "ru": "🔥 Серия: <b>{n}</b> дн. подряд — так держать!",
+        "en": "🔥 Streak: <b>{n}</b> days in a row — keep it up!",
+    },
     # Авто-пересчёт адаптивных калорий (Этап 3). {explanation} — готовый
     # локализованный текст пояснения из adaptive.run_adaptive_recalc.
     "adaptive_recalc": {
@@ -508,6 +514,34 @@ def _process_meal_reminder(db, tid: int, today: str, now: datetime,
         _mark_sent(db, tid, kind, today)
 
 
+def _current_streak(db, tid: int, today: str) -> int:
+    """Текущая серия дней подряд с записями дневника, считая от today назад.
+
+    Возвращает 0, если за today записей нет (серия не активна на сегодня).
+    """
+    from datetime import date as _date, timedelta as _timedelta
+
+    try:
+        rows = (
+            db.query(DiaryEntry.date)
+            .filter(DiaryEntry.telegram_id == tid)
+            .distinct()
+            .all()
+        )
+    except Exception:
+        return 0
+    dates = {r[0] for r in rows if r[0]}
+    try:
+        d = _date.fromisoformat(today)
+    except (ValueError, TypeError):
+        return 0
+    n = 0
+    while d.isoformat() in dates:
+        n += 1
+        d = d - _timedelta(days=1)
+    return n
+
+
 def _process_daily_summary(db, tid: int, today: str, now: datetime,
                            user: "User", settings: "NotificationSettings") -> None:
     """Вечерняя сводка по дню: съедено / цель / осталось (на языке пользователя)."""
@@ -545,6 +579,13 @@ def _process_daily_summary(db, tid: int, today: str, now: datetime,
     else:
         # Цель не задана — отдаём только факт съеденного.
         text = _msg("summary_no_goal", lang, eaten=eaten)
+
+    # Строка серии («стрик»): добавляем, только если сегодня есть записи
+    # (серия активна) и её длина ≥ 2 дней — иначе это не мотивирует.
+    if entries:
+        streak = _current_streak(db, tid, today)
+        if streak >= 2:
+            text = text + "\n" + _msg("summary_streak", lang, n=streak)
 
     if send_telegram(tid, text):
         _mark_sent(db, tid, "summary", today)
