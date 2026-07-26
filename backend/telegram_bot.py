@@ -42,6 +42,8 @@ except Exception:  # pragma: no cover - на случай отсутствия h
 
 from datetime import datetime
 
+from sqlalchemy import func
+
 from backend.config import OWNER_ID, TARIFFS, BOT_USERNAME, MINI_APP_URL
 from backend.models import User, ProGrant, DiaryEntry, Payment
 from backend import payment_providers
@@ -490,41 +492,71 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
     is_give = text.strip().startswith("/givepro")
     action = "give" if is_give else "revoke"
 
-    # Разбираем @username из команды.
-    uname = _parse_username_arg(text)
-    if not uname:
+    # Аргумент цели: либо @username, либо числовой telegram_id.
+    arg = _parse_username_arg(text)
+    if not arg:
         if chat_id is not None:
             _bot_api("sendMessage", {
                 "chat_id": chat_id,
-                "text": "Укажите username: /givepro @username",
+                "text": "Укажите цель: /givepro @username  или  /givepro <telegram_id>",
             })
         return
 
-    # Ищем целевого пользователя по username (он должен был открыть приложение).
-    target = None
-    try:
-        target = db.query(User).filter(User.username == uname).first()
-    except Exception as exc:
-        logger.warning("_handle_owner_command: ошибка поиска пользователя %s: %s", uname, exc)
+    target_id = None
+    uname_display = arg  # для текста ответа (может уточниться ниже)
+
+    if arg.isdigit():
+        # По числовому ID — работает, даже если человек ещё НЕ открывал приложение
+        # (activate_premium/grant_days создадут запись пользователя по id сами).
+        target_id = int(arg)
         try:
-            db.rollback()
+            u = db.query(User).filter(User.telegram_id == target_id).first()
+            if u is not None and u.username:
+                uname_display = u.username
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
+    else:
+        # По username — РЕГИСТРОНЕЗАВИСИМО (Telegram-логины не зависят от регистра).
+        # Запись появляется только после того, как человек ОТКРЫЛ приложение
+        # (не просто /start в боте) — тогда его username попадает в БД.
         target = None
+        try:
+            target = (
+                db.query(User)
+                .filter(func.lower(User.username) == arg.lower())
+                .first()
+            )
+        except Exception as exc:
+            logger.warning("_handle_owner_command: ошибка поиска пользователя %s: %s", arg, exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            target = None
 
-    if target is None:
-        if chat_id is not None:
-            _bot_api("sendMessage", {
-                "chat_id": chat_id,
-                "text": (
-                    f"Пользователь @{uname} не найден. "
-                    "Попросите его открыть приложение хотя бы один раз, "
-                    "после этого команда сработает."
-                ),
-            })
-        return
+        if target is None:
+            if chat_id is not None:
+                _bot_api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": (
+                        f"Пользователь @{arg} не найден.\n\n"
+                        "Причины и что делать:\n"
+                        "1) Он запустил бота, но ещё НЕ открывал само приложение — "
+                        "запись создаётся только при первом открытии мини-приложения "
+                        "(кнопка «🥗 Открыть приложение» под /start), не при /start.\n"
+                        "2) Проверьте, что это именно @username (логин), а не имя из чата, "
+                        "и что у человека вообще задан username в Telegram.\n"
+                        "3) Можно выдать по числовому ID: /givepro <telegram_id> — "
+                        "сработает даже до открытия приложения."
+                    ),
+                })
+            return
 
-    target_id = getattr(target, "telegram_id", None)
+        target_id = int(getattr(target, "telegram_id"))
+        uname_display = target.username or arg
 
     # Выполняем выдачу/отзыв доступа через единый слой активации.
     try:
@@ -534,13 +566,13 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
             days = _parse_days_arg(text)
             if days and days > 0:
                 payment_providers.grant_days(db, int(target_id), days, "owner", subscription_type="monthly")
-                result_text = f"Готово: @{uname} получил доступ на {days} дн."
+                result_text = f"Готово: @{uname_display} получил доступ на {days} дн."
             else:
                 payment_providers.activate_premium(db, int(target_id), "lifetime", "owner", 0, "XTR")
-                result_text = f"Готово: @{uname} получил пожизненный доступ."
+                result_text = f"Готово: @{uname_display} получил пожизненный доступ."
         else:
             payment_providers.revoke_premium(db, int(target_id))
-            result_text = f"Готово: доступ для @{uname} отозван."
+            result_text = f"Готово: доступ для @{uname_display} отозван."
     except Exception as exc:
         logger.warning("_handle_owner_command: сбой %s для %s: %s", action, uname, exc)
         try:
@@ -550,7 +582,7 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
         if chat_id is not None:
             _bot_api("sendMessage", {
                 "chat_id": chat_id,
-                "text": f"Не удалось выполнить операцию для @{uname}.",
+                "text": f"Не удалось выполнить операцию для @{uname_display}.",
             })
         return
 
