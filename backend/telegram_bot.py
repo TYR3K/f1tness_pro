@@ -454,6 +454,180 @@ def _parse_days_arg(text: str) -> int | None:
 
 
 # --------------------------------------------------------------------------- #
+#  Регистрация пользователя по ЛЮБОМУ контакту с ботом
+# --------------------------------------------------------------------------- #
+def _touch_user(db, from_user: dict) -> None:
+    """Создать/обновить запись User по данным из апдейта Telegram.
+
+    ЗАЧЕМ: раньше пользователь появлялся в БД ТОЛЬКО после первого открытия
+    мини-приложения (backend/auth.py::_upsert_user). Поэтому «человек запустил
+    бота», но /givepro @username его не находил. Telegram присылает id и
+    username в КАЖДОМ апдейте — грех это выбрасывать.
+
+    Вызывается на любое сообщение боту (/start, текст, голос, оплата).
+    Username при смене — обновляем; НЕ затираем сохранённый, если в апдейте
+    его нет (у пользователя может не быть username).
+
+    Полностью безопасна: любые сбои логируются и не пробрасываются, чтобы не
+    сломать основную обработку апдейта (особенно платежи).
+    """
+    if not isinstance(from_user, dict):
+        return
+    # Ботов (в т.ч. самого себя) в пользователи не записываем.
+    if from_user.get("is_bot"):
+        return
+
+    try:
+        tid = int(from_user.get("id"))
+    except (TypeError, ValueError):
+        return
+
+    try:
+        uname = from_user.get("username") or None
+        fname = from_user.get("first_name") or None
+        lang_code = from_user.get("language_code") or ""
+
+        user = db.query(User).filter(User.telegram_id == tid).first()
+        created = False
+        if user is None:
+            user = User(telegram_id=tid)
+            db.add(user)
+            created = True
+
+        # Профильные поля обновляем, только если Telegram их прислал.
+        if uname:
+            user.username = uname
+        if fname:
+            user.first_name = fname
+        # Язык ставим один раз (дальше пользователь меняет его сам в приложении).
+        if not getattr(user, "language", None):
+            user.language = "ru" if str(lang_code).lower().startswith("ru") else "en"
+
+        # Владелец приложения определяется СТРОГО по telegram_id (не по username).
+        if OWNER_ID and tid == OWNER_ID and not getattr(user, "is_owner", False):
+            user.is_owner = True
+            if getattr(user, "subscription_type", None) != "lifetime":
+                user.subscription_type = "lifetime"
+                user.subscription_until = None
+
+        db.commit()
+        if created:
+            logger.info("Новый пользователь через бота: tid=%s username=%s", tid, uname)
+    except Exception as exc:  # noqa: BLE001 — регистрация не должна ронять апдейт
+        logger.warning("_touch_user: не удалось сохранить пользователя %s: %s", tid, exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# --------------------------------------------------------------------------- #
+#  Диагностика для владельца: /users и /whois
+# --------------------------------------------------------------------------- #
+def _db_target_info() -> str:
+    """Краткое описание БД, в которую реально пишет ЭТОТ процесс (без пароля).
+
+    Нужно, чтобы владелец видел: работает ли прод на PostgreSQL или свалился
+    на эфемерный SQLite (тогда данные исчезают при каждом редеплое).
+    """
+    try:
+        from backend.database import engine
+
+        url = engine.url
+        if url.get_backend_name().startswith("sqlite"):
+            return f"SQLite (файл: {url.database}) ⚠️ эфемерно на Railway"
+        return f"{url.get_backend_name()} @ {url.host}/{url.database}"
+    except Exception as exc:  # noqa: BLE001
+        return f"неизвестно ({exc})"
+
+
+def _handle_users_command(db, message: dict) -> None:
+    """/users — показать владельцу последних пользователей из базы."""
+    try:
+        from_id = int(message.get("from", {}).get("id"))
+    except Exception:  # noqa: BLE001
+        return
+    if not OWNER_ID or from_id != OWNER_ID:
+        return
+    chat_id = message.get("chat", {}).get("id")
+    if chat_id is None:
+        return
+
+    try:
+        total = db.query(User).count()
+        rows = (
+            db.query(User)
+            .order_by(User.created_at.desc().nullslast(), User.telegram_id.desc())
+            .limit(15)
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": f"Ошибка чтения базы: {exc}"})
+        return
+
+    lines = [f"База: {_db_target_info()}", f"Всего пользователей: {total}", ""]
+    if not rows:
+        lines.append("Пусто. Никто ещё не попал в базу.")
+    else:
+        for u in rows:
+            uname = f"@{u.username}" if u.username else "(без username)"
+            sub = u.subscription_type or "free"
+            lines.append(f"{u.telegram_id} — {uname} — {sub}")
+    _bot_api("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines)})
+
+
+def _handle_whois_command(db, message: dict, text: str) -> None:
+    """/whois @username — показать, что именно находит поиск (диагностика)."""
+    try:
+        from_id = int(message.get("from", {}).get("id"))
+    except Exception:  # noqa: BLE001
+        return
+    if not OWNER_ID or from_id != OWNER_ID:
+        return
+    chat_id = message.get("chat", {}).get("id")
+    if chat_id is None:
+        return
+
+    arg = _parse_username_arg(text)
+    if not arg:
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": "Использование: /whois @username"})
+        return
+
+    try:
+        exact = db.query(User).filter(User.username == arg).first()
+        ci = db.query(User).filter(func.lower(User.username) == arg.lower()).first()
+        like = (
+            db.query(User)
+            .filter(func.lower(User.username).like("%" + arg.lower() + "%"))
+            .limit(5)
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": f"Ошибка чтения базы: {exc}"})
+        return
+
+    lines = [
+        f"Ищем: {arg!r} (длина {len(arg)})",
+        f"База: {_db_target_info()}",
+        f"Точное совпадение: {exact.telegram_id if exact else 'нет'}",
+        f"Без учёта регистра: {ci.telegram_id if ci else 'нет'}",
+    ]
+    if like:
+        lines.append("Похожие: " + ", ".join(f"@{u.username}({u.telegram_id})" for u in like))
+    else:
+        lines.append("Похожих не найдено.")
+    _bot_api("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines)})
+
+
+# --------------------------------------------------------------------------- #
 #  Команды владельца: /givepro и /revokepro
 # --------------------------------------------------------------------------- #
 def _handle_owner_command(db, message: dict, text: str) -> None:
@@ -494,69 +668,106 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
 
     # Аргумент цели: либо @username, либо числовой telegram_id.
     arg = _parse_username_arg(text)
-    if not arg:
+
+    target_id = None
+    uname_display = arg or ""
+
+    # СПОСОБ БЕЗ USERNAME: команда отправлена ОТВЕТОМ на пересланное от человека
+    # сообщение — берём его id прямо из апдейта. Работает, даже если username
+    # не задан или человека ещё нет в базе.
+    reply = message.get("reply_to_message")
+    if isinstance(reply, dict):
+        # forward_from — исходный автор пересланного сообщения; from — отправитель.
+        src = reply.get("forward_from") if isinstance(reply.get("forward_from"), dict) else None
+        if src is None and isinstance(reply.get("from"), dict):
+            # Не берём самого бота (у пересланных без forward_from автор скрыт).
+            if not reply["from"].get("is_bot"):
+                src = reply["from"]
+        if isinstance(src, dict):
+            try:
+                target_id = int(src.get("id"))
+                uname_display = src.get("username") or src.get("first_name") or str(target_id)
+                # Заодно регистрируем цель, чтобы она была в базе с username.
+                _touch_user(db, src)
+            except (TypeError, ValueError):
+                target_id = None
+
+    if target_id is None and not arg:
         if chat_id is not None:
             _bot_api("sendMessage", {
                 "chat_id": chat_id,
-                "text": "Укажите цель: /givepro @username  или  /givepro <telegram_id>",
+                "text": (
+                    "Укажите цель одним из способов:\n"
+                    "• /givepro @username\n"
+                    "• /givepro <telegram_id>\n"
+                    "• ответом (reply) на пересланное от человека сообщение\n\n"
+                    "Посмотреть, кто есть в базе: /users\n"
+                    "Проверить конкретного: /whois @username"
+                ),
             })
         return
 
-    target_id = None
-    uname_display = arg  # для текста ответа (может уточниться ниже)
-
-    if arg.isdigit():
-        # По числовому ID — работает, даже если человек ещё НЕ открывал приложение
-        # (activate_premium/grant_days создадут запись пользователя по id сами).
-        target_id = int(arg)
-        try:
-            u = db.query(User).filter(User.telegram_id == target_id).first()
-            if u is not None and u.username:
-                uname_display = u.username
-        except Exception:
+    if target_id is None:
+        if arg.isdigit():
+            # По числовому ID — работает, даже если человека ещё нет в базе
+            # (activate_premium/grant_days создадут запись пользователя по id).
+            target_id = int(arg)
             try:
-                db.rollback()
-            except Exception:
-                pass
-    else:
-        # По username — РЕГИСТРОНЕЗАВИСИМО (Telegram-логины не зависят от регистра).
-        # Запись появляется только после того, как человек ОТКРЫЛ приложение
-        # (не просто /start в боте) — тогда его username попадает в БД.
-        target = None
-        try:
-            target = (
-                db.query(User)
-                .filter(func.lower(User.username) == arg.lower())
-                .first()
-            )
-        except Exception as exc:
-            logger.warning("_handle_owner_command: ошибка поиска пользователя %s: %s", arg, exc)
-            try:
-                db.rollback()
-            except Exception:
-                pass
+                u = db.query(User).filter(User.telegram_id == target_id).first()
+                if u is not None and u.username:
+                    uname_display = u.username
+            except Exception:  # noqa: BLE001
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            # По username — регистронезависимо (логины Telegram нечувствительны
+            # к регистру). Ошибку БД НЕ маскируем под «не найден».
             target = None
+            db_error = None
+            try:
+                target = (
+                    db.query(User)
+                    .filter(func.lower(User.username) == arg.lower())
+                    .first()
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("_handle_owner_command: ошибка поиска %s: %s", arg, exc)
+                db_error = exc
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
 
-        if target is None:
-            if chat_id is not None:
-                _bot_api("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": (
-                        f"Пользователь @{arg} не найден.\n\n"
-                        "Причины и что делать:\n"
-                        "1) Он запустил бота, но ещё НЕ открывал само приложение — "
-                        "запись создаётся только при первом открытии мини-приложения "
-                        "(кнопка «🥗 Открыть приложение» под /start), не при /start.\n"
-                        "2) Проверьте, что это именно @username (логин), а не имя из чата, "
-                        "и что у человека вообще задан username в Telegram.\n"
-                        "3) Можно выдать по числовому ID: /givepro <telegram_id> — "
-                        "сработает даже до открытия приложения."
-                    ),
-                })
-            return
+            if db_error is not None:
+                if chat_id is not None:
+                    _bot_api("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": f"Ошибка обращения к базе: {db_error}",
+                    })
+                return
 
-        target_id = int(getattr(target, "telegram_id"))
-        uname_display = target.username or arg
+            if target is None:
+                if chat_id is not None:
+                    _bot_api("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": (
+                            f"Пользователь @{arg} не найден в базе.\n\n"
+                            "Что сделать:\n"
+                            "• /users — посмотреть, кто вообще есть в базе "
+                            "(если список пуст — данные пишутся не туда, "
+                            "проверьте DATABASE_URL в Railway).\n"
+                            "• /whois @" + arg + " — детали поиска.\n"
+                            "• Выдать по ID: /givepro <telegram_id>\n"
+                            "• Или ответьте (reply) на пересланное от него сообщение "
+                            "командой /givepro — сработает без username."
+                        ),
+                    })
+                return
+
+            target_id = int(getattr(target, "telegram_id"))
+            uname_display = target.username or arg
 
     # Выполняем выдачу/отзыв доступа через единый слой активации.
     try:
@@ -810,10 +1021,18 @@ def handle_update(db, update: dict) -> None:
             return
 
         # Дальше работаем с message (обычное сообщение / событие оплаты).
+        # Поддерживаем и edited_message: пользователь мог отредактировать команду.
         message = update.get("message")
+        if not isinstance(message, dict):
+            message = update.get("edited_message")
         if not isinstance(message, dict):
             # Нет сообщения — обрабатывать нечего.
             return
+
+        # РЕГИСТРАЦИЯ: любой контакт с ботом заносит пользователя в БД, чтобы
+        # /givepro @username работал сразу после /start (не дожидаясь, пока
+        # человек откроет мини-приложение).
+        _touch_user(db, message.get("from") or {})
 
         # --- 2) Успешная оплата -> активируем premium ------------------------- #
         successful_payment = message.get("successful_payment")
@@ -896,6 +1115,14 @@ def handle_update(db, update: dict) -> None:
             # Команды владельца: выдача/отзыв доступа.
             if stripped.startswith("/givepro") or stripped.startswith("/revokepro"):
                 _handle_owner_command(db, message, text)
+                return
+
+            # Диагностика владельца: кто есть в базе / что находит поиск.
+            if stripped.startswith("/users"):
+                _handle_users_command(db, message)
+                return
+            if stripped.startswith("/whois"):
+                _handle_whois_command(db, message, text)
                 return
 
             # Приветствие по /start.
