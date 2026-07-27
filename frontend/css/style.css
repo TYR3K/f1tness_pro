@@ -7834,34 +7834,11 @@ select.onb-field__input {
   box-shadow: 0 6px 16px rgba(125, 155, 118, .28);
 }
 
-/* Круглый затвор ~64px: белый круг с цветным кольцом, по центру. */
-.scan-cam-shutter {
-  display: block;
-  width: 64px;
-  height: 64px;
-  margin: 14px auto 0;
-  padding: 0;
-  border: 4px solid var(--cta);
-  border-radius: 50%;
-  background: var(--white);
-  box-shadow: 0 6px 16px rgba(122, 107, 90, .22);
-  cursor: pointer;
-  user-select: none;
-  transition: transform .1s ease, box-shadow .18s ease, background .15s ease;
-}
+/* Круглый затвор под превью удалён: спуск — центральная кнопка-камера в
+   нижней панели (повторный тап по ней снимает кадр). Отдельная белая кнопка
+   дублировала её и выглядела лишней. */
 
-.scan-cam-shutter:active {
-  transform: scale(.92);
-  background: var(--card);
-}
-
-.scan-cam-shutter:disabled {
-  opacity: .5;
-  cursor: not-allowed;
-  transform: none;
-}
-
-/* Маленькая подпись с целевой датой съёмки (под окном/затвором). */
+/* Маленькая подпись с целевой датой съёмки (под окном камеры). */
 .scan-cam-date {
   font-size: 13px;
   font-weight: 600;

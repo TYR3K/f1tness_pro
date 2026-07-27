@@ -559,19 +559,18 @@
         "</div>"
       : '<div class="scan-cam-window">' +
           '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>' +
-        "</div>" +
-        // Круглый затвор (task 2): тот же спуск, что и тап по вкладке-камере.
-        '<button type="button" class="scan-cam-shutter" id="scan-cam-shutter" ' +
-          'aria-label="' + esc(L("Снять кадр", "Capture")) + '"></button>';
+        "</div>";
+    // Отдельного круглого затвора под превью НЕТ: спуск — центральная
+    // кнопка-камера в нижней панели (повторный тап по ней снимает кадр).
 
-    // Подсказка под окном: при активной камере напоминаем про затвор; на первом
-    // визите вспомогательный текст уже внутри заглушки — подсказку не дублируем.
+    // Подсказка под окном: при активной камере указываем на нижнюю кнопку-камеру;
+    // на первом визите вспомогательный текст уже внутри заглушки — не дублируем.
     var hintHtml = needsEnable
       ? ""
       : '<p class="scan-cam-hint">' +
           esc(L(
-            "Наведите на блюдо и нажмите кнопку затвора, чтобы снять",
-            "Point at your dish and tap the shutter button to capture"
+            "Наведите на блюдо и нажмите кнопку камеры внизу, чтобы снять",
+            "Point at your dish and tap the camera button below to capture"
           )) +
         "</p>";
 
@@ -612,15 +611,6 @@
         haptic("light");
         revealCameraLive();
         startCamera();
-      });
-    }
-
-    // Круглый затвор (task 2): тот же спуск, что и тап по вкладке-камере.
-    var shutterBtn = viewEl.querySelector("#scan-cam-shutter");
-    if (shutterBtn) {
-      shutterBtn.addEventListener("click", function () {
-        haptic("medium");
-        window.PageScan.capture();
       });
     }
 
@@ -745,29 +735,18 @@
     win.innerHTML =
       '<video class="scan-cam-video" id="scan-cam-video" autoplay playsinline muted></video>';
 
-    // Круглый затвор (task 2).
-    var shutterBtn = document.createElement("button");
-    shutterBtn.type = "button";
-    shutterBtn.className = "scan-cam-shutter";
-    shutterBtn.id = "scan-cam-shutter";
-    shutterBtn.setAttribute("aria-label", L("Снять кадр", "Capture"));
-    shutterBtn.addEventListener("click", function () {
-      haptic("medium");
-      window.PageScan.capture();
-    });
-
-    // Подсказка под окном (про затвор).
+    // Подсказка под окном: спуск — нижняя кнопка-камера (отдельного круглого
+    // затвора под превью нет).
     var hint = document.createElement("p");
     hint.className = "scan-cam-hint";
     hint.textContent = L(
-      "Наведите на блюдо и нажмите кнопку затвора, чтобы снять",
-      "Point at your dish and tap the shutter button to capture"
+      "Наведите на блюдо и нажмите кнопку камеры внизу, чтобы снять",
+      "Point at your dish and tap the camera button below to capture"
     );
 
-    // Заменяем заглушку окном + затвором + подсказкой (в том же месте).
+    // Заменяем заглушку окном + подсказкой (в том же месте).
     var parent = placeholder.parentNode;
     parent.insertBefore(win, placeholder);
-    parent.insertBefore(shutterBtn, placeholder);
     parent.insertBefore(hint, placeholder);
     parent.removeChild(placeholder);
   }
