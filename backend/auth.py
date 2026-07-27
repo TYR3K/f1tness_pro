@@ -139,10 +139,16 @@ def _upsert_user(
         )
         db.add(user)
     else:
-        # Существующий пользователь — освежаем данные из Telegram.
-        user.username = username
-        user.first_name = first_name
-        user.photo_url = photo_url
+        # Существующий пользователь — освежаем данные из Telegram, но ТОЛЬКО те,
+        # что Telegram реально прислал. Безусловное присваивание затирало
+        # сохранённый username в NULL (эти поля опциональны в initData), и после
+        # этого владелец не мог найти человека командой /givepro @username.
+        if username:
+            user.username = username
+        if first_name:
+            user.first_name = first_name
+        if photo_url:
+            user.photo_url = photo_url
 
     # Инициализация языка при создании или если он ещё пуст. Заданный ранее
     # язык не трогаем, чтобы не сбросить ручной выбор пользователя.
@@ -164,6 +170,17 @@ def _upsert_user(
         user.subscription_type = "lifetime"
         db.commit()
         db.refresh(user)
+
+    # Отложенные выдачи («/givepro @username» до появления человека в базе)
+    # применяем и на этом пути — вход в приложение тоже раскрывает связку
+    # username ↔ telegram_id. Сбой здесь не должен ломать авторизацию.
+    try:
+        from backend import payment_providers
+
+        if payment_providers.apply_pending_grants(db, telegram_id, user.username):
+            db.refresh(user)
+    except Exception:  # noqa: BLE001
+        pass
 
     return user
 

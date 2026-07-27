@@ -513,10 +513,45 @@ def _touch_user(db, from_user: dict) -> None:
         db.commit()
         if created:
             logger.info("Новый пользователь через бота: tid=%s username=%s", tid, uname)
+
+        # Применяем отложенные выдачи доступа («/givepro @username», отданную до
+        # того как человек появился в базе). Сообщаем владельцу и пользователю.
+        try:
+            applied = payment_providers.apply_pending_grants(db, tid, user.username)
+            for row in applied:
+                srok = f"{row.days} дн." if row.days else "навсегда"
+                if OWNER_ID:
+                    _bot_api("sendMessage", {
+                        "chat_id": OWNER_ID,
+                        "text": f"✅ Отложенная выдача применена: @{user.username} ({tid}) — {srok}",
+                    })
+                _bot_api("sendMessage", {
+                    "chat_id": tid,
+                    "text": "🎉 Вам открыт премиум-доступ. Откройте приложение — всё уже доступно.",
+                })
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001 — регистрация не должна ронять апдейт
-        logger.warning("_touch_user: не удалось сохранить пользователя %s: %s", tid, exc)
+        logger.error("_touch_user: НЕ СОХРАНЁН пользователь %s (@%s): %s", tid, uname, exc)
         try:
             db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        # Немой сбой регистрации — худший вариант: человек «пользуется ботом»,
+        # а в базе его нет, и владелец не может выдать ему доступ. Поэтому
+        # сообщаем владельцу СРАЗУ, с текстом ошибки и id (по нему можно выдать).
+        try:
+            if OWNER_ID:
+                _bot_api("sendMessage", {
+                    "chat_id": OWNER_ID,
+                    "text": (
+                        "⚠️ Не удалось записать пользователя в базу\n"
+                        f"id: {tid}\n"
+                        f"username: @{uname}\n"
+                        f"ошибка: {exc}\n\n"
+                        f"Выдать доступ можно напрямую: /givepro {tid}"
+                    ),
+                })
         except Exception:  # noqa: BLE001
             pass
 
@@ -579,6 +614,88 @@ def _handle_users_command(db, message: dict) -> None:
             uname = f"@{u.username}" if u.username else "(без username)"
             sub = u.subscription_type or "free"
             lines.append(f"{u.telegram_id} — {uname} — {sub}")
+    _bot_api("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines)})
+
+
+def _queue_pending_grant(db, uname: str, days, created_by) -> str:
+    """Поставить выдачу доступа в очередь по @username. Возвращает текст ответа."""
+    from backend.models import PendingGrant
+
+    key = uname.strip().lower()
+    srok = f"{days} дн." if days and int(days) > 0 else "навсегда"
+    try:
+        existing = (
+            db.query(PendingGrant)
+            .filter(PendingGrant.username_lower == key, PendingGrant.applied_at.is_(None))
+            .first()
+        )
+        if existing is not None:
+            existing.days = int(days) if days and int(days) > 0 else None
+            db.commit()
+            return (
+                f"@{uname} пока нет в базе — заявка уже стояла, обновил срок: {srok}.\n"
+                "Применится автоматически, как только он напишет боту или откроет приложение.\n"
+                "Очередь: /pending"
+            )
+
+        db.add(PendingGrant(
+            username_lower=key,
+            days=int(days) if days and int(days) > 0 else None,
+            created_by=created_by,
+        ))
+        db.commit()
+        return (
+            f"@{uname} пока нет в базе — поставил в очередь ({srok}).\n\n"
+            "Доступ выдастся АВТОМАТИЧЕСКИ, как только он напишет боту или откроет "
+            "приложение. Вам придёт подтверждение.\n\n"
+            "Быстрее: /givepro <telegram_id> — если знаете его числовой ID.\n"
+            "Очередь: /pending"
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return f"Не удалось поставить в очередь: {exc}"
+
+
+def _handle_pending_command(db, message: dict) -> None:
+    """/pending — показать владельцу очередь отложенных выдач."""
+    try:
+        from_id = int(message.get("from", {}).get("id"))
+    except Exception:  # noqa: BLE001
+        return
+    if not OWNER_ID or from_id != OWNER_ID:
+        return
+    chat_id = message.get("chat", {}).get("id")
+    if chat_id is None:
+        return
+
+    from backend.models import PendingGrant
+
+    try:
+        rows = (
+            db.query(PendingGrant)
+            .filter(PendingGrant.applied_at.is_(None))
+            .order_by(PendingGrant.id.desc())
+            .limit(20)
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": f"Ошибка чтения базы: {exc}"})
+        return
+
+    if not rows:
+        _bot_api("sendMessage", {"chat_id": chat_id, "text": "Очередь пуста."})
+        return
+
+    lines = ["Ждут появления пользователя:"]
+    for r in rows:
+        lines.append(f"@{r.username_lower} — {str(r.days) + ' дн.' if r.days else 'навсегда'}")
     _bot_api("sendMessage", {"chat_id": chat_id, "text": "\n".join(lines)})
 
 
@@ -751,21 +868,19 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
                 return
 
             if target is None:
+                # НЕ ТУПИК: Bot API не умеет резолвить @username в telegram_id,
+                # поэтому ставим выдачу в очередь. Она применится сама, как только
+                # человек напишет боту или откроет приложение.
+                if is_give:
+                    days = _parse_days_arg(text)
+                    msg = _queue_pending_grant(db, arg, days, from_id)
+                else:
+                    msg = (
+                        f"@{arg} не найден в базе — отзывать нечего.\n"
+                        "Посмотреть, кто есть: /users"
+                    )
                 if chat_id is not None:
-                    _bot_api("sendMessage", {
-                        "chat_id": chat_id,
-                        "text": (
-                            f"Пользователь @{arg} не найден в базе.\n\n"
-                            "Что сделать:\n"
-                            "• /users — посмотреть, кто вообще есть в базе "
-                            "(если список пуст — данные пишутся не туда, "
-                            "проверьте DATABASE_URL в Railway).\n"
-                            "• /whois @" + arg + " — детали поиска.\n"
-                            "• Выдать по ID: /givepro <telegram_id>\n"
-                            "• Или ответьте (reply) на пересланное от него сообщение "
-                            "командой /givepro — сработает без username."
-                        ),
-                    })
+                    _bot_api("sendMessage", {"chat_id": chat_id, "text": msg})
                 return
 
             target_id = int(getattr(target, "telegram_id"))
@@ -787,15 +902,16 @@ def _handle_owner_command(db, message: dict, text: str) -> None:
             payment_providers.revoke_premium(db, int(target_id))
             result_text = f"Готово: доступ для @{uname_display} отозван."
     except Exception as exc:
-        logger.warning("_handle_owner_command: сбой %s для %s: %s", action, uname, exc)
+        logger.warning("_handle_owner_command: сбой %s для %s: %s", action, uname_display, exc)
         try:
             db.rollback()
         except Exception:
             pass
         if chat_id is not None:
+            # Показываем ПРИЧИНУ, а не безликое «не удалось» — иначе диагностика слепая.
             _bot_api("sendMessage", {
                 "chat_id": chat_id,
-                "text": f"Не удалось выполнить операцию для @{uname_display}.",
+                "text": f"Не удалось выполнить операцию для @{uname_display}.\nПричина: {exc}",
             })
         return
 
@@ -1125,6 +1241,9 @@ def handle_update(db, update: dict) -> None:
                 return
             if stripped.startswith("/whois"):
                 _handle_whois_command(db, message, text)
+                return
+            if stripped.startswith("/pending"):
+                _handle_pending_command(db, message)
                 return
 
             # Приветствие по /start.

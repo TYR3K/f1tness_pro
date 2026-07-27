@@ -181,6 +181,66 @@ def grant_days(
         raise
 
 
+def apply_pending_grants(db: Session, telegram_id: int, username: str | None) -> list:
+    """Применить отложенные выдачи доступа для появившегося пользователя.
+
+    Вызывается, когда мы впервые узнаём связку username ↔ telegram_id: при
+    контакте с ботом (telegram_bot._touch_user) и при входе в мини-приложение
+    (auth._upsert_user). Так «/givepro @username», отданная ДО того как человек
+    появился в базе, срабатывает автоматически — владельцу не нужно повторять.
+
+    Возвращает список применённых записей PendingGrant (может быть пустым).
+    Никогда не пробрасывает исключения: сбой не должен ломать вход пользователя.
+    """
+    if not username:
+        return []
+
+    # Импорт внутри функции: PendingGrant появился позже, а модуль импортируется
+    # из мест, где важно не тянуть лишние зависимости на старте.
+    from backend.models import PendingGrant
+
+    applied = []
+    try:
+        rows = (
+            db.query(PendingGrant)
+            .filter(
+                PendingGrant.username_lower == username.strip().lower(),
+                PendingGrant.applied_at.is_(None),
+            )
+            .all()
+        )
+        if not rows:
+            return []
+
+        for row in rows:
+            try:
+                if row.days and int(row.days) > 0:
+                    grant_days(db, telegram_id, int(row.days), "owner", subscription_type="monthly")
+                else:
+                    activate_premium(db, telegram_id, "lifetime", "owner", 0, "XTR")
+                row.applied_at = datetime.utcnow()
+                row.applied_to = telegram_id
+                db.commit()
+                applied.append(row)
+                logger.info(
+                    "Отложенная выдача применена: @%s -> tid=%s (days=%s)",
+                    row.username_lower, telegram_id, row.days,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error("apply_pending_grants: сбой применения id=%s: %s", row.id, exc)
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001
+        logger.error("apply_pending_grants: сбой выборки для @%s: %s", username, exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    return applied
+
+
 def revoke_premium(db: Session, telegram_id: int) -> User | None:
     """
     Снять премиум-доступ у пользователя (вернуть на бесплатный тариф).

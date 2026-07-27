@@ -491,6 +491,45 @@ class ProGrant(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class PendingGrant(Base):
+    """
+    Отложенная выдача доступа по @username (когда человека ещё нет в базе).
+
+    ЗАЧЕМ: Bot API Telegram НЕ умеет резолвить @username в telegram_id — узнать
+    id человека можно только когда он сам написал боту или открыл приложение.
+    Поэтому команда владельца «/givepro @username» для незнакомого пользователя
+    раньше была тупиком. Теперь она записывается сюда и применяется
+    АВТОМАТИЧЕСКИ при первом же появлении этого username (см.
+    payment_providers.apply_pending_grants).
+
+    days = None означает пожизненный доступ.
+    """
+
+    __tablename__ = "pending_grants"
+
+    # Идентификатор записи (автоинкремент).
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Username цели в НИЖНЕМ регистре, без "@" (логины Telegram нечувствительны
+    # к регистру, поэтому храним и сравниваем в одном виде).
+    username_lower = Column(String, index=True)
+
+    # На сколько дней выдать доступ. None — пожизненно.
+    days = Column(Integer, nullable=True)
+
+    # Кто поставил в очередь (telegram_id владельца).
+    created_by = Column(BigInteger, nullable=True)
+
+    # Когда применена (None — ещё ждёт). Применённые не удаляем: это аудит.
+    applied_at = Column(DateTime, nullable=True)
+
+    # Кому в итоге применена (telegram_id), заполняется при применении.
+    applied_to = Column(BigInteger, nullable=True)
+
+    # Дата создания записи (UTC).
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class WeightLog(Base):
     """
     Замер веса пользователя за конкретный день (Этап 3).
