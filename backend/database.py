@@ -43,6 +43,31 @@ else:
 # Движок SQLAlchemy — точка подключения к базе данных.
 engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_kwargs)
 
+# ГРОМКОЕ предупреждение, если в проде мы свалились на файловый SQLite.
+# На Railway файловая система КОНТЕЙНЕРА эфемерна: при каждом редеплое/рестарте
+# файл app.db создаётся заново, и ВСЕ пользователи с их данными исчезают.
+# Именно так выглядит баг «человек открыл приложение, а через день его нет в базе».
+_DB_URL_FROM_ENV = bool(os.getenv("DATABASE_URL"))
+IS_EPHEMERAL_SQLITE = DATABASE_URL.startswith("sqlite") and not _DB_URL_FROM_ENV
+
+if IS_EPHEMERAL_SQLITE:
+    # Признаки облачного окружения — там такой фолбэк почти наверняка ошибка.
+    _cloud = any(
+        os.getenv(k)
+        for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID", "PORT", "DYNO")
+    )
+    _msg = (
+        "DATABASE_URL НЕ ЗАДАН — используется локальный файл SQLite (%s). "
+        "В облаке (Railway) диск эфемерный: данные пользователей будут стираться "
+        "при каждом деплое. Задайте DATABASE_URL со ссылкой на PostgreSQL."
+    ) % DATABASE_URL
+    if _cloud:
+        logger.error("=" * 70)
+        logger.error("!!! КРИТИЧНО: %s", _msg)
+        logger.error("=" * 70)
+    else:
+        logger.info("Локальная разработка: %s", DATABASE_URL)
+
 # Фабрика сессий. autoflush/autocommit выключены для явного контроля транзакций.
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 

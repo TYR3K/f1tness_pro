@@ -531,11 +531,13 @@ def _db_target_info() -> str:
     на эфемерный SQLite (тогда данные исчезают при каждом редеплое).
     """
     try:
-        from backend.database import engine
+        from backend.database import engine, IS_EPHEMERAL_SQLITE
 
         url = engine.url
         if url.get_backend_name().startswith("sqlite"):
-            return f"SQLite (файл: {url.database}) ⚠️ эфемерно на Railway"
+            warn = " ⚠️ DATABASE_URL НЕ ЗАДАН — данные стираются при каждом деплое!" \
+                if IS_EPHEMERAL_SQLITE else ""
+            return f"SQLite (файл: {url.database}){warn}"
         return f"{url.get_backend_name()} @ {url.host}/{url.database}"
     except Exception as exc:  # noqa: BLE001
         return f"неизвестно ({exc})"

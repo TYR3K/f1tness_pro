@@ -298,7 +298,15 @@ def health(db: Session = Depends(get_db)) -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.error("health: БД недоступна: %s", exc)
         raise HTTPException(status_code=503, detail="db unavailable")
-    return {"status": "ok"}
+
+    # Сообщаем, к какой БД реально подключены: тихий фолбэк на файловый SQLite
+    # в облаке означает потерю данных при каждом деплое — это должно быть видно.
+    from backend.database import engine as _engine, IS_EPHEMERAL_SQLITE
+
+    out = {"status": "ok", "db": _engine.url.get_backend_name()}
+    if IS_EPHEMERAL_SQLITE:
+        out["warning"] = "DATABASE_URL не задан — используется эфемерный SQLite"
+    return out
 
 
 # --------------------------------------------------------------------------- #
