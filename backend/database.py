@@ -112,15 +112,17 @@ def _migrate_table(table_name, new_columns):
     # Некоторые типы называются по-разному в разных СУБД. Для не-SQLite
     # (PostgreSQL) приводим SQL-тип к переносимому варианту: DATETIME -> TIMESTAMP.
     # Так будущие миграции безопасно применяются и на PostgreSQL.
-    dialect = engine.dialect.name
-    type_map = {} if dialect == "sqlite" else {"DATETIME": "TIMESTAMP"}
+    is_sqlite = engine.dialect.name == "sqlite"
 
     for name, sql_type, default in new_columns:
         # Колонка уже существует — пропускаем (идемпотентность).
         if name in existing_columns:
             continue
 
-        col_type = type_map.get(sql_type.upper(), sql_type)
+        col_type, default = ddl_type_and_default(
+            table_name, name, sql_type, default, is_sqlite
+        )
+
         ddl = f"ALTER TABLE {table_name} ADD COLUMN {name} {col_type}"
         if default is not None:
             ddl += f" DEFAULT {default}"
@@ -137,6 +139,100 @@ def _migrate_table(table_name, new_columns):
                 sql_type,
                 exc,
             )
+
+
+# Колонки, объявленные в моделях как Boolean. На PostgreSQL они ОБЯЗАНЫ иметь
+# тип boolean: SQLAlchemy шлёт в них настоящий bool, и integer-колонка приводит к
+# «column ... is of type integer but expression is of type boolean» — падает
+# ЛЮБОЙ INSERT в таблицу (то есть регистрация новых пользователей).
+# На SQLite типизация нестрогая, поэтому проблема там невидима.
+_BOOLEAN_COLUMNS = {
+    "users": ("is_owner", "adaptive_enabled", "used_trial"),
+    "supplements": ("reminder_enabled",),
+    "notification_settings": (
+        "meal_reminder_enabled",
+        "training_reminder_enabled",
+        "supplement_reminder_enabled",
+        "daily_summary_enabled",
+    ),
+    "training_reminders": ("enabled",),
+    "supplement_reminders": ("enabled",),
+}
+
+
+def ddl_type_and_default(table_name, name, sql_type, default, is_sqlite):
+    """Вернуть (SQL-тип, DEFAULT) для ALTER TABLE ADD COLUMN под текущую СУБД.
+
+    Вынесено отдельной функцией, чтобы соответствие «тип в миграции ↔ тип в
+    модели» можно было проверять тестом без живой БД (см. проверку схемы).
+
+    Правила:
+      * DATETIME -> TIMESTAMP на всех СУБД, кроме SQLite;
+      * булевы колонки (_BOOLEAN_COLUMNS) -> BOOLEAN, а DEFAULT '0'/'1' ->
+        FALSE/TRUE, иначе PostgreSQL отвергает вставку настоящих bool из ORM.
+    """
+    col_type = sql_type if is_sqlite else {"DATETIME": "TIMESTAMP"}.get(
+        sql_type.upper(), sql_type
+    )
+
+    if name in _BOOLEAN_COLUMNS.get(table_name, ()) and not is_sqlite:
+        col_type = "BOOLEAN"
+        if default is not None:
+            default = "FALSE" if str(default).strip().strip("'") == "0" else "TRUE"
+
+    return col_type, default
+
+
+def _repair_boolean_columns():
+    """Починить тип boolean-колонок в существующей PostgreSQL-базе.
+
+    ЗАЧЕМ: ранние миграции добавляли булевы поля как INTEGER (переносимый вариант
+    для SQLite). На PostgreSQL это делает таблицу непригодной для вставки — новые
+    пользователи не регистрируются вообще. Здесь мы находим такие колонки через
+    information_schema и переводим их в boolean БЕЗ ПОТЕРИ ДАННЫХ (0→false, 1→true).
+
+    Идемпотентно: уже корректные колонки пропускаются. На SQLite не делает ничего
+    (там ALTER COLUMN TYPE не поддерживается и не нужен).
+    """
+    if engine.dialect.name == "sqlite":
+        return
+
+    for table, columns in _BOOLEAN_COLUMNS.items():
+        try:
+            inspector = inspect(engine)
+            if table not in inspector.get_table_names():
+                continue
+            actual = {c["name"]: str(c["type"]).upper() for c in inspector.get_columns(table)}
+        except Exception as exc:  # noqa: BLE001 — починка не должна валить старт
+            logger.warning("_repair_boolean_columns: не удалось прочитать %s: %s", table, exc)
+            continue
+
+        for col in columns:
+            cur = actual.get(col)
+            # Колонки нет или она уже boolean — ничего не делаем.
+            if cur is None or "BOOL" in cur:
+                continue
+            try:
+                with engine.begin() as conn:
+                    # DEFAULT снимаем: старый default ('0') несовместим с boolean.
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN {col} DROP DEFAULT"
+                    ))
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BOOLEAN "
+                        f"USING ({col} <> 0)"
+                    ))
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN {col} SET DEFAULT FALSE"
+                    ))
+                logger.warning(
+                    "МИГРАЦИЯ: %s.%s переведена из %s в BOOLEAN (данные сохранены)",
+                    table, col, cur,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Не удалось починить тип %s.%s (%s): %s", table, col, cur, exc
+                )
 
 
 def run_migrations():
@@ -224,3 +320,7 @@ def init_db():
 
     # Добавляем новые колонки в существующую таблицу users (идемпотентно).
     run_migrations()
+
+    # Чиним типы булевых колонок, добавленных ранними миграциями как INTEGER.
+    # Без этого на PostgreSQL не создаётся НИ ОДИН новый пользователь.
+    _repair_boolean_columns()
