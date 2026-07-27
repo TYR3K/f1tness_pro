@@ -301,11 +301,19 @@ def health(db: Session = Depends(get_db)) -> dict:
 
     # Сообщаем, к какой БД реально подключены: тихий фолбэк на файловый SQLite
     # в облаке означает потерю данных при каждом деплое — это должно быть видно.
-    from backend.database import engine as _engine, IS_EPHEMERAL_SQLITE
+    from backend import database as _db
 
-    out = {"status": "ok", "db": _engine.url.get_backend_name()}
-    if IS_EPHEMERAL_SQLITE:
+    out = {"status": "ok", "db": _db.engine.url.get_backend_name()}
+    if _db.IS_EPHEMERAL_SQLITE:
         out["warning"] = "DATABASE_URL не задан — используется эфемерный SQLite"
+    # Схема не в порядке = регистрация новых пользователей может не работать.
+    # Отдаём 503, чтобы деплой не считался успешным при мёртвой регистрации.
+    if _db.SCHEMA_ISSUES:
+        logger.error("health: проблемы схемы БД: %s", _db.SCHEMA_ISSUES)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "schema mismatch", "issues": _db.SCHEMA_ISSUES},
+        )
     return out
 
 
@@ -1230,6 +1238,13 @@ def supplement_delete(
     if supp is None or supp.telegram_id != user.telegram_id:
         # Чужую или несуществующую запись прячем за 404.
         raise HTTPException(status_code=404, detail="Добавка не найдена")
+
+    # Сначала снимаем ссылки из напоминаний: на PostgreSQL внешний ключ
+    # supplement_reminder_items.supplement_id иначе даст ForeignKeyViolation
+    # (на SQLite ограничения по умолчанию не проверяются, поэтому баг был незаметен).
+    db.query(SupplementReminderItem).filter(
+        SupplementReminderItem.supplement_id == supplement_id
+    ).delete(synchronize_session=False)
 
     db.delete(supp)
     db.commit()

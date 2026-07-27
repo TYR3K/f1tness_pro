@@ -10,3 +10,6 @@ venv/
 .claude/launch.json
 
 progress_photos/
+
+# Временные/пробные файлы БД
+*.db

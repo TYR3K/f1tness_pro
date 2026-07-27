@@ -490,9 +490,19 @@ def _touch_user(db, from_user: dict) -> None:
         user = db.query(User).filter(User.telegram_id == tid).first()
         created = False
         if user is None:
-            user = User(telegram_id=tid)
-            db.add(user)
-            created = True
+            # Гонка «бот + приложение одновременно» на PostgreSQL даёт
+            # UniqueViolation: при конфликте перечитываем созданную запись.
+            candidate = User(telegram_id=tid)
+            db.add(candidate)
+            try:
+                db.flush()
+                user = candidate
+                created = True
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                user = db.query(User).filter(User.telegram_id == tid).first()
+                if user is None:
+                    raise
 
         # Профильные поля обновляем, только если Telegram их прислал.
         if uname:

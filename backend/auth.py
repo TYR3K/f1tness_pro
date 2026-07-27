@@ -129,15 +129,28 @@ def _upsert_user(
     пользователь мог сменить его вручную (через /profile).
     """
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
+
     if user is None:
-        # Новый пользователь — создаём запись.
-        user = User(
+        # Новый пользователь — создаём запись. Между SELECT и INSERT возможна
+        # гонка (бот и мини-приложение могут обрабатывать человека одновременно):
+        # на PostgreSQL это даёт UniqueViolation и 500 у НОВОГО пользователя.
+        # При конфликте откатываемся и перечитываем уже созданную запись.
+        candidate = User(
             telegram_id=telegram_id,
             username=username,
             first_name=first_name,
             photo_url=photo_url,
         )
-        db.add(user)
+        db.add(candidate)
+        try:
+            db.flush()
+            user = candidate
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            user = db.query(User).filter(User.telegram_id == telegram_id).first()
+            if user is None:
+                raise  # это не гонка, а настоящая ошибка вставки
+
     else:
         # Существующий пользователь — освежаем данные из Telegram, но ТОЛЬКО те,
         # что Telegram реально прислал. Безусловное присваивание затирало

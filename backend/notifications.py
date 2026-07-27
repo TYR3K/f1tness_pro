@@ -117,6 +117,21 @@ APP_TZ = _resolve_tz()
 # --------------------------------------------------------------------------- #
 #  Локализация текстов уведомлений (RU / EN)
 # --------------------------------------------------------------------------- #
+def _safe_rollback(db) -> None:
+    """Откатить сессию после сбоя запроса, не поднимая новых исключений.
+
+    КРИТИЧНО для PostgreSQL: там любая ошибка внутри транзакции переводит её в
+    состояние aborted, и ВСЕ последующие запросы падают с InFailedSqlTransaction
+    до отката. Без этого сбой безобидного чтения ломал последующий _mark_sent —
+    факт отправки не записывался, и уведомление уходило заново каждую минуту.
+    На SQLite вреда нет.
+    """
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _norm_lang(lang) -> str:
     """Нормализовать язык пользователя к "ru" или "en" (по умолчанию "ru").
 
@@ -145,6 +160,7 @@ def _user_language(db, tid: int) -> str:
             return _norm_lang(getattr(user, "language", None))
     except Exception as exc:
         logger.warning("_user_language: ошибка получения языка tid=%s: %s", tid, exc)
+        _safe_rollback(db)
     return "ru"
 
 
@@ -376,6 +392,7 @@ def _was_sent(db, tid: int, kind: str, date: str) -> bool:
     except Exception as exc:
         # При сбое запроса считаем «не отправлено», но защищаемся от дублей выше.
         logger.warning("_was_sent: ошибка запроса (%s) tid=%s kind=%s", exc, tid, kind)
+        _safe_rollback(db)
         return False
 
 
@@ -485,6 +502,7 @@ def _has_diary_entry(db, tid: int, date: str, meal_type: str) -> bool:
         )
     except Exception as exc:
         logger.warning("_has_diary_entry: ошибка запроса (%s) tid=%s", exc, tid)
+        _safe_rollback(db)
         # При сбое лучше НЕ слать напоминание (считаем, что запись есть).
         return True
 
@@ -529,6 +547,7 @@ def _current_streak(db, tid: int, today: str) -> int:
             .all()
         )
     except Exception:
+        _safe_rollback(db)
         return 0
     dates = {r[0] for r in rows if r[0]}
     try:
@@ -835,6 +854,7 @@ def _collect_week_short_stats(db, tid: int, today: str) -> dict:
             stats["avg_calories"] = int(round(sum(per_day.values()) / len(per_day)))
     except Exception as exc:
         logger.warning("_collect_week_short_stats: ошибка калорий (%s) tid=%s", exc, tid)
+        _safe_rollback(db)
 
     # --- Изменение веса (последний − первый замер за период) --------------- #
     try:
@@ -855,6 +875,7 @@ def _collect_week_short_stats(db, tid: int, today: str) -> dict:
             )
     except Exception as exc:
         logger.warning("_collect_week_short_stats: ошибка веса (%s) tid=%s", exc, tid)
+        _safe_rollback(db)
 
     # --- Количество тренировок -------------------------------------------- #
     try:
@@ -870,6 +891,7 @@ def _collect_week_short_stats(db, tid: int, today: str) -> dict:
         stats["workouts_count"] = int(workouts_count or 0)
     except Exception as exc:
         logger.warning("_collect_week_short_stats: ошибка тренировок (%s) tid=%s", exc, tid)
+        _safe_rollback(db)
 
     return stats
 

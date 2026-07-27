@@ -12,7 +12,10 @@
 import logging
 import os
 
+import time
+
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import types as sa_types
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -146,18 +149,42 @@ def _migrate_table(table_name, new_columns):
 # «column ... is of type integer but expression is of type boolean» — падает
 # ЛЮБОЙ INSERT в таблицу (то есть регистрация новых пользователей).
 # На SQLite типизация нестрогая, поэтому проблема там невидима.
-_BOOLEAN_COLUMNS = {
-    "users": ("is_owner", "adaptive_enabled", "used_trial"),
-    "supplements": ("reminder_enabled",),
-    "notification_settings": (
-        "meal_reminder_enabled",
-        "training_reminder_enabled",
-        "supplement_reminder_enabled",
-        "daily_summary_enabled",
-    ),
-    "training_reminders": ("enabled",),
-    "supplement_reminders": ("enabled",),
-}
+# Результат последней проверки схемы при старте. Пустой список = всё в порядке.
+# Наполняется в init_db и отдаётся в /api/health, чтобы поломка схемы не была
+# невидимой при «зелёном» деплое.
+SCHEMA_ISSUES: list = []
+
+
+def _boolean_columns():
+    """{таблица: (булевы колонки, ...)} — ВЫВОДИТСЯ ИЗ МОДЕЛЕЙ.
+
+    Раньше здесь был список, поддерживаемый руками. Именно расхождение такого
+    списка с моделями и порождает описанный выше класс ошибок, поэтому единый
+    источник правды — сами модели: забыть новую Boolean-колонку невозможно.
+    """
+    from backend import models  # noqa: F401 — импорт заполняет Base.metadata
+
+    return {
+        t.name: tuple(c.name for c in t.columns if isinstance(c.type, sa_types.Boolean))
+        for t in Base.metadata.sorted_tables
+        if any(isinstance(c.type, sa_types.Boolean) for c in t.columns)
+    }
+
+
+def _bool_default_sql(table_name, col_name):
+    """DEFAULT для булевой колонки, взятый из модели (а не захардкоженный).
+
+    Важно: у training_reminders.enabled и supplement_reminders.enabled в модели
+    default=True — ставить им FALSE значило бы тихо испортить поведение.
+    """
+    try:
+        col = Base.metadata.tables[table_name].c[col_name]
+    except Exception:  # noqa: BLE001
+        return None
+    d = col.default
+    if d is None or not getattr(d, "is_scalar", False) or not isinstance(d.arg, bool):
+        return None
+    return "TRUE" if d.arg else "FALSE"
 
 
 def ddl_type_and_default(table_name, name, sql_type, default, is_sqlite):
@@ -175,64 +202,100 @@ def ddl_type_and_default(table_name, name, sql_type, default, is_sqlite):
         sql_type.upper(), sql_type
     )
 
-    if name in _BOOLEAN_COLUMNS.get(table_name, ()) and not is_sqlite:
+    if not is_sqlite and name in _boolean_columns().get(table_name, ()):
         col_type = "BOOLEAN"
         if default is not None:
-            default = "FALSE" if str(default).strip().strip("'") == "0" else "TRUE"
+            # DEFAULT берём из модели; если его там нет — трактуем '0' как FALSE.
+            default = _bool_default_sql(table_name, name) or (
+                "FALSE" if str(default).strip().strip("'") == "0" else "TRUE"
+            )
 
     return col_type, default
 
 
-def _repair_boolean_columns():
+def _repair_boolean_columns(attempts: int = 3, pause: float = 2.0) -> list:
     """Починить тип boolean-колонок в существующей PostgreSQL-базе.
 
     ЗАЧЕМ: ранние миграции добавляли булевы поля как INTEGER (переносимый вариант
     для SQLite). На PostgreSQL это делает таблицу непригодной для вставки — новые
-    пользователи не регистрируются вообще. Здесь мы находим такие колонки через
-    information_schema и переводим их в boolean БЕЗ ПОТЕРИ ДАННЫХ (0→false, 1→true).
+    пользователи не регистрируются вообще. Здесь мы находим такие колонки и
+    переводим их в boolean БЕЗ ПОТЕРИ ДАННЫХ (0→false, ненулевое→true).
 
-    Идемпотентно: уже корректные колонки пропускаются. На SQLite не делает ничего
-    (там ALTER COLUMN TYPE не поддерживается и не нужен).
+    Идемпотентно: уже корректные колонки пропускаются. На SQLite — ничего не
+    делает (там ALTER COLUMN TYPE не поддерживается и не нужен).
+
+    Возвращает список НЕпочиненных колонок (пустой список = успех).
     """
     if engine.dialect.name == "sqlite":
-        return
+        return []
 
-    for table, columns in _BOOLEAN_COLUMNS.items():
+    failed = []
+    for table, columns in _boolean_columns().items():
         try:
             inspector = inspect(engine)
             if table not in inspector.get_table_names():
                 continue
-            actual = {c["name"]: str(c["type"]).upper() for c in inspector.get_columns(table)}
+            actual = {c["name"]: c["type"] for c in inspector.get_columns(table)}
         except Exception as exc:  # noqa: BLE001 — починка не должна валить старт
-            logger.warning("_repair_boolean_columns: не удалось прочитать %s: %s", table, exc)
+            failed.append(f"{table}: не удалось прочитать схему ({exc})")
             continue
 
         for col in columns:
             cur = actual.get(col)
-            # Колонки нет или она уже boolean — ничего не делаем.
-            if cur is None or "BOOL" in cur:
+            if cur is None:
+                # Колонки нет вовсе — это провалившийся ALTER, чинится миграцией.
+                failed.append(f"{table}.{col}: КОЛОНКИ НЕТ")
                 continue
-            try:
-                with engine.begin() as conn:
-                    # DEFAULT снимаем: старый default ('0') несовместим с boolean.
-                    conn.execute(text(
-                        f"ALTER TABLE {table} ALTER COLUMN {col} DROP DEFAULT"
-                    ))
-                    conn.execute(text(
-                        f"ALTER TABLE {table} ALTER COLUMN {col} TYPE BOOLEAN "
-                        f"USING ({col} <> 0)"
-                    ))
-                    conn.execute(text(
-                        f"ALTER TABLE {table} ALTER COLUMN {col} SET DEFAULT FALSE"
-                    ))
-                logger.warning(
-                    "МИГРАЦИЯ: %s.%s переведена из %s в BOOLEAN (данные сохранены)",
-                    table, col, cur,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "Не удалось починить тип %s.%s (%s): %s", table, col, cur, exc
-                )
+            if isinstance(cur, sa_types.Boolean):
+                continue  # уже boolean — идемпотентный выход
+            if not isinstance(cur, (sa_types.Integer, sa_types.Numeric)):
+                failed.append(f"{table}.{col}: неожиданный тип {cur}")
+                continue
+
+            # DEFAULT берём из модели: у части напоминаний он True, и слепой
+            # FALSE тихо изменил бы поведение.
+            default_sql = _bool_default_sql(table, col)
+
+            for attempt in range(1, attempts + 1):
+                try:
+                    with engine.begin() as conn:
+                        # ALTER ... TYPE берёт ACCESS EXCLUSIVE. Без lock_timeout
+                        # он будет ждать вечно, а очередь блокировок в PostgreSQL
+                        # FIFO — то есть сам ALTER заблокирует всю таблицу.
+                        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                        conn.execute(text("SET LOCAL statement_timeout = '60s'"))
+                        # Порядок обязателен: старый DEFAULT 0 несовместим с
+                        # boolean и уронил бы смену типа.
+                        conn.execute(text(
+                            f'ALTER TABLE "{table}" ALTER COLUMN "{col}" DROP DEFAULT'
+                        ))
+                        conn.execute(text(
+                            f'ALTER TABLE "{table}" ALTER COLUMN "{col}" '
+                            f'TYPE BOOLEAN USING ("{col}" <> 0)'
+                        ))
+                        if default_sql is not None:
+                            conn.execute(text(
+                                f'ALTER TABLE "{table}" ALTER COLUMN "{col}" '
+                                f'SET DEFAULT {default_sql}'
+                            ))
+                    logger.warning(
+                        "МИГРАЦИЯ: %s.%s переведена из %s в BOOLEAN (данные сохранены)",
+                        table, col, cur,
+                    )
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    if attempt == attempts:
+                        failed.append(f"{table}.{col} ({cur}): {exc}")
+                        logger.error(
+                            "Не удалось починить тип %s.%s (%s): %s", table, col, cur, exc
+                        )
+                    else:
+                        # Окно обычно освобождается после гашения старого инстанса.
+                        logger.warning(
+                            "Починка %s.%s, попытка %d/%d: %s", table, col, attempt, attempts, exc
+                        )
+                        time.sleep(pause)
+    return failed
 
 
 def run_migrations():
@@ -323,4 +386,11 @@ def init_db():
 
     # Чиним типы булевых колонок, добавленных ранними миграциями как INTEGER.
     # Без этого на PostgreSQL не создаётся НИ ОДИН новый пользователь.
-    _repair_boolean_columns()
+    global SCHEMA_ISSUES
+    SCHEMA_ISSUES = _repair_boolean_columns()
+    if SCHEMA_ISSUES:
+        # Молчаливый провал здесь = «деплой зелёный, а регистрация мертва».
+        logger.error("=" * 70)
+        logger.error("!!! СХЕМА БД НЕ В ПОРЯДКЕ: %s", "; ".join(SCHEMA_ISSUES))
+        logger.error("!!! Регистрация новых пользователей может не работать.")
+        logger.error("=" * 70)
