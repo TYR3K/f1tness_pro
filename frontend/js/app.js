@@ -95,7 +95,7 @@
       var tab = tabs[i];
       var page = tab.getAttribute("data-page");
       if (!page || !map.hasOwnProperty(page)) {
-        continue; // например, центральная кнопка-камера (scan) — без подписи
+        continue; // вкладка без локализуемой подписи
       }
       var labelEl = tab.querySelector(".tab-label");
       if (labelEl) {
@@ -1189,22 +1189,9 @@
           if (!page) {
             return;
           }
-          // Повторный тап по УЖЕ активной центральной кнопке-камере (мы уже
-          // находимся на экране сканера) = СПУСК затвора, а не ре-навигация.
-          // Первое нажатие открывает сканер (живую камеру), второе — снимает.
-          if (page === "scan" && App._current === "scan") {
-            App.haptic("medium");
-            if (window.PageScan && typeof window.PageScan.capture === "function") {
-              try {
-                window.PageScan.capture();
-              } catch (e) {
-                // Сбой спуска не должен ломать навигацию — мягко игнорируем.
-                console.error("Ошибка спуска камеры (PageScan.capture)", e);
-              }
-            }
-            return;
-          }
-          // Обычная навигация: первое нажатие открывает целевую страницу.
+          // Навигация по вкладке. (Спуск затвора из таббара убран вместе с
+          // центральной кнопкой-камерой — снимок делается кнопкой на самом
+          // экране «Определение».)
           App.haptic("light");
           App.navigate(page);
         });
