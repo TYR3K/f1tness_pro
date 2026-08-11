@@ -1237,6 +1237,193 @@ def recommend_supplements(
 
 
 # --------------------------------------------------------------------------- #
+#  Советы по восстановлению после тренировок (ИИ)
+#
+#  БЕЗОПАСНОСТЬ — главный приоритет: модель НЕ ставит диагнозы, отличает обычную
+#  крепатуру от тревожных симптомов и обязана вернуть «красные флаги» — признаки,
+#  при которых нужно к врачу. Дисклеймер добавляется на уровне роута.
+# --------------------------------------------------------------------------- #
+
+# Допустимые зоны тела (языконезависимые ключи; подписи локализует фронт).
+RECOVERY_ZONES = (
+    "legs", "back", "shoulders", "arms", "chest", "core", "neck", "knees", "other",
+)
+
+# Человекочитаемые названия зон для промпта.
+_ZONE_NAMES_RU = {
+    "legs": "ноги", "back": "спина", "shoulders": "плечи", "arms": "руки",
+    "chest": "грудь", "core": "пресс/корпус", "neck": "шея", "knees": "колени",
+    "other": "другое",
+}
+_ZONE_NAMES_EN = {
+    "legs": "legs", "back": "back", "shoulders": "shoulders", "arms": "arms",
+    "chest": "chest", "core": "core/abs", "neck": "neck", "knees": "knees",
+    "other": "other",
+}
+
+RECOVERY_SYSTEM_PROMPT = (
+    "Ты — опытный тренер по физической подготовке и специалист по восстановлению. "
+    "Пользователь жалуется на дискомфорт в определённой зоне тела после тренировок. "
+    "Дай практичный совет по восстановлению.\n\n"
+    "КРИТИЧЕСКИ ВАЖНО ПО БЕЗОПАСНОСТИ:\n"
+    "- Ты НЕ ставишь диагноз и НЕ назначаешь лечение. Ты предполагаешь наиболее "
+    "вероятную причину и даёшь общие рекомендации по восстановлению.\n"
+    "- Чётко отличай обычную мышечную боль после нагрузки (крепатура, DOMS: "
+    "тупая, симметричная, появляется через 12-48 часов, проходит за 2-4 дня) "
+    "от ТРЕВОЖНЫХ признаков.\n"
+    "- Если в жалобе есть признаки травмы — ОБЯЗАТЕЛЬНО поставь их в red_flags и "
+    "прямо порекомендуй обратиться к врачу, а не «потерпеть».\n"
+    "- НЕ рекомендуй обезболивающие, рецептурные препараты и любые лекарства.\n"
+    "- Не запугивай: если это похоже на обычную крепатуру — так и скажи спокойно.\n\n"
+    "ТРЕВОЖНЫЕ ПРИЗНАКИ (при наличии — обязательно к врачу): резкая/острая боль; "
+    "боль во время самого движения, а не после; отёк, покраснение, местное "
+    "повышение температуры сустава; онемение, покалывание, «прострелы» в конечность; "
+    "щелчок/хруст в момент травмы; невозможность опереться на ногу или поднять "
+    "руку; боль, которая не проходит больше 7-10 дней или усиливается; "
+    "боль в груди, одышка, головокружение; боль в пояснице, отдающая в ногу.\n\n"
+    "Верни СТРОГО валидный JSON-объект (и НИЧЕГО кроме него) с полями:\n"
+    '  "likely_cause" — строка: наиболее вероятная причина простыми словами '
+    "(1-2 предложения);\n"
+    '  "is_typical_soreness" — true, если это похоже на обычную крепатуру, '
+    "false — если есть признаки, требующие осторожности;\n"
+    '  "today" — массив из 2-4 строк: что сделать СЕГОДНЯ (конкретные действия: '
+    "лёгкая активность, растяжка, тепло/холод, сон, вода, питание);\n"
+    '  "avoid" — массив из 2-3 строк: чего избегать в ближайшие дни;\n'
+    '  "training" — строка: когда и как возвращаться к нагрузке на эту зону '
+    "(например: «лёгкая нагрузка через 1-2 дня, полная — когда боль пройдёт»);\n"
+    '  "red_flags" — массив из 2-4 строк: при каких признаках обратиться к врачу.\n\n'
+    "Правила:\n"
+    "- Пиши по-русски, коротко и по делу, без воды и без медицинских терминов.\n"
+    "- Учитывай недавние тренировки пользователя, если они указаны.\n"
+    "- Каждый пункт — законченная короткая фраза (до 120 символов)."
+)
+
+RECOVERY_SYSTEM_PROMPT_EN = (
+    "You are an experienced strength coach and recovery specialist. The user "
+    "reports discomfort in a body area after training. Give practical recovery advice.\n\n"
+    "CRITICAL SAFETY RULES:\n"
+    "- You do NOT diagnose and do NOT prescribe treatment. You suggest the most "
+    "likely cause and give general recovery guidance.\n"
+    "- Clearly distinguish normal post-exercise muscle soreness (DOMS: dull, "
+    "symmetric, appears 12-48h later, resolves in 2-4 days) from WARNING signs.\n"
+    "- If the complaint shows signs of injury, you MUST list them in red_flags and "
+    "directly recommend seeing a doctor rather than pushing through.\n"
+    "- Do NOT recommend painkillers, prescription drugs or any medication.\n"
+    "- Do not scare the user: if it looks like ordinary soreness, say so calmly.\n\n"
+    "WARNING SIGNS (must see a doctor): sharp/acute pain; pain during the movement "
+    "itself rather than after; swelling, redness, local joint warmth; numbness, "
+    "tingling, shooting pain into a limb; a pop/click at the moment of injury; "
+    "inability to bear weight or raise the arm; pain lasting over 7-10 days or "
+    "worsening; chest pain, shortness of breath, dizziness; low-back pain radiating "
+    "into the leg.\n\n"
+    "Return STRICTLY a valid JSON object (and NOTHING else) with fields:\n"
+    '  "likely_cause" — string: the most likely cause in plain words (1-2 sentences);\n'
+    '  "is_typical_soreness" — true if this looks like ordinary soreness, false if '
+    "there are signs requiring caution;\n"
+    '  "today" — array of 2-4 strings: what to do TODAY (concrete actions);\n'
+    '  "avoid" — array of 2-3 strings: what to avoid in the coming days;\n'
+    '  "training" — string: when and how to return to loading this area;\n'
+    '  "red_flags" — array of 2-4 strings: signs that require seeing a doctor.\n\n'
+    "Rules:\n"
+    "- Write in English, short and practical, no fluff, no medical jargon.\n"
+    "- Take the user's recent workouts into account if provided.\n"
+    "- Each item is a short complete phrase (up to 120 characters)."
+)
+
+
+def recovery_advice(
+    zone: str,
+    complaint: str | None = None,
+    recent_workouts: list[str] | None = None,
+    lang: str = "ru",
+) -> dict:
+    """Совет по восстановлению для выбранной зоны тела.
+
+    Параметры:
+      * zone            — ключ зоны из RECOVERY_ZONES;
+      * complaint       — свободное описание жалобы (может отсутствовать);
+      * recent_workouts — краткие описания последних тренировок (для контекста);
+      * lang            — "ru" | "en" (язык значений; ключи JSON не меняются).
+
+    Возвращает словарь с ключами likely_cause, is_typical_soreness, today,
+    avoid, training, red_flags. При сбое ИИ выбрасывает AIError (502 на роуте).
+    НЕ является медицинской рекомендацией — дисклеймер добавляет роут.
+    """
+    lang = _normalize_lang(lang)
+    zone_key = zone if zone in RECOVERY_ZONES else "other"
+
+    if lang == "en":
+        parts = [f"Body area: {_ZONE_NAMES_EN[zone_key]}."]
+        if complaint and str(complaint).strip():
+            parts.append(f"The user describes: {str(complaint).strip()}")
+        else:
+            parts.append("No extra description — assume typical post-workout soreness.")
+        if recent_workouts:
+            clean = [str(w).strip() for w in recent_workouts if w and str(w).strip()]
+            if clean:
+                parts.append("Recent workouts: " + "; ".join(clean[:10]) + ".")
+        parts.append("Return the result strictly as JSON per the instructions.")
+    else:
+        parts = [f"Зона тела: {_ZONE_NAMES_RU[zone_key]}."]
+        if complaint and str(complaint).strip():
+            parts.append(f"Пользователь описывает так: {str(complaint).strip()}")
+        else:
+            parts.append("Дополнительного описания нет — считай типичной болью после нагрузки.")
+        if recent_workouts:
+            clean = [str(w).strip() for w in recent_workouts if w and str(w).strip()]
+            if clean:
+                parts.append("Недавние тренировки: " + "; ".join(clean[:10]) + ".")
+        parts.append("Верни результат строго в формате JSON по инструкции.")
+
+    system_prompt = _pick_prompt(
+        RECOVERY_SYSTEM_PROMPT, RECOVERY_SYSTEM_PROMPT_EN, lang
+    )
+    data, _debug = _run_text_completion(
+        system_prompt, "\n".join(parts), log_tag="recovery_advice"
+    )
+
+    def _str_list(key: str, limit: int) -> list[str]:
+        raw = data.get(key)
+        if not isinstance(raw, list):
+            return []
+        out = []
+        for x in raw:
+            if isinstance(x, str) and x.strip():
+                out.append(x.strip())
+            if len(out) >= limit:
+                break
+        return out
+
+    likely_cause = data.get("likely_cause")
+    if not isinstance(likely_cause, str):
+        likely_cause = ""
+    training = data.get("training")
+    if not isinstance(training, str):
+        training = ""
+
+    result = {
+        "zone": zone_key,
+        "likely_cause": likely_cause.strip(),
+        "is_typical_soreness": bool(data.get("is_typical_soreness")),
+        "today": _str_list("today", 4),
+        "avoid": _str_list("avoid", 3),
+        "training": training.strip(),
+        "red_flags": _str_list("red_flags", 4),
+    }
+
+    # Совет без единого практического пункта бесполезен — считаем это сбоем ИИ.
+    if not result["today"] and not result["likely_cause"]:
+        raise AIError(
+            "AI не вернул совет по восстановлению",
+            raw=_debug.get("raw", ""),
+            finish_reason=_debug.get("finish_reason"),
+            refusal=_debug.get("refusal"),
+        )
+
+    return result
+
+
+# --------------------------------------------------------------------------- #
 #  Голосовой ввод еды (Этап 2): распознавание речи (Whisper) + разбор текста
 # --------------------------------------------------------------------------- #
 

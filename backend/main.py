@@ -67,6 +67,7 @@ from backend.ai_service import (
     parse_food_text,
     recommend_meals,
     recommend_supplements,
+    recovery_advice,
     regenerate_meal_item,
     suggest_food,
     suggest_supplements,
@@ -128,6 +129,8 @@ from backend.schemas import (
     RecommendOut,
     RegenerateItemIn,
     RegenerateItemOut,
+    RecoveryAdviceIn,
+    RecoveryAdviceOut,
     ScansRemainingOut,
     StreakOut,
     StarsInvoiceIn,
@@ -1733,6 +1736,79 @@ def supplement_recommend(
         disclaimer="Не является медицинской рекомендацией, проконсультируйтесь со специалистом",
         training_count=training_count,
         improvement_goal=data.improvement_goal,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#  Восстановление после тренировок (ИИ)
+# --------------------------------------------------------------------------- #
+@app.post("/recovery/advice", response_model=RecoveryAdviceOut)
+def recovery_advice_route(
+    data: RecoveryAdviceIn,
+    user: User = Depends(subscription.require_premium),
+    db: Session = Depends(get_db),
+) -> RecoveryAdviceOut:
+    """Совет по восстановлению для выбранной зоны тела (премиум).
+
+    Учитываем последние тренировки пользователя (7 дней) как контекст.
+    НЕ является медицинской рекомендацией — дисклеймер отдаём в ответе,
+    фронт обязан его показывать.
+    """
+    # Контекст: тренировки за последнюю неделю (тип + длительность).
+    today = date_cls.today()
+    start_str = (today - timedelta(days=6)).isoformat()
+    recent = (
+        db.query(Workout)
+        .filter(
+            Workout.telegram_id == user.telegram_id,
+            Workout.date >= start_str,
+            Workout.date <= today.isoformat(),
+        )
+        .order_by(Workout.date.desc())
+        .limit(10)
+        .all()
+    )
+    recent_workouts = []
+    for w in recent:
+        label = (w.description or w.type or "").strip()
+        if not label:
+            continue
+        mins = w.duration_min or 0
+        recent_workouts.append(f"{w.date}: {label}" + (f", {mins} мин" if mins else ""))
+
+    try:
+        ratelimit.enforce_ai(user.telegram_id)
+        result = recovery_advice(
+            zone=data.zone,
+            complaint=data.complaint,
+            recent_workouts=recent_workouts,
+            lang=user.language or "ru",
+        )
+    except AIError as exc:
+        logger.warning(
+            "recovery/advice: %s | finish=%s raw=%s",
+            exc, exc.finish_reason, (exc.raw or "")[:600],
+        )
+        detail = "Не удалось получить совет по восстановлению. Попробуйте позже."
+        if DEBUG_AI:
+            detail = f"{exc} | finish={exc.finish_reason} | raw={(exc.raw or 'пусто')[:1500]}"
+        raise HTTPException(status_code=502, detail=detail)
+    except RuntimeError as exc:
+        logger.warning("recovery/advice: %s", exc)
+        detail = "Сервис советов временно недоступен. Попробуйте позже."
+        if DEBUG_AI:
+            detail = str(exc)
+        raise HTTPException(status_code=502, detail=detail)
+
+    return RecoveryAdviceOut(
+        zone=result["zone"],
+        likely_cause=result["likely_cause"],
+        is_typical_soreness=result["is_typical_soreness"],
+        today=result["today"],
+        avoid=result["avoid"],
+        training=result["training"],
+        red_flags=result["red_flags"],
+        disclaimer="Не является медицинской рекомендацией, проконсультируйтесь со специалистом",
     )
 
 

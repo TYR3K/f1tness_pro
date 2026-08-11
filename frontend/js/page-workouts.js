@@ -441,10 +441,207 @@
       // Список тренировок за выбранную дату.
       '<div id="wkList" class="wk-list"></div>' +
 
+      // Раздел «Восстановление» (AI-советы, премиум).
+      recoveryCardHtml() +
+
       // Раздел «Напоминания о тренировке».
       reminderCardHtml() +
       "</section>"
     );
+  }
+
+  /* =====================================================================
+   *  ВОССТАНОВЛЕНИЕ ПОСЛЕ ТРЕНИРОВОК (AI, премиум)
+   *  Пользователь выбирает зону тела и (необязательно) описывает жалобу.
+   *  Ответ — вероятная причина, что делать сегодня, чего избегать, когда
+   *  возвращаться к нагрузке и «красные флаги» + обязательный дисклеймер.
+   * ===================================================================== */
+
+  // Зоны тела: канонический ключ (уходит на бэкенд) + иконка + подписи RU/EN.
+  var RECOVERY_ZONES = [
+    { key: "legs", icon: "🦵", ru: "Ноги", en: "Legs" },
+    { key: "back", icon: "🔙", ru: "Спина", en: "Back" },
+    { key: "shoulders", icon: "🤷", ru: "Плечи", en: "Shoulders" },
+    { key: "arms", icon: "💪", ru: "Руки", en: "Arms" },
+    { key: "chest", icon: "🫁", ru: "Грудь", en: "Chest" },
+    { key: "core", icon: "🧍", ru: "Пресс", en: "Core" },
+    { key: "neck", icon: "🧠", ru: "Шея", en: "Neck" },
+    { key: "knees", icon: "🦿", ru: "Колени", en: "Knees" }
+  ];
+
+  /**
+   * Разметка карточки «Восстановление» (контейнер тела наполняется отдельно).
+   */
+  function recoveryCardHtml() {
+    return (
+      '<section class="card rec-card">' +
+      '<h2 class="rec-card__title">' +
+      esc(pick("🧊 Восстановление", "🧊 Recovery")) +
+      "</h2>" +
+      '<div id="recBody" class="rec-body"></div>' +
+      "</section>"
+    );
+  }
+
+  /**
+   * Рисует тело карточки: выбор зоны, поле описания и кнопка запроса совета.
+   * Отдельный paywall тут не нужен — вся страница «Тренировки» уже закрыта
+   * премиумом через App.requirePremium в onShow.
+   */
+  function renderRecovery() {
+    var box = document.getElementById("recBody");
+    if (!box) return;
+
+    var chips = "";
+    for (var i = 0; i < RECOVERY_ZONES.length; i++) {
+      var z = RECOVERY_ZONES[i];
+      chips +=
+        '<button type="button" class="rec-zone" data-zone="' + z.key + '">' +
+        '<span class="rec-zone__icon" aria-hidden="true">' + z.icon + "</span>" +
+        '<span class="rec-zone__label">' + esc(pick(z.ru, z.en)) + "</span>" +
+        "</button>";
+    }
+
+    box.innerHTML =
+      '<p class="rec-hint">' +
+      esc(pick("Что беспокоит после тренировки?", "What bothers you after training?")) +
+      "</p>" +
+      '<div class="rec-zones">' + chips + "</div>" +
+      '<label class="field rec-field">' +
+      '<span class="field__label">' +
+      esc(pick("Подробнее", "More details")) +
+      ' <span class="field__hint">' + esc(pick("(необязательно)", "(optional)")) + "</span></span>" +
+      '<input class="field__input rec-complaint" type="text" maxlength="200" ' +
+      'placeholder="' + esc(pick(
+        "например, тянет заднюю поверхность после становой",
+        "e.g. hamstrings feel tight after deadlifts"
+      )) + '">' +
+      "</label>" +
+      '<button type="button" class="btn btn--cta btn-block rec-go" disabled>' +
+      esc(pick("Получить совет", "Get advice")) +
+      "</button>" +
+      '<div id="recResult" class="rec-result"></div>';
+
+    var selected = null;
+    var goBtn = box.querySelector(".rec-go");
+
+    var zonesWrap = box.querySelector(".rec-zones");
+    zonesWrap.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".rec-zone");
+      if (!btn) return;
+      selected = btn.getAttribute("data-zone");
+      App.haptic && App.haptic("light");
+      var all = zonesWrap.querySelectorAll(".rec-zone");
+      for (var i = 0; i < all.length; i++) {
+        all[i].classList.toggle("is-active", all[i].getAttribute("data-zone") === selected);
+      }
+      if (goBtn) goBtn.disabled = false;
+    });
+
+    if (goBtn) {
+      goBtn.addEventListener("click", function () {
+        if (!selected) return;
+        var input = box.querySelector(".rec-complaint");
+        requestRecovery(selected, input ? input.value : "", goBtn);
+      });
+    }
+  }
+
+  /**
+   * Запрашивает совет по восстановлению и рисует результат.
+   */
+  function requestRecovery(zone, complaint, btn) {
+    var out = document.getElementById("recResult");
+    if (!(App.api && typeof App.api.getRecoveryAdvice === "function")) return;
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = pick("Думаем…", "Thinking…");
+    }
+    if (out) {
+      out.innerHTML = '<div class="skeleton skeleton--block"></div>';
+    }
+    App.haptic && App.haptic("light");
+
+    App.api
+      .getRecoveryAdvice({ zone: zone, complaint: (complaint || "").trim() || null })
+      .then(function (res) {
+        App.haptic && App.haptic("success");
+        renderRecoveryResult(res);
+      })
+      .catch(function (err) {
+        App.haptic && App.haptic("error");
+        if (out) {
+          out.innerHTML =
+            '<p class="rec-error">' +
+            esc((err && err.message) || pick("Не удалось получить совет", "Failed to get advice")) +
+            "</p>";
+        }
+      })
+      .then(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = pick("Получить совет", "Get advice");
+        }
+      });
+  }
+
+  /**
+   * Отрисовка совета. «Красные флаги» выделены отдельным блоком —
+   * это самая важная часть для безопасности пользователя.
+   */
+  function renderRecoveryResult(res) {
+    var out = document.getElementById("recResult");
+    if (!out || !res) return;
+
+    function listHtml(title, items, cls) {
+      if (!items || !items.length) return "";
+      var li = "";
+      for (var i = 0; i < items.length; i++) {
+        li += "<li>" + esc(items[i]) + "</li>";
+      }
+      return (
+        '<div class="rec-block ' + cls + '">' +
+        '<div class="rec-block__title">' + esc(title) + "</div>" +
+        "<ul>" + li + "</ul>" +
+        "</div>"
+      );
+    }
+
+    // Бейдж: обычная крепатура или требует осторожности.
+    var badge = res.is_typical_soreness
+      ? '<span class="rec-badge rec-badge--ok">' +
+        esc(pick("Похоже на обычную крепатуру", "Looks like ordinary soreness")) + "</span>"
+      : '<span class="rec-badge rec-badge--warn">' +
+        esc(pick("Требует осторожности", "Needs caution")) + "</span>";
+
+    out.innerHTML =
+      '<div class="rec-answer">' +
+      badge +
+      (res.likely_cause
+        ? '<p class="rec-cause">' + esc(res.likely_cause) + "</p>"
+        : "") +
+      listHtml(pick("Сегодня", "Today"), res.today, "rec-block--today") +
+      listHtml(pick("Избегать", "Avoid"), res.avoid, "rec-block--avoid") +
+      (res.training
+        ? '<div class="rec-block rec-block--training">' +
+          '<div class="rec-block__title">' + esc(pick("Когда тренироваться", "When to train")) + "</div>" +
+          "<p>" + esc(res.training) + "</p></div>"
+        : "") +
+      listHtml(pick("⚠️ К врачу, если", "⚠️ See a doctor if"), res.red_flags, "rec-block--flags") +
+      '<p class="rec-disclaimer">' +
+      esc(res.disclaimer || pick(
+        "Не является медицинской рекомендацией, проконсультируйтесь со специалистом",
+        "This is not medical advice, consult a specialist"
+      )) +
+      "</p>" +
+      "</div>";
+
+    try {
+      out.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (e) {
+      /* не критично */
+    }
   }
 
   /* =====================================================================
@@ -1155,6 +1352,9 @@
 
       // Изначально дата = сегодня, поэтому сразу блокируем стрелку «вперёд».
       updateDateLabel();
+
+      // Карточка «Восстановление» (AI-советы) — статичная разметка, без запроса.
+      renderRecovery();
 
       // Параллельно загружаем оба раздела.
       loadWorkouts();

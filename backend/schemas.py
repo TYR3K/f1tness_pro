@@ -173,6 +173,26 @@ class HistoryOut(BaseModel):
     days: List[HistoryDay] = []
 
 
+class RecoveryAdviceIn(BaseModel):
+    """Запрос совета по восстановлению: зона тела + необязательное описание."""
+
+    zone: str                                # legs|back|shoulders|arms|chest|core|neck|knees|other
+    complaint: Optional[str] = None          # свободный текст жалобы
+
+
+class RecoveryAdviceOut(BaseModel):
+    """Совет по восстановлению. НЕ является медицинской рекомендацией."""
+
+    zone: str
+    likely_cause: str = ""
+    is_typical_soreness: bool = False
+    today: List[str] = []                    # что сделать сегодня
+    avoid: List[str] = []                    # чего избегать
+    training: str = ""                       # когда возвращаться к нагрузке
+    red_flags: List[str] = []                # когда обратиться к врачу
+    disclaimer: str = ""
+
+
 class StreakOut(BaseModel):
     """Серия дней подряд с записями в дневнике («стрик»)."""
 

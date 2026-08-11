@@ -395,6 +395,13 @@
       return request("/workout/estimate", { method: "POST", body: payload });
     },
 
+    // Совет по восстановлению (ПРЕМИУМ). Тело: {zone, complaint|null}.
+    // Ответ: {zone, likely_cause, is_typical_soreness, today[], avoid[],
+    //         training, red_flags[], disclaimer}.
+    getRecoveryAdvice: function (payload) {
+      return request("/recovery/advice", { method: "POST", body: payload });
+    },
+
     /* -------------------------------------------------------------------
      *  ЕДА (ручной ввод, недавнее, рекомендации)
      * ------------------------------------------------------------------- */

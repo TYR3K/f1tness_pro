@@ -7969,3 +7969,123 @@ select.onb-field__input {
 .diary-entry__del {
   cursor: pointer;
 }
+
+/* ============================================================
+   ВОССТАНОВЛЕНИЕ ПОСЛЕ ТРЕНИРОВОК (карточка .rec-card)
+   ============================================================ */
+.rec-card__title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.rec-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Сетка зон тела: авто-заполнение, чтобы влезало и на узких экранах. */
+.rec-zones {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.rec-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 2px;
+  border: 1.5px solid var(--accent);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease, transform .1s ease;
+}
+
+.rec-zone:active { transform: scale(.96); }
+
+.rec-zone.is-active {
+  background: var(--cta);
+  border-color: var(--cta);
+  color: var(--white);
+}
+
+.rec-zone__icon { font-size: 18px; line-height: 1; }
+.rec-zone__label { font-size: 11px; font-weight: 600; }
+
+.rec-field { margin-bottom: 12px; }
+
+/* --- Результат совета --- */
+.rec-answer { margin-top: 14px; }
+
+.rec-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.rec-badge--ok { background: rgba(125, 155, 118, .18); color: var(--cta); }
+.rec-badge--warn { background: rgba(224, 122, 95, .18); color: #B4573C; }
+
+.rec-cause {
+  margin: 10px 0 4px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.rec-block { margin-top: 12px; }
+
+.rec-block__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.rec-block ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.rec-block li,
+.rec-block p {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  margin: 2px 0;
+}
+
+/* «Красные флаги» — визуально отделены: это про безопасность. */
+.rec-block--flags {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1.5px solid var(--danger);
+  background: rgba(194, 102, 77, .07);
+}
+.rec-block--flags .rec-block__title { color: var(--danger); }
+
+.rec-disclaimer {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.rec-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+@media (max-width: 360px) {
+  .rec-zones { grid-template-columns: repeat(3, 1fr); }
+}
