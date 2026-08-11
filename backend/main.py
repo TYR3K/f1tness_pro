@@ -1288,6 +1288,8 @@ def supplement_suggest(
             name=s["name"],
             dosage=s["dosage"],
             note=s["note"],
+            # Ссылка «Купить» собирается на бэкенде (партнёрские параметры — в env).
+            buy_url=config.market_search_url(s["name"]),
         )
         for s in result.get("suggestions", [])
     ]
@@ -1728,6 +1730,8 @@ def supplement_recommend(
             name=s["name"],
             dosage=s["dosage"],
             note=s["note"],
+            # Ссылка «Купить» собирается на бэкенде (партнёрские параметры — в env).
+            buy_url=config.market_search_url(s["name"]),
         )
         for s in result.get("suggestions", [])
     ]

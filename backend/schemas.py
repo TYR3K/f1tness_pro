@@ -408,6 +408,10 @@ class SupplementSuggestItem(BaseModel):
     name: str
     dosage: str
     note: str
+    # Ссылка «Купить» на маркетплейс по названию добавки (собирается на бэкенде,
+    # чтобы партнёрские параметры не были зашиты во фронт). None — если магазин
+    # не настроен.
+    buy_url: Optional[str] = None
 
 
 class SupplementSuggestOut(BaseModel):

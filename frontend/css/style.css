@@ -8089,3 +8089,32 @@ select.onb-field__input {
 @media (max-width: 360px) {
   .rec-zones { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* Кнопки под карточкой AI-совета по добавке: «Заполнить форму» + «Купить». */
+.sup-ai-suggest__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sup-ai-suggest__actions .btn {
+  flex: 1 1 0;
+  min-height: 42px;
+  font-size: 14px;
+  padding: 0 10px;
+}
+
+/* «Купить» — ссылка, но выглядит как кнопка (наследует .btn .btn-ghost). */
+.sup-ai-suggest__buy {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+/* Обязательная оговорка про БАД — тише основного дисклеймера. */
+.sup-ai-disclaimer--bad {
+  opacity: .85;
+}
+
+@media (max-width: 360px) {
+  .sup-ai-suggest__actions { flex-direction: column; }
+}

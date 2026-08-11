@@ -600,6 +600,14 @@
         var dosage = s.dosage
           ? '<span class="sup-ai-suggest__dosage">' + esc(s.dosage) + "</span>"
           : "";
+        // Кнопка «Купить» — только если бэкенд отдал ссылку на магазин.
+        var buy = s.buy_url
+          ? '<a class="btn btn-ghost sup-ai-suggest__buy" href="' + esc(s.buy_url) + '" ' +
+            'target="_blank" rel="noopener noreferrer nofollow sponsored" ' +
+            'data-buy-url="' + esc(s.buy_url) + '">' +
+            esc(pick("🛒 Купить", "🛒 Buy")) + "</a>"
+          : "";
+
         return (
           '<div class="sup-ai-suggest">' +
           '<div class="sup-ai-suggest__head">' +
@@ -607,9 +615,12 @@
           dosage +
           "</div>" +
           note +
+          '<div class="sup-ai-suggest__actions">' +
           '<button type="button" class="btn btn-ghost sup-ai-suggest__use" ' +
           'data-name="' + esc(s.name || "") + '" ' +
           'data-dosage="' + esc(s.dosage || "") + '">' + esc(pick("Заполнить форму", "Fill the form")) + "</button>" +
+          buy +
+          "</div>" +
           "</div>"
         );
       })
@@ -619,6 +630,19 @@
     var disclaimerHtml = disclaimer
       ? '<p class="sup-ai-disclaimer">⚠️ ' + esc(disclaimer) + "</p>"
       : "";
+
+    // Если показываем ссылки на магазин — по закону о рекламе (ст. 25 ФЗ-38)
+    // для БАД обязательна оговорка, что это не лекарственные средства.
+    var hasBuyLinks = suggestions.some(function (s) { return !!s.buy_url; });
+    if (hasBuyLinks) {
+      disclaimerHtml +=
+        '<p class="sup-ai-disclaimer sup-ai-disclaimer--bad">' +
+        esc(pick(
+          "БАД не являются лекарственными средствами.",
+          "Supplements are not medicinal products."
+        )) +
+        "</p>";
+    }
 
     var goalHtml = goal
       ? '<p class="sup-ai-box__goal">' + esc(pick("Цель: ", "Goal: ")) + esc(goal) + "</p>"
@@ -636,6 +660,22 @@
     var useButtons = box.querySelectorAll(".sup-ai-suggest__use");
     for (var i = 0; i < useButtons.length; i++) {
       useButtons[i].addEventListener("click", onAiSuggestionUse);
+    }
+
+    // Кнопки «Купить»: внутри Telegram обычная навигация по ссылке блокируется,
+    // поэтому открываем внешним браузером через SDK (openLink).
+    var buyButtons = box.querySelectorAll(".sup-ai-suggest__buy");
+    for (var b = 0; b < buyButtons.length; b++) {
+      buyButtons[b].addEventListener("click", function (ev) {
+        var url = ev.currentTarget.getAttribute("data-buy-url");
+        if (!url) return;
+        App.haptic && App.haptic("light");
+        if (App.tg && typeof App.tg.openLink === "function") {
+          ev.preventDefault();
+          App.tg.openLink(url);
+        }
+        // Вне Telegram — обычный переход по href (target="_blank").
+      });
     }
   }
 
