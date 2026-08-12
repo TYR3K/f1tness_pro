@@ -79,6 +79,45 @@ def tariff_for(name):
 
 
 # --------------------------------------------------------------------------- #
+#  CloudPayments — ДОПОЛНИТЕЛЬНЫЙ канал оплаты подписки (карты РФ)
+#
+#  ВАЖНО: основной способ оплаты внутри мини-приложения — Telegram Stars
+#  (этого требуют правила Telegram для цифровых товаров). CloudPayments нужен
+#  для оплаты ВНЕ Telegram (лендинг/сайт), чтобы не нарушать эти правила.
+#
+#  Пока переменные не заданы, интеграция полностью выключена: маршруты
+#  отвечают 503, виджет на фронте не показывается.
+# --------------------------------------------------------------------------- #
+
+# Public ID сайта из личного кабинета CloudPayments (можно светить на фронте).
+CLOUDPAYMENTS_PUBLIC_ID = os.getenv("CLOUDPAYMENTS_PUBLIC_ID", "").strip()
+
+# API Secret («пароль для API») — СЕКРЕТ. Им же проверяется подпись вебхуков.
+CLOUDPAYMENTS_API_SECRET = os.getenv("CLOUDPAYMENTS_API_SECRET", "").strip()
+
+# Валюта списания.
+CLOUDPAYMENTS_CURRENCY = os.getenv("CLOUDPAYMENTS_CURRENCY", "RUB").strip() or "RUB"
+
+# Цены тарифов в рублях (для CloudPayments). Пусто -> тариф недоступен картой.
+RUB_PRICES: dict = {
+    "monthly": float(os.getenv("PRICE_MONTHLY_RUB", "0") or 0),
+    "yearly": float(os.getenv("PRICE_YEARLY_RUB", "0") or 0),
+    "lifetime": float(os.getenv("PRICE_LIFETIME_RUB", "0") or 0),
+}
+
+
+def cloudpayments_enabled() -> bool:
+    """Настроен ли приём оплаты картой через CloudPayments."""
+    return bool(CLOUDPAYMENTS_PUBLIC_ID and CLOUDPAYMENTS_API_SECRET)
+
+
+def rub_price_for(tariff: str):
+    """Цена тарифа в рублях или None, если картой он не продаётся."""
+    price = RUB_PRICES.get(tariff)
+    return price if price and price > 0 else None
+
+
+# --------------------------------------------------------------------------- #
 #  Витрина «Купить» (маркетплейс) для рекомендаций по спортпиту
 #
 #  Ссылка собирается ТОЛЬКО на бэкенде: партнёрские параметры не должны быть

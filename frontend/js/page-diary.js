@@ -1328,10 +1328,12 @@
       // Название блюда.
       '<label class="field">' +
       '<span class="field__label">' + App.escapeHtml(pick("Название блюда", "Dish name")) + "</span>" +
-      '<input class="field__input" type="text" name="dish_name" ' +
+      '<input class="field__input" type="text" name="dish_name" autocomplete="off" ' +
       'placeholder="' + App.escapeHtml(pick("Например, овсянка с бананом", "e.g. oatmeal with banana")) +
       '" maxlength="120" required>' +
       "</label>" +
+      // Подсказки из базы продуктов: появляются по мере ввода названия.
+      '<div id="fsearch" class="fsearch"></div>' +
       // Количество + единица.
       '<div class="manual-qty-row">' +
       '<label class="field manual-qty-field">' +
@@ -1453,10 +1455,173 @@
       });
     }
 
+    // Поиск блюд в базе продуктов по мере ввода названия.
+    bindFoodSearch(form, ctx);
+
     // Подгружаем «Недавние» и блюда «за вчера» (асинхронно, каждый со своим
     // состоянием загрузки).
     loadRecent(form, ctx);
     loadYesterday(form, ctx);
+  }
+
+  // ---------------------------------------------------------------------------
+  // ПОИСК БЛЮД В БАЗЕ ПРОДУКТОВ.
+  //
+  // Пользователь вводит название — под полем появляются варианты с готовыми
+  // КБЖУ (на 100 г). Тап по варианту заполняет форму и включает пересчёт по
+  // количеству: значения приходят на 100 г, поэтому база пересчёта = /100.
+  //
+  // ВАЖНО: у внешней базы жёсткий лимит запросов, поэтому ищем НЕ на каждую
+  // букву — только после паузы в наборе и от 3 символов.
+  // ---------------------------------------------------------------------------
+
+  // Пауза после последнего нажатия клавиши перед запросом, мс.
+  var FSEARCH_DEBOUNCE_MS = 500;
+  // Минимальная длина запроса.
+  var FSEARCH_MIN_CHARS = 3;
+
+  /**
+   * Навешивает поиск по базе продуктов на поле названия блюда.
+   * @param {HTMLFormElement} form
+   * @param {Object} ctx контекст ручной формы
+   */
+  function bindFoodSearch(form, ctx) {
+    if (!form || !form.dish_name) return;
+    if (!(App.api && typeof App.api.searchFood === "function")) return;
+
+    var timer = null;
+    var lastQuery = "";
+    // Номер запроса: ответы могут приходить не по порядку — рисуем только свежий.
+    var seq = 0;
+
+    form.dish_name.addEventListener("input", function () {
+      var q = (form.dish_name.value || "").trim();
+
+      if (timer) clearTimeout(timer);
+
+      if (q.length < FSEARCH_MIN_CHARS) {
+        renderFoodSearch([], form, ctx);
+        lastQuery = "";
+        return;
+      }
+      if (q === lastQuery) return;
+
+      timer = setTimeout(function () {
+        lastQuery = q;
+        var mySeq = ++seq;
+        renderFoodSearchLoading();
+        App.api
+          .searchFood(q)
+          .then(function (res) {
+            if (mySeq !== seq) return; // пришёл устаревший ответ
+            renderFoodSearch((res && res.items) || [], form, ctx);
+          })
+          .catch(function () {
+            if (mySeq !== seq) return;
+            // Поиск вспомогательный: при сбое просто убираем подсказки.
+            renderFoodSearch([], form, ctx);
+          });
+      }, FSEARCH_DEBOUNCE_MS);
+    });
+  }
+
+  /**
+   * Показывает индикатор загрузки в области подсказок.
+   */
+  function renderFoodSearchLoading() {
+    var box = document.getElementById("fsearch");
+    if (!box) return;
+    box.innerHTML = '<div class="skeleton skeleton-line fsearch__skeleton"></div>';
+  }
+
+  /**
+   * Рисует найденные продукты. Пустой список — область скрывается.
+   * @param {Array} items результаты поиска
+   * @param {HTMLFormElement} form
+   * @param {Object} ctx
+   */
+  function renderFoodSearch(items, form, ctx) {
+    var box = document.getElementById("fsearch");
+    if (!box) return;
+
+    if (!items || !items.length) {
+      box.innerHTML = "";
+      return;
+    }
+
+    var kcal = pick("ккал", "kcal");
+    var per100 = pick("на 100 г", "per 100 g");
+    var pLabel = pick("Б", "P");
+    var fLabel = pick("Ж", "F");
+    var cLabel = pick("У", "C");
+
+    var rows = "";
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i] || {};
+      var brand = it.brand
+        ? ' <span class="fsearch__brand">' + App.escapeHtml(it.brand) + "</span>"
+        : "";
+      var macros =
+        App.fmt(it.calories || 0) + " " + kcal + " " + per100 +
+        " · " + pLabel + " " + App.fmt(it.proteins || 0) +
+        " · " + fLabel + " " + App.fmt(it.fats || 0) +
+        " · " + cLabel + " " + App.fmt(it.carbs || 0);
+
+      rows +=
+        '<button type="button" class="fsearch__item" data-idx="' + i + '">' +
+        '<span class="fsearch__name">' + App.escapeHtml(it.name || "") + brand + "</span>" +
+        '<span class="fsearch__macros">' + App.escapeHtml(macros) + "</span>" +
+        "</button>";
+    }
+
+    box.innerHTML =
+      '<div class="fsearch__list">' + rows + "</div>" +
+      '<p class="fsearch__hint">' +
+      App.escapeHtml(pick(
+        "Не нашли? Введите своё блюдо и нажмите «Рассчитать КБЖУ».",
+        "Not found? Type your own dish and tap “Calculate”."
+      )) +
+      "</p>";
+
+    var list = box.querySelector(".fsearch__list");
+    list.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".fsearch__item");
+      if (!btn) return;
+      var idx = parseInt(btn.getAttribute("data-idx"), 10);
+      if (isNaN(idx) || !items[idx]) return;
+      applyFoundFood(items[idx], form, ctx);
+    });
+  }
+
+  /**
+   * Заполняет форму выбранным продуктом. КБЖУ приходят на 100 г, поэтому
+   * ставим количество 100 г и базу пересчёта per-unit = значение/100 —
+   * дальше существующая логика сама пересчитает КБЖУ при смене количества.
+   * @param {Object} it найденный продукт
+   * @param {HTMLFormElement} form
+   * @param {Object} ctx
+   */
+  function applyFoundFood(it, form, ctx) {
+    App.haptic && App.haptic("light");
+
+    if (form.dish_name) form.dish_name.value = it.name || "";
+    if (form.quantity) form.quantity.value = 100;
+    if (form.unit) form.unit.value = "g";
+
+    var cals = Math.round(Number(it.calories) || 0);
+    var p = round1(it.proteins || 0);
+    var f = round1(it.fats || 0);
+    var c = round1(it.carbs || 0);
+
+    // Это НЕ ручная правка пользователя, а подстановка из базы: разрешаем
+    // авто-пересчёт по количеству.
+    ctx.manualOverride = false;
+    ctx.perUnit = { cals: cals / 100, p: p / 100, f: f / 100, c: c / 100 };
+    setMacroFields(form, cals, p, f, c);
+
+    // Подсказки больше не нужны — прячем, чтобы не мешали.
+    var box = document.getElementById("fsearch");
+    if (box) box.innerHTML = "";
   }
 
   /**

@@ -16,7 +16,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date as date_cls, timedelta
+from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
 
 # .env загружаем в самом начале, ДО чтения переменных окружения сервисами.
@@ -46,9 +46,11 @@ from sqlalchemy.orm import Session
 
 from backend import (
     adaptive,
+    cloudpayments,
     config,
     cycle,
     fitness,
+    food_search,
     notifications,
     nutrition,
     ratelimit,
@@ -81,6 +83,7 @@ from backend.models import (
     FavoriteFood,
     MealTemplate,
     NotificationLog,
+    Payment,
     ProgressPhoto,
     NotificationSettings,
     Supplement,
@@ -103,6 +106,8 @@ from backend.schemas import (
     DiaryEntryPatchIn,
     FoodCalculateIn,
     FoodCalculateOut,
+    FoodSearchItem,
+    FoodSearchOut,
     FoodSuggestIn,
     FoodSuggestOut,
     GoalCalcIn,
@@ -1034,6 +1039,36 @@ def food_recent(
             break
 
     return RecentFoodsOut(items=items)
+
+
+@app.get("/food/search", response_model=FoodSearchOut)
+async def food_search_route(
+    q: str = "",
+    user: User = Depends(get_current_user),
+) -> FoodSearchOut:
+    """Поиск блюд с готовыми КБЖУ во внешней базе продуктов.
+
+    Бесплатный маршрут (базовый дневник не платный), но с ограничением частоты:
+    внешний сервис считает лимит по IP ВСЕГО сервера, поэтому внутри модуля
+    есть кэш и глобальный троттлинг. Пустой результат — не ошибка: фронт
+    предложит ввести блюдо вручную.
+    """
+    query = (q or "").strip()
+    if len(query) < 2:
+        return FoodSearchOut(query=query, items=[])
+
+    # Защита от «поиска на каждую букву» со стороны одного пользователя.
+    ratelimit.enforce_search(user.telegram_id)
+
+    # Сетевой запрос — в пул потоков, чтобы не блокировать event loop.
+    raw = await run_in_threadpool(
+        food_search.search_products, query, user.language or "ru", 12
+    )
+
+    return FoodSearchOut(
+        query=query,
+        items=[FoodSearchItem(**item) for item in raw],
+    )
 
 
 @app.post("/food/recommend", response_model=RecommendOut)
@@ -2044,6 +2079,150 @@ async def payment_tribute_webhook(
 
     # Всегда 200, чтобы провайдер не ретраил и мы не палили детали.
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+#  CloudPayments — оплата подписки картой (альтернатива Telegram Stars)
+# --------------------------------------------------------------------------- #
+@app.get("/payment/cloudpayments/config")
+def cloudpayments_config(
+    tariff: str,
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Параметры для открытия виджета CloudPayments по выбранному тарифу.
+
+    Возвращает ТОЛЬКО публичные данные (Public ID светить можно, API Secret —
+    никогда). Доступ по итогам оплаты выдаётся не здесь, а вебхуком Pay с
+    проверенной подписью.
+    """
+    if not config.cloudpayments_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "cloudpayments_disabled",
+                    "message": "Оплата картой пока не подключена"},
+        )
+
+    if config.tariff_for(tariff) is None:
+        raise HTTPException(status_code=400, detail="Неизвестный тариф")
+
+    amount = config.rub_price_for(tariff)
+    if amount is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "tariff_not_available",
+                    "message": "Этот тариф картой не оплачивается"},
+        )
+
+    stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    return {
+        "public_id": config.CLOUDPAYMENTS_PUBLIC_ID,
+        "amount": amount,
+        "currency": config.CLOUDPAYMENTS_CURRENCY,
+        "description": f"Подписка «Калории»: {tariff}",
+        # accountId — по нему вебхук поймёт, кому начислять доступ.
+        "account_id": str(user.telegram_id),
+        "invoice_id": cloudpayments.build_invoice_id(tariff, user.telegram_id, stamp),
+        "tariff": tariff,
+    }
+
+
+@app.post("/payment/cloudpayments/webhook")
+async def payment_cloudpayments_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Приём уведомлений CloudPayments (Check / Pay / Recurrent и прочие).
+
+    КРИТИЧНО по протоколу: отвечать нужно HTTP 200 и телом РОВНО {"code": 0},
+    иначе CloudPayments считает доставку неуспешной и повторяет её до 100 раз.
+
+    КРИТИЧНО по безопасности:
+      * подпись считается от СЫРОГО тела, поэтому читаем байты ДО разбора формы;
+      * при неверной подписи ничего не начисляем;
+      * платежи с TestMode=1 в проде доступ не выдают;
+      * повторная доставка одного платежа отсекается по TransactionId.
+    """
+    # 1) Сырое тело — обязательно до любого парсинга (иначе подпись не сойдётся).
+    raw = await request.body()
+
+    signature = (
+        request.headers.get("Content-HMAC")
+        or request.headers.get("X-Content-HMAC")
+        or ""
+    )
+
+    if not cloudpayments.is_enabled():
+        logger.error("cloudpayments/webhook: интеграция не настроена")
+        return {"code": cloudpayments.CODE_REJECTED}
+
+    if not cloudpayments.verify_signature(raw, signature):
+        logger.warning("cloudpayments/webhook: неверная подпись — уведомление отброшено")
+        return {"code": cloudpayments.CODE_REJECTED}
+
+    # 2) Разбор тела. По умолчанию приходит form-urlencoded, но в кабинете
+    #    формат можно переключить на JSON — поддерживаем оба.
+    data: dict = {}
+    try:
+        form = await request.form()
+        data = {k: v for k, v in form.items()}
+    except Exception:  # noqa: BLE001
+        data = {}
+    if not data:
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                data = parsed
+        except Exception:  # noqa: BLE001
+            data = {}
+
+    try:
+        # Тестовые платежи в проде доступ не открывают.
+        if cloudpayments.is_test_mode(data) and not DEV_MODE:
+            logger.warning("cloudpayments/webhook: TestMode=1 в проде — доступ не выдан")
+            return {"code": cloudpayments.CODE_OK}
+
+        tariff, telegram_id, transaction_id = cloudpayments.resolve_payment(data)
+
+        if not telegram_id:
+            logger.error("cloudpayments/webhook: не определён плательщик, данные=%s", data)
+            return {"code": cloudpayments.CODE_INVALID_ACCOUNT}
+
+        # Уведомление Check приходит ДО списания — только подтверждаем готовность.
+        if not tariff:
+            logger.warning("cloudpayments/webhook: не определён тариф, данные=%s", data)
+            return {"code": cloudpayments.CODE_UNKNOWN_INVOICE}
+
+        # 3) Идемпотентность: этот платёж уже обработан?
+        if transaction_id:
+            already = (
+                db.query(Payment)
+                .filter(Payment.charge_id == f"cp:{transaction_id}")
+                .first()
+            )
+            if already is not None:
+                logger.info("cloudpayments/webhook: платёж %s уже обработан", transaction_id)
+                return {"code": cloudpayments.CODE_OK}
+
+        payment_providers.activate_premium(
+            db,
+            telegram_id,
+            tariff,
+            "cloudpayments",
+            data.get("Amount"),
+            data.get("Currency") or config.CLOUDPAYMENTS_CURRENCY,
+            charge_id=f"cp:{transaction_id}" if transaction_id else None,
+        )
+        logger.info(
+            "cloudpayments/webhook: премиум активирован tid=%s тариф=%s транзакция=%s",
+            telegram_id, tariff, transaction_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Отвечаем не-нулевым кодом: CloudPayments повторит доставку, а дедуп
+        # по TransactionId защитит от двойного начисления.
+        logger.error("cloudpayments/webhook: сбой обработки: %s", exc)
+        return {"code": cloudpayments.CODE_REJECTED}
+
+    return {"code": cloudpayments.CODE_OK}
 
 
 # --------------------------------------------------------------------------- #

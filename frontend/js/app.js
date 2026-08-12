@@ -419,6 +419,13 @@
       return request("/food/recent");
     },
 
+    // Поиск блюд с готовыми КБЖУ во внешней базе продуктов (НЕ премиум).
+    // Ответ: {query, per, items:[{code, name, brand, calories, proteins, fats, carbs}]}.
+    // Значения — на 100 г / 100 мл. Пустой список — не ошибка (вводим вручную).
+    searchFood: function (query) {
+      return request("/food/search?q=" + encodeURIComponent(query));
+    },
+
     // Расчёт КБЖУ блюда по названию/количеству/единице (НЕ премиум — базовый дневник).
     // Тело: {name, quantity:float|null, unit:str|null}.
     // Ответ: {dish_name, quantity, unit, calories, proteins, fats, carbs}.

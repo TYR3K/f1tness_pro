@@ -173,6 +173,27 @@ class HistoryOut(BaseModel):
     days: List[HistoryDay] = []
 
 
+class FoodSearchItem(BaseModel):
+    """Найденный продукт с КБЖУ на 100 г / 100 мл."""
+
+    code: str = ""
+    name: str
+    brand: str = ""
+    calories: int
+    proteins: float = 0.0
+    fats: float = 0.0
+    carbs: float = 0.0
+
+
+class FoodSearchOut(BaseModel):
+    """Результаты поиска блюд во внешней базе продуктов."""
+
+    query: str = ""
+    items: List[FoodSearchItem] = []
+    # Основа значений: КБЖУ приведены к 100 г (или 100 мл для жидкостей).
+    per: str = "100g"
+
+
 class RecoveryAdviceIn(BaseModel):
     """Запрос совета по восстановлению: зона тела + необязательное описание."""
 
