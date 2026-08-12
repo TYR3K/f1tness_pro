@@ -8179,3 +8179,12 @@ select.onb-field__input {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Вторая кнопка оплаты в карточке тарифа — банковской картой.
+   Наследует .btn .btn--ghost; отделяем её от кнопки оплаты звёздами. */
+.sub-tariff__pay-card {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 46px;
+  font-size: 15px;
+}

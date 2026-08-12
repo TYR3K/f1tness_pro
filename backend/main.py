@@ -1875,6 +1875,18 @@ def _subscription_status_out(user: User) -> SubscriptionStatusOut:
     is_trial_available = (
         config.TRIAL_DAYS > 0 and not premium and not bool(getattr(user, "used_trial", False))
     )
+    # Оплата картой доступна только для тарифов, у которых задана цена в рублях.
+    card_enabled = config.cloudpayments_enabled()
+    card_prices = {}
+    if card_enabled:
+        for name in config.TARIFFS:
+            price = config.rub_price_for(name)
+            if price:
+                card_prices[name] = price
+        # Ни одной рублёвой цены — показывать нечего.
+        if not card_prices:
+            card_enabled = False
+
     return SubscriptionStatusOut(
         subscription_type=stype,
         subscription_until=(
@@ -1887,6 +1899,9 @@ def _subscription_status_out(user: User) -> SubscriptionStatusOut:
         is_trial_available=is_trial_available,
         trial_days=config.TRIAL_DAYS,
         is_expired=is_expired,
+        card_enabled=card_enabled,
+        card_currency=config.CLOUDPAYMENTS_CURRENCY,
+        card_prices=card_prices,
     )
 
 
@@ -2191,6 +2206,16 @@ async def payment_cloudpayments_webhook(
         if not tariff:
             logger.warning("cloudpayments/webhook: не определён тариф, данные=%s", data)
             return {"code": cloudpayments.CODE_UNKNOWN_INVOICE}
+
+        # СВЕРКА СУММЫ — обязательна. Виджет запускается на клиенте, а Public ID
+        # публичен, поэтому номеру заказа доверять нельзя: без этой проверки
+        # можно было бы оплатить 1 рубль с номером заказа "lifetime:<свой id>".
+        if not cloudpayments.amount_matches_tariff(tariff, data.get("Amount")):
+            logger.error(
+                "cloudpayments/webhook: сумма %s не соответствует тарифу %s (tid=%s) — доступ НЕ выдан",
+                data.get("Amount"), tariff, telegram_id,
+            )
+            return {"code": cloudpayments.CODE_INVALID_AMOUNT}
 
         # 3) Идемпотентность: этот платёж уже обработан?
         if transaction_id:

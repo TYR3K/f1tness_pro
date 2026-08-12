@@ -157,6 +157,27 @@ def main():
           get_user(5004) is not None and get_user(5004).subscription_type == "monthly",
           get_user(5004) and get_user(5004).subscription_type)
 
+    # --- 7b. ЗАНИЖЕННАЯ СУММА не выдаёт доступ ------------------------------
+    # Виджет запускается на клиенте, Public ID публичен -> пользователь может
+    # сам вызвать оплату на 1 рубль с номером заказа "lifetime:<свой id>".
+    cheat = {
+        "TransactionId": "1006", "Amount": "1", "Currency": "RUB",
+        "AccountId": "5006", "InvoiceId": "yearly:5006:20260727120003", "TestMode": "0",
+    }
+    resp = post_webhook(cheat)
+    check("заниженная сумма -> код 12",
+          resp.json().get("code") == cloudpayments.CODE_INVALID_AMOUNT, resp.json())
+    check("заниженная сумма -> доступ НЕ выдан", get_user(5006) is None, get_user(5006))
+
+    check("сверка суммы: верная проходит",
+          cloudpayments.amount_matches_tariff("monthly", "499"))
+    check("сверка суммы: заниженная не проходит",
+          not cloudpayments.amount_matches_tariff("yearly", "1"))
+    check("сверка суммы: тариф без рублёвой цены не проходит",
+          not cloudpayments.amount_matches_tariff("lifetime", "4000"))
+    check("сверка суммы: мусор не проходит",
+          not cloudpayments.amount_matches_tariff("monthly", "не число"))
+
     # --- 8. Без плательщика — понятный код отказа ---------------------------
     resp = post_webhook({"TransactionId": "1005", "Amount": "499", "TestMode": "0"})
     check("нет плательщика -> код 11",

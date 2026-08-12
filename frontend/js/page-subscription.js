@@ -125,7 +125,11 @@
       tribute_url: s.tribute_url || null,
       is_trial_available: !!s.is_trial_available,
       trial_days: Number(s.trial_days) || 0,
-      is_expired: !!s.is_expired
+      is_expired: !!s.is_expired,
+      // Оплата картой (второй способ рядом с Telegram Stars).
+      card_enabled: !!s.card_enabled,
+      card_currency: s.card_currency || "RUB",
+      card_prices: s.card_prices || {}
     };
   }
 
@@ -484,6 +488,7 @@
           esc(pick("Оплатить ", "Pay ")) +
           esc(String(stars)) +
           " ⭐</button>" +
+          cardPayButtonHtml(meta.key) +
           "</article>"
       );
     });
@@ -519,6 +524,68 @@
     for (var i = 0; i < payBtns.length; i++) {
       payBtns[i].addEventListener("click", onPay);
     }
+
+    // Оплата картой — второй способ рядом со звёздами.
+    var cardBtns = box.querySelectorAll(".sub-tariff__pay-card");
+    for (var c = 0; c < cardBtns.length; c++) {
+      cardBtns[c].addEventListener("click", onPayCard);
+    }
+  }
+
+  /**
+   * Разметка кнопки «Оплатить картой» для тарифа.
+   * Возвращает пустую строку, если приём карт не подключён или у тарифа нет
+   * рублёвой цены — тогда остаётся только оплата звёздами.
+   * @param {string} tariffKey
+   * @returns {string}
+   */
+  function cardPayButtonHtml(tariffKey) {
+    var s = sub();
+    if (!s.card_enabled) return "";
+
+    var price = s.card_prices && s.card_prices[tariffKey];
+    if (!price) return "";
+
+    // Целые суммы показываем без дробной части («499 ₽», а не «499.0 ₽»).
+    var shown = Number(price);
+    shown = shown % 1 === 0 ? String(shown) : shown.toFixed(2);
+    var symbol = s.card_currency === "RUB" ? "₽" : esc(s.card_currency);
+
+    return (
+      '<button type="button" class="btn btn--ghost sub-tariff__pay-card" data-tariff="' +
+      esc(tariffKey) +
+      '">' +
+      esc(pick("💳 Оплатить ", "💳 Pay ")) +
+      esc(shown) +
+      " " + symbol +
+      "</button>"
+    );
+  }
+
+  /**
+   * Обработчик оплаты банковской картой (CloudPayments).
+   * Доступ активирует вебхук на бэкенде; здесь только запуск виджета.
+   */
+  function onPayCard(e) {
+    var btn = e && e.currentTarget;
+    var tariff = btn && btn.getAttribute("data-tariff");
+    if (!tariff) return;
+
+    haptic("light");
+
+    if (typeof App.payCard !== "function") {
+      toast(pick("Оплата картой недоступна", "Card payment unavailable"));
+      return;
+    }
+
+    if (btn) btn.disabled = true;
+    Promise.resolve(App.payCard(tariff))
+      .then(function () {
+        renderAll();
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+      });
   }
 
   /**

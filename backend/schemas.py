@@ -620,6 +620,10 @@ class SubscriptionStatusOut(BaseModel):
     # Триал и «истёкшее» состояние (для UX экрана подписки).
     is_trial_available: bool = False             # можно ли активировать пробный период
     trial_days: int = 0                          # длительность пробного периода (дней)
+    # Оплата картой (CloudPayments) как ВТОРОЙ способ рядом с Telegram Stars.
+    card_enabled: bool = False                   # подключён ли приём карт
+    card_currency: str = "RUB"                   # валюта списания
+    card_prices: Dict[str, float] = {}           # цены тарифов в рублях (только доступные)
     is_expired: bool = False                     # подписка была, но истекла (не free)
 
 

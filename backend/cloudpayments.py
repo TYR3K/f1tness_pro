@@ -130,6 +130,28 @@ def resolve_payment(data: dict) -> tuple[str | None, int | None, str | None]:
     return tariff, telegram_id, transaction_id
 
 
+def amount_matches_tariff(tariff: str, amount) -> bool:
+    """Совпадает ли фактически оплаченная сумма с ценой тарифа.
+
+    КРИТИЧНО ДЛЯ ДЕНЕГ: виджет CloudPayments запускается НА КЛИЕНТЕ, а Public ID
+    по своей природе публичен. Значит пользователь может вызвать виджет сам и
+    указать произвольные amount и invoiceId — например, заплатить 1 рубль с
+    номером заказа "lifetime:<свой id>". Поэтому в вебхуке сумму нужно
+    сверять с прайсом на сервере, а не доверять номеру заказа.
+
+    Возвращает False, если сумма не совпала или цена тарифа не задана.
+    Допуск в 1 копейку — на случай округления у провайдера.
+    """
+    expected = config.rub_price_for(tariff)
+    if not expected:
+        return False
+    try:
+        paid = float(amount)
+    except (TypeError, ValueError):
+        return False
+    return abs(paid - float(expected)) < 0.01
+
+
 def tariff_by_amount(amount) -> str | None:
     """Подобрать тариф по сумме платежа (в рублях), если задан прайс в рублях.
 

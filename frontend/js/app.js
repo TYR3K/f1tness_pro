@@ -603,6 +603,15 @@
       return request("/account/data", { method: "DELETE" });
     },
 
+    // Параметры виджета оплаты картой (CloudPayments) по выбранному тарифу.
+    // Ответ: {public_id, amount, currency, description, account_id, invoice_id, tariff}.
+    // API Secret на клиент НЕ передаётся — только публичные параметры.
+    getCardPaymentConfig: function (tariff) {
+      return request(
+        "/payment/cloudpayments/config?tariff=" + encodeURIComponent(tariff)
+      );
+    },
+
     // Создание инвойса Telegram Stars для оплаты подписки.
     // Тело: {tariff:"monthly"|"yearly"|"lifetime"}.
     // Ответ: {invoice_link}.
@@ -990,6 +999,108 @@
             App.pick("Оплата доступна в Telegram", "Payment is available in Telegram")
           );
         }
+      })
+      .catch(function (err) {
+        App.toast(
+          err && err.message ? err.message : App.pick("Ошибка оплаты", "Payment error")
+        );
+      });
+  };
+
+  /* =====================================================================
+   *  ОПЛАТА КАРТОЙ (CloudPayments) — второй способ рядом с Telegram Stars.
+   *
+   *  Виджет подгружается ЛЕНИВО, только когда пользователь реально нажал
+   *  «Оплатить картой»: сторонний скрипт не должен тормозить запуск приложения
+   *  у тех, кто платит звёздами.
+   *
+   *  ВАЖНО: доступ выдаётся ТОЛЬКО вебхуком с проверенной подписью. Колбэк
+   *  onSuccess здесь используется исключительно для UI (показать «активируем…»
+   *  и опросить статус) — доверять ему как факту оплаты нельзя.
+   * ===================================================================== */
+
+  // Адрес скрипта виджета CloudPayments.
+  var CP_WIDGET_SRC = "https://widget.cloudpayments.ru/bundles/cloudpayments.js";
+  var _cpLoading = null;
+
+  /**
+   * Лениво подгружает скрипт виджета CloudPayments (один раз).
+   * @returns {Promise} резолвится, когда window.cp доступен
+   */
+  function loadCloudPaymentsWidget() {
+    if (window.cp && typeof window.cp.CloudPayments === "function") {
+      return Promise.resolve();
+    }
+    if (_cpLoading) return _cpLoading;
+
+    _cpLoading = new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = CP_WIDGET_SRC;
+      script.async = true;
+      script.onload = function () {
+        if (window.cp && typeof window.cp.CloudPayments === "function") {
+          resolve();
+        } else {
+          reject(new Error("widget not available"));
+        }
+      };
+      script.onerror = function () {
+        _cpLoading = null; // разрешаем повторную попытку
+        reject(new Error("widget failed to load"));
+      };
+      document.head.appendChild(script);
+    });
+    return _cpLoading;
+  }
+
+  /**
+   * Оплата подписки банковской картой через виджет CloudPayments.
+   * @param {string} tariff "monthly" | "yearly" | "lifetime"
+   * @returns {Promise}
+   */
+  App.payCard = function (tariff) {
+    return App.api
+      .getCardPaymentConfig(tariff)
+      .then(function (cfg) {
+        if (!cfg || !cfg.public_id) {
+          throw new Error(App.pick("Оплата картой недоступна", "Card payment unavailable"));
+        }
+        return loadCloudPaymentsWidget().then(function () {
+          return new Promise(function (resolve) {
+            var widget = new window.cp.CloudPayments();
+            widget.pay(
+              "charge",
+              {
+                publicId: cfg.public_id,
+                description: cfg.description,
+                amount: cfg.amount,
+                currency: cfg.currency,
+                invoiceId: cfg.invoice_id,
+                // accountId — по нему вебхук определит, кому начислять доступ.
+                accountId: cfg.account_id,
+                skin: "modern"
+              },
+              {
+                onSuccess: function () {
+                  // Доступ активирует вебхук — ждём и опрашиваем статус.
+                  App.toast(App.pick(
+                    "Оплата получена, активируем доступ…",
+                    "Payment received, activating…"
+                  ));
+                  App._pollPremium(8, 1500);
+                  resolve();
+                },
+                onFail: function () {
+                  App.toast(App.pick("Оплата не прошла", "Payment failed"));
+                  resolve();
+                },
+                onComplete: function () {
+                  /* вызывается в любом случае — отдельная реакция не нужна */
+                }
+              }
+            );
+          });
+        });
       })
       .catch(function (err) {
         App.toast(
