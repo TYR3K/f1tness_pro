@@ -130,7 +130,24 @@ def resolve_payment(data: dict) -> tuple[str | None, int | None, str | None]:
     return tariff, telegram_id, transaction_id
 
 
-def amount_matches_tariff(tariff: str, amount) -> bool:
+def is_successful_payment(data: dict) -> bool:
+    """Это уведомление о РЕАЛЬНО СПИСАННЫХ деньгах?
+
+    КРИТИЧНО: на один и тот же адрес CloudPayments может слать разные типы
+    уведомлений — Check (до списания), Fail (отказ), Refund (возврат),
+    Recurrent (событие подписки). Подпись у всех настоящая, её ставит сам
+    провайдер, поэтому одной проверки подписи НЕДОСТАТОЧНО: без разбора типа
+    отказ в оплате выдавал бы премиум так же, как успешная оплата.
+
+    Считаем оплатой только OperationType=Payment со Status=Completed.
+    Статус Authorized — это ХОЛД (деньги ещё не списаны), доступ по нему не даём.
+    """
+    operation = str(data.get("OperationType") or "Payment").strip()
+    status = str(data.get("Status") or "").strip()
+    return operation == "Payment" and status == "Completed"
+
+
+def amount_matches_tariff(tariff: str, amount, currency=None) -> bool:
     """Совпадает ли фактически оплаченная сумма с ценой тарифа.
 
     КРИТИЧНО ДЛЯ ДЕНЕГ: виджет CloudPayments запускается НА КЛИЕНТЕ, а Public ID
@@ -139,12 +156,19 @@ def amount_matches_tariff(tariff: str, amount) -> bool:
     номером заказа "lifetime:<свой id>". Поэтому в вебхуке сумму нужно
     сверять с прайсом на сервере, а не доверять номеру заказа.
 
-    Возвращает False, если сумма не совпала или цена тарифа не задана.
+    ВАЛЮТА проверяется обязательно: без этого 3990 узбекских сумов (≈28 ₽)
+    закрыли бы годовой тариф, потому что сравнивалось бы голое число.
+
+    Возвращает False, если сумма/валюта не совпали или цена тарифа не задана.
     Допуск в 1 копейку — на случай округления у провайдера.
     """
     expected = config.rub_price_for(tariff)
     if not expected:
         return False
+
+    if str(currency or "").strip().upper() != config.CLOUDPAYMENTS_CURRENCY.upper():
+        return False
+
     try:
         paid = float(amount)
     except (TypeError, ValueError):

@@ -112,7 +112,7 @@ def main():
 
     # --- 4. Оплата картой реально включает премиум -------------------------
     fields = {
-        "TransactionId": "9001", "Amount": "499", "Currency": "RUB",
+        "OperationType": "Payment", "Status": "Completed", "TransactionId": "9001", "Amount": "499", "Currency": "RUB",
         "AccountId": "1", "InvoiceId": cfg.get("invoice_id", "monthly:1:x"),
         "TestMode": "0",
     }

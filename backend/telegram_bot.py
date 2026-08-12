@@ -168,7 +168,7 @@ def _validate_pre_checkout(pcq: dict) -> tuple[bool, str | None]:
     try:
         payload = pcq.get("invoice_payload", "") or ""
         tariff, tid_raw = payload.split(":", 1)
-        int(tid_raw)  # telegram_id должен быть числом
+        target_id = int(tid_raw)  # кому предназначен счёт
         t = TARIFFS.get(tariff)
         if not t:
             return False, "Неизвестный тариф."
@@ -179,6 +179,22 @@ def _validate_pre_checkout(pcq: dict) -> tuple[bool, str | None]:
                 "pre_checkout: сумма %s != ожидаемой %s (tariff=%s)", total, expected, tariff
             )
             return False, "Сумма счёта не совпадает."
+
+        # ПЛАТЕЛЬЩИК должен совпадать с получателем доступа. Ссылку на счёт
+        # можно переслать кому угодно: без этой проверки звёзды списались бы у
+        # постороннего, а подписка продлилась бы тому, кто создал счёт.
+        # Отказ именно на pre-checkout важен: деньги ещё не списаны.
+        payer_id = None
+        try:
+            payer_id = int((pcq.get("from") or {}).get("id"))
+        except (TypeError, ValueError):
+            payer_id = None
+        if payer_id is not None and payer_id != target_id:
+            logger.warning(
+                "pre_checkout: плательщик %s != получателя %s — отказ", payer_id, target_id
+            )
+            return False, "Счёт выписан на другого пользователя."
+
         return True, None
     except Exception as exc:  # noqa: BLE001
         logger.warning("pre_checkout: невалидный payload: %s", exc)

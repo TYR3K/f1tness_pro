@@ -98,7 +98,7 @@ def main():
 
     # --- 2. Поддельное уведомление НЕ выдаёт доступ -------------------------
     fields = {
-        "TransactionId": "1001", "Amount": "499", "Currency": "RUB",
+        "OperationType": "Payment", "Status": "Completed", "TransactionId": "1001", "Amount": "499", "Currency": "RUB",
         "AccountId": "5001", "InvoiceId": "monthly:5001:20260727120000", "TestMode": "0",
     }
     resp = post_webhook(fields, tamper=True)
@@ -139,7 +139,7 @@ def main():
 
     # --- 6. Годовой тариф по номеру заказа ---------------------------------
     year_fields = {
-        "TransactionId": "1003", "Amount": "3990", "Currency": "RUB",
+        "OperationType": "Payment", "Status": "Completed", "TransactionId": "1003", "Amount": "3990", "Currency": "RUB",
         "AccountId": "5003", "InvoiceId": "yearly:5003:20260727120002", "TestMode": "0",
     }
     post_webhook(year_fields)
@@ -149,7 +149,7 @@ def main():
 
     # --- 7. Тариф по сумме, когда номер заказа чужого формата --------------
     odd_fields = {
-        "TransactionId": "1004", "Amount": "499", "Currency": "RUB",
+        "OperationType": "Payment", "Status": "Completed", "TransactionId": "1004", "Amount": "499", "Currency": "RUB",
         "AccountId": "5004", "InvoiceId": "случайный-номер", "TestMode": "0",
     }
     post_webhook(odd_fields)
@@ -161,7 +161,7 @@ def main():
     # Виджет запускается на клиенте, Public ID публичен -> пользователь может
     # сам вызвать оплату на 1 рубль с номером заказа "lifetime:<свой id>".
     cheat = {
-        "TransactionId": "1006", "Amount": "1", "Currency": "RUB",
+        "OperationType": "Payment", "Status": "Completed", "TransactionId": "1006", "Amount": "1", "Currency": "RUB",
         "AccountId": "5006", "InvoiceId": "yearly:5006:20260727120003", "TestMode": "0",
     }
     resp = post_webhook(cheat)
@@ -170,16 +170,18 @@ def main():
     check("заниженная сумма -> доступ НЕ выдан", get_user(5006) is None, get_user(5006))
 
     check("сверка суммы: верная проходит",
-          cloudpayments.amount_matches_tariff("monthly", "499"))
+          cloudpayments.amount_matches_tariff("monthly", "499", "RUB"))
     check("сверка суммы: заниженная не проходит",
-          not cloudpayments.amount_matches_tariff("yearly", "1"))
+          not cloudpayments.amount_matches_tariff("yearly", "1", "RUB"))
     check("сверка суммы: тариф без рублёвой цены не проходит",
-          not cloudpayments.amount_matches_tariff("lifetime", "4000"))
+          not cloudpayments.amount_matches_tariff("lifetime", "4000", "RUB"))
     check("сверка суммы: мусор не проходит",
-          not cloudpayments.amount_matches_tariff("monthly", "не число"))
+          not cloudpayments.amount_matches_tariff("monthly", "не число", "RUB"))
+    check("сверка суммы: чужая валюта не проходит",
+          not cloudpayments.amount_matches_tariff("monthly", "499", "USD"))
 
     # --- 8. Без плательщика — понятный код отказа ---------------------------
-    resp = post_webhook({"TransactionId": "1005", "Amount": "499", "TestMode": "0"})
+    resp = post_webhook({"OperationType": "Payment", "Status": "Completed", "TransactionId": "1005", "Amount": "499", "TestMode": "0"})
     check("нет плательщика -> код 11",
           resp.json().get("code") == cloudpayments.CODE_INVALID_ACCOUNT, resp.json())
 

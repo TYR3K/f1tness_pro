@@ -1921,6 +1921,20 @@ def subscription_trial(
     if bool(getattr(user, "used_trial", False)):
         raise HTTPException(status_code=400, detail={"error": "trial_used", "message": "Пробный период уже был использован"})
 
+    # Признак used_trial живёт в профиле, а профиль можно удалить через
+    # /account/data — тогда триал брался бы заново бесконечно. Журнал платежей
+    # удаление ПЕРЕЖИВАЕТ, поэтому проверяем ещё и по нему.
+    already_had_trial = (
+        db.query(Payment)
+        .filter(Payment.telegram_id == user.telegram_id, Payment.provider == "trial")
+        .first()
+    )
+    if already_had_trial is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "trial_used", "message": "Пробный период уже был использован"},
+        )
+
     payment_providers.grant_days(
         db, user.telegram_id, config.TRIAL_DAYS, "trial", subscription_type="trial"
     )
@@ -2196,7 +2210,23 @@ async def payment_cloudpayments_webhook(
             logger.warning("cloudpayments/webhook: TestMode=1 в проде — доступ не выдан")
             return {"code": cloudpayments.CODE_OK}
 
+        # ТИП УВЕДОМЛЕНИЯ. На один адрес приходят Check/Fail/Refund/Recurrent —
+        # у всех подпись настоящая. Доступ выдаём только по реальному списанию,
+        # иначе отказ в оплате открывал бы премиум так же, как успешная оплата.
+        if not cloudpayments.is_successful_payment(data):
+            logger.info(
+                "cloudpayments/webhook: неплатёжное уведомление op=%s status=%s — доступ не выдан",
+                data.get("OperationType"), data.get("Status"),
+            )
+            return {"code": cloudpayments.CODE_OK}
+
         tariff, telegram_id, transaction_id = cloudpayments.resolve_payment(data)
+
+        # Без идентификатора транзакции невозможна защита от повторной доставки
+        # (CloudPayments ретраит до 100 раз) — такое уведомление не принимаем.
+        if not transaction_id:
+            logger.error("cloudpayments/webhook: уведомление без TransactionId — доступ не выдан")
+            return {"code": cloudpayments.CODE_REJECTED}
 
         if not telegram_id:
             logger.error("cloudpayments/webhook: не определён плательщик, данные=%s", data)
@@ -2210,23 +2240,24 @@ async def payment_cloudpayments_webhook(
         # СВЕРКА СУММЫ — обязательна. Виджет запускается на клиенте, а Public ID
         # публичен, поэтому номеру заказа доверять нельзя: без этой проверки
         # можно было бы оплатить 1 рубль с номером заказа "lifetime:<свой id>".
-        if not cloudpayments.amount_matches_tariff(tariff, data.get("Amount")):
+        if not cloudpayments.amount_matches_tariff(
+            tariff, data.get("Amount"), data.get("Currency")
+        ):
             logger.error(
-                "cloudpayments/webhook: сумма %s не соответствует тарифу %s (tid=%s) — доступ НЕ выдан",
-                data.get("Amount"), tariff, telegram_id,
+                "cloudpayments/webhook: сумма %s %s не соответствует тарифу %s (tid=%s) — доступ НЕ выдан",
+                data.get("Amount"), data.get("Currency"), tariff, telegram_id,
             )
             return {"code": cloudpayments.CODE_INVALID_AMOUNT}
 
         # 3) Идемпотентность: этот платёж уже обработан?
-        if transaction_id:
-            already = (
-                db.query(Payment)
-                .filter(Payment.charge_id == f"cp:{transaction_id}")
-                .first()
-            )
-            if already is not None:
-                logger.info("cloudpayments/webhook: платёж %s уже обработан", transaction_id)
-                return {"code": cloudpayments.CODE_OK}
+        already = (
+            db.query(Payment)
+            .filter(Payment.charge_id == f"cp:{transaction_id}")
+            .first()
+        )
+        if already is not None:
+            logger.info("cloudpayments/webhook: платёж %s уже обработан", transaction_id)
+            return {"code": cloudpayments.CODE_OK}
 
         payment_providers.activate_premium(
             db,
@@ -2235,7 +2266,7 @@ async def payment_cloudpayments_webhook(
             "cloudpayments",
             data.get("Amount"),
             data.get("Currency") or config.CLOUDPAYMENTS_CURRENCY,
-            charge_id=f"cp:{transaction_id}" if transaction_id else None,
+            charge_id=f"cp:{transaction_id}",
         )
         logger.info(
             "cloudpayments/webhook: премиум активирован tid=%s тариф=%s транзакция=%s",

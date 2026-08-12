@@ -83,13 +83,26 @@ def activate_premium(
             # Пожизненная подписка — без даты окончания.
             user.subscription_type = "lifetime"
             user.subscription_until = None
+        elif getattr(user, "subscription_type", None) == "lifetime":
+            # НИКОГДА не понижаем пожизненный доступ до срочного: у lifetime
+            # subscription_until = None, и без этой ветки оплата месяца
+            # превратила бы вечную подписку в 30-дневную. Платёж всё равно
+            # записываем — деньги получены, факт нужно сохранить.
+            logger.warning(
+                "activate_premium: у telegram_id=%s уже lifetime — тариф %s не понижаем",
+                telegram_id, tariff,
+            )
         else:
             # Срочная подписка: продлеваем от большей из дат (now / текущий until),
             # чтобы оплаты складывались, а не «съедали» остаток.
             current_until = getattr(user, "subscription_until", None)
             base = max(now, current_until) if current_until else now
+            new_until = base + timedelta(days=days)
             user.subscription_type = tariff
-            user.subscription_until = base + timedelta(days=days)
+            # Дата окончания не должна двигаться назад ни при каких условиях.
+            user.subscription_until = (
+                max(new_until, current_until) if current_until else new_until
+            )
 
         # 4) Аудит: запись о платеже (с идентификатором списания для дедупа).
         payment = Payment(
@@ -153,10 +166,20 @@ def grant_days(
             user = User(telegram_id=telegram_id)
             db.add(user)
 
-        current_until = getattr(user, "subscription_until", None)
-        base = max(now, current_until) if current_until else now
-        user.subscription_type = subscription_type
-        user.subscription_until = base + timedelta(days=int(days))
+        # Пожизненный доступ не понижаем срочным (см. activate_premium).
+        if getattr(user, "subscription_type", None) == "lifetime":
+            logger.warning(
+                "grant_days: у telegram_id=%s уже lifetime — не понижаем до %s",
+                telegram_id, subscription_type,
+            )
+        else:
+            current_until = getattr(user, "subscription_until", None)
+            base = max(now, current_until) if current_until else now
+            new_until = base + timedelta(days=int(days))
+            user.subscription_type = subscription_type
+            user.subscription_until = (
+                max(new_until, current_until) if current_until else new_until
+            )
 
         db.add(Payment(
             telegram_id=telegram_id,
