@@ -621,9 +621,12 @@ class SubscriptionStatusOut(BaseModel):
     is_trial_available: bool = False             # можно ли активировать пробный период
     trial_days: int = 0                          # длительность пробного периода (дней)
     # Оплата картой (CloudPayments) как ВТОРОЙ способ рядом с Telegram Stars.
-    card_enabled: bool = False                   # подключён ли приём карт
+    card_enabled: bool = False                   # показывать ли рублёвую цену и кнопку
     card_currency: str = "RUB"                   # валюта списания
-    card_prices: Dict[str, float] = {}           # цены тарифов в рублях (только доступные)
+    card_prices: Dict[str, float] = {}           # цены тарифов в рублях (только заданные)
+    # Кто обрабатывает оплату картой: "cloudpayments" | "yookassa" | "none".
+    # "none" — витрина показывается, но приём карт ещё не подключён.
+    card_provider: str = "none"
     is_expired: bool = False                     # подписка была, но истекла (не free)
 
 

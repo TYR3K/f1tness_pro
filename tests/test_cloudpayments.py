@@ -36,6 +36,8 @@ os.environ["CLOUDPAYMENTS_PUBLIC_ID"] = "pk_test_public_id"
 os.environ["CLOUDPAYMENTS_API_SECRET"] = SECRET
 os.environ["PRICE_MONTHLY_RUB"] = "499"
 os.environ["PRICE_YEARLY_RUB"] = "3990"
+# Вечный тариф намеренно без рублёвой цены — проверяем отказ по нему.
+os.environ["PRICE_LIFETIME_RUB"] = "0"
 
 from backend import config as _config     # noqa: E402
 importlib.reload(_config)

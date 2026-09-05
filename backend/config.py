@@ -98,12 +98,23 @@ CLOUDPAYMENTS_API_SECRET = os.getenv("CLOUDPAYMENTS_API_SECRET", "").strip()
 # Валюта списания.
 CLOUDPAYMENTS_CURRENCY = os.getenv("CLOUDPAYMENTS_CURRENCY", "RUB").strip() or "RUB"
 
-# Цены тарифов в рублях (для CloudPayments). Пусто -> тариф недоступен картой.
+# Цены тарифов в РУБЛЯХ. Показываются на экране подписки и НЕ зависят от того,
+# какая платёжная система подключена: витрина с рублёвой ценой нужна в том числе
+# для модерации в платёжном сервисе (ЮKassa и т.п.) — её проходят ДО выдачи
+# ключей. Значения перекрываются переменными PRICE_*_RUB без правки кода.
 RUB_PRICES: dict = {
-    "monthly": float(os.getenv("PRICE_MONTHLY_RUB", "0") or 0),
-    "yearly": float(os.getenv("PRICE_YEARLY_RUB", "0") or 0),
-    "lifetime": float(os.getenv("PRICE_LIFETIME_RUB", "0") or 0),
+    "monthly": float(os.getenv("PRICE_MONTHLY_RUB", "499") or 0),
+    "yearly": float(os.getenv("PRICE_YEARLY_RUB", "3990") or 0),
+    "lifetime": float(os.getenv("PRICE_LIFETIME_RUB", "7990") or 0),
 }
+
+# Какая платёжная система обрабатывает оплату картой:
+#   "auto"          — определить по заданным ключам (по умолчанию);
+#   "cloudpayments" — виджет CloudPayments;
+#   "yookassa"      — ЮKassa (подключается после модерации);
+#   "none"          — приём карт ещё не подключён: цена и кнопка показываются,
+#                     но при нажатии честно сообщаем, что оплата картой скоро.
+PAYMENT_PROVIDER = (os.getenv("PAYMENT_PROVIDER", "auto").strip().lower() or "auto")
 
 
 def cloudpayments_enabled() -> bool:
@@ -111,8 +122,19 @@ def cloudpayments_enabled() -> bool:
     return bool(CLOUDPAYMENTS_PUBLIC_ID and CLOUDPAYMENTS_API_SECRET)
 
 
+def card_provider() -> str:
+    """Активный провайдер оплаты картой: "cloudpayments" | "yookassa" | "none".
+
+    В режиме "auto" провайдер определяется по наличию ключей. Пока ключей нет —
+    "none", но витрина с рублёвой ценой при этом всё равно работает.
+    """
+    if PAYMENT_PROVIDER in ("cloudpayments", "yookassa", "none"):
+        return PAYMENT_PROVIDER
+    return "cloudpayments" if cloudpayments_enabled() else "none"
+
+
 def rub_price_for(tariff: str):
-    """Цена тарифа в рублях или None, если картой он не продаётся."""
+    """Цена тарифа в рублях или None, если рублёвая цена не задана."""
     price = RUB_PRICES.get(tariff)
     return price if price and price > 0 else None
 

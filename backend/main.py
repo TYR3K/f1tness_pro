@@ -1875,17 +1875,15 @@ def _subscription_status_out(user: User) -> SubscriptionStatusOut:
     is_trial_available = (
         config.TRIAL_DAYS > 0 and not premium and not bool(getattr(user, "used_trial", False))
     )
-    # Оплата картой доступна только для тарифов, у которых задана цена в рублях.
-    card_enabled = config.cloudpayments_enabled()
+    # Рублёвая витрина. Показывается по наличию ЦЕНЫ, а не по подключённой
+    # платёжной системе: цена и кнопка нужны в том числе для модерации в
+    # платёжном сервисе, которую проходят ДО получения ключей.
     card_prices = {}
-    if card_enabled:
-        for name in config.TARIFFS:
-            price = config.rub_price_for(name)
-            if price:
-                card_prices[name] = price
-        # Ни одной рублёвой цены — показывать нечего.
-        if not card_prices:
-            card_enabled = False
+    for name in config.TARIFFS:
+        price = config.rub_price_for(name)
+        if price:
+            card_prices[name] = price
+    card_enabled = bool(card_prices)
 
     return SubscriptionStatusOut(
         subscription_type=stype,
@@ -1902,6 +1900,7 @@ def _subscription_status_out(user: User) -> SubscriptionStatusOut:
         card_enabled=card_enabled,
         card_currency=config.CLOUDPAYMENTS_CURRENCY,
         card_prices=card_prices,
+        card_provider=config.card_provider(),
     )
 
 

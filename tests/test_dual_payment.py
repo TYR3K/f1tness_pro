@@ -65,14 +65,18 @@ def main():
         if not condition:
             problems.append(f"{name}  {extra}")
 
-    # --- 1. Карты НЕ настроены: фронт не должен обещать оплату картой -------
+    # --- 1. Карты НЕ настроены: витрина есть, но оплаты нет ----------------
+    # Рублёвая цена и кнопка показываются всегда (их требует модерация
+    # платёжного сервиса), а вот принять деньги без ключей нельзя.
     client, _ = build_app(card_enabled=False)
     status = client.get("/subscription/status").json()
 
     check("статус отдаётся", "tariffs" in status, status)
-    check("card_enabled=False без настройки", status.get("card_enabled") is False,
+    check("витрина показывается", status.get("card_enabled") is True,
           status.get("card_enabled"))
-    check("нет рублёвых цен", not status.get("card_prices"), status.get("card_prices"))
+    check("провайдер = none без ключей", status.get("card_provider") == "none",
+          status.get("card_provider"))
+    check("рублёвые цены есть", bool(status.get("card_prices")), status.get("card_prices"))
     check("звёздные тарифы на месте", set(status.get("tariffs", {})) ==
           {"monthly", "yearly", "lifetime"}, sorted(status.get("tariffs", {})))
 
@@ -84,6 +88,8 @@ def main():
     status = client.get("/subscription/status").json()
 
     check("card_enabled=True", status.get("card_enabled") is True, status.get("card_enabled"))
+    check("провайдер = cloudpayments", status.get("card_provider") == "cloudpayments",
+          status.get("card_provider"))
     check("валюта", status.get("card_currency") == "RUB", status.get("card_currency"))
     prices = status.get("card_prices") or {}
     check("цена месячного", prices.get("monthly") == 499, prices)
